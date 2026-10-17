@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#183f35">
+  <title>RestoPilot · Your kitchen, in view</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <aside class="sidebar">
+    <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true">r<span>·</span></span>RestoPilot</a>
+    <div class="workspace"><span class="workspace-icon" aria-hidden="true">⌂</span><div><strong id="restaurant-name">Demo kitchen</strong><small>Restaurant workspace</small></div></div>
+    <p class="nav-label">YOUR OPERATIONS</p>
+    <nav aria-label="Main navigation">
+      <a href="#overview" data-page="overview"><span aria-hidden="true">◫</span> Overview</a>
+      <a href="#approvals" data-page="approvals"><span aria-hidden="true">☑</span> Approvals <span id="nav-count" class="nav-count">—</span></a>
+      <a href="#purchases" data-page="purchases"><span aria-hidden="true">▤</span> Purchases</a>
+      <a href="#inventory" data-page="inventory"><span aria-hidden="true">▦</span> Inventory</a>
+      <a href="#activity" data-page="activity"><span aria-hidden="true">↗</span> Activity</a>
+      <a href="#whatsapp" data-page="whatsapp"><span aria-hidden="true">◌</span> WhatsApp demo</a>
+    </nav>
+    <div class="sidebar-bottom"><span class="status-dot"></span> WhatsApp simulator ready<p>Synthetic starting data.<br>No live WhatsApp or AI provider is connected.</p><div class="profile"><span>DO</span><div>Demo owner<small>Local access only</small></div></div></div>
+  </aside>
+  <div class="shell">
+    <header class="topbar"><span>Workspace <span class="breadcrumb">/ <span id="breadcrumb">Overview</span></span></span><div><span class="demo-pill">DEMO</span><span id="sync-status" role="status">Connecting…</span><button id="refresh" class="icon-button" aria-label="Refresh dashboard">↻</button></div></header>
+    <main id="main" tabindex="-1">
+      <div class="page-heading"><div><p class="eyebrow">A LITTLE CLARITY FOR YOUR KITCHEN</p><h1 id="page-title">Your kitchen, in view.</h1><p id="page-subtitle">Purchases, stock, and the decisions that need you.</p></div><button class="button primary" data-action="new-purchase"><span aria-hidden="true">＋</span> Log a purchase</button></div>
+      <div id="connection-error" class="notice error" role="alert" hidden></div>
+      <div id="content" aria-live="polite"><div class="loading-state"><span class="spinner"></span> Loading your kitchen…</div></div>
+      <footer class="page-footer"><span>RestoPilot · From purchase to peace of mind.</span><span>Manual intake · Rules parser · Persistent local database</span></footer>
+    </main>
+  </div>
+  <dialog id="intake-dialog" aria-labelledby="intake-title">
+    <div class="dialog-heading"><div><p class="eyebrow">QUICK LOG</p><h2 id="intake-title">What came into the kitchen?</h2></div><button class="icon-button" data-close="intake-dialog" aria-label="Close purchase form">×</button></div>
+    <p class="muted">Type your purchase in Indonesian. You’ll review it before anything is recorded.</p>
+    <form id="intake-form">
+      <label for="purchase-text">Purchase message</label>
+      <textarea id="purchase-text" name="text" rows="4" required maxlength="4000" placeholder="beli cabai 3 kg 150rb"></textarea>
+      <div class="examples"><span>Try:</span><button type="button" data-example="beli cabai 3 kg 150rb">Cabai · 3 kg</button><button type="button" data-example="beli beras">Missing details</button><button type="button" data-example="beli cabai 500 g Rp25.000">Grams → kg</button></div>
+      <label for="purchase-supplier">Supplier <span class="muted">(optional)</span></label>
+      <input id="purchase-supplier" name="supplier" maxlength="100" placeholder="e.g. Pasar Pagi">
+      <p class="field-help">For several items, use one line per item. Photos and voice notes are planned for the connected demo.</p>
+      <div id="intake-error" class="notice error" role="alert" hidden></div>
+      <div class="dialog-footer"><span class="muted">Nothing posts without your approval.</span><button class="button primary" type="submit">Prepare draft <span aria-hidden="true">→</span></button></div>
+    </form>
+  </dialog>
+  <dialog id="review-dialog" class="review-dialog" aria-labelledby="review-title"><div id="review-content"></div></dialog>
+  <div id="toast" role="status" class="toast" hidden></div>
+</body>
+</html>
