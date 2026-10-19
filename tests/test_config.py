@@ -23,3 +23,12 @@ def test_local_env_does_not_execute_or_accept_unknown_settings(tmp_path):
 
 def test_missing_local_env_is_empty(tmp_path):
     assert load_local_env(tmp_path / ".env") == {}
+
+
+def test_local_env_accepts_supabase_settings(tmp_path):
+    path = tmp_path / ".env"
+    path.write_text("SUPABASE_URL=https://demo.supabase.co\nSUPABASE_SERVICE_KEY='service-key'\n", encoding="utf-8")
+    assert load_local_env(path) == {
+        "SUPABASE_URL": "https://demo.supabase.co",
+        "SUPABASE_SERVICE_KEY": "service-key",
+    }
