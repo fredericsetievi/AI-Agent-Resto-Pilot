@@ -11,7 +11,7 @@ from service.api import create_app
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-SUPPORTED_ENV_KEYS = {"TWILIO_AUTH_TOKEN", "PUBLIC_BASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY"}
+SUPPORTED_ENV_KEYS = {"TWILIO_AUTH_TOKEN", "PUBLIC_BASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SUPABASE_MIRROR"}
 
 
 def load_local_env(path):

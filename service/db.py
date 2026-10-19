@@ -309,7 +309,10 @@ class Store:
         def action(conn):
             draft = self._load_draft(conn, draft_id)
             return self._decide(conn, draft, payload)
-        return self._idempotent(key, "decision:" + draft_id, payload, action)
+
+        draft = self._idempotent(key, "decision:" + draft_id, payload, action)
+        self.maybe_cloud_mirror(draft)
+        return draft
 
     def _decide(self, conn, draft, payload):
         """Shared transaction-internal decision path for dashboard and WhatsApp."""
@@ -419,7 +422,41 @@ class Store:
             conn.execute("INSERT INTO whatsapp_events VALUES (?, ?, ?, ?, ?)", (channel, event_id, thread["id"], fingerprint, encode(response)))
             return response
 
-        return self._idempotent(key, "whatsapp:" + channel, payload, action)
+        response = self._idempotent(key, "whatsapp:" + channel, payload, action)
+        self.maybe_cloud_mirror(response.get("draft"))
+        return response
+
+    def maybe_cloud_mirror(self, draft) -> dict | None:
+        """Mirror a freshly recorded purchase into Supabase (opt-in, fail-soft).
+
+        Called after the SQLite transaction has committed; SQLite stays the
+        authority. Any failure lands in the activity feed as a visible audit
+        event instead of breaking the demo.
+        """
+        if not (draft and draft.get("purchase_id") and draft.get("status") == "recorded"):
+            return None
+        from .supabase_db import mirror_enabled, mirror_purchase  # lazy: keep demo startup free of cloud deps
+
+        if not mirror_enabled():
+            return None
+        try:
+            with self.transaction() as conn:
+                row = conn.execute("SELECT body FROM purchases WHERE id=?", (draft["purchase_id"],)).fetchone()
+            if not row:
+                return None
+            purchase = json.loads(row["body"])
+            result = mirror_purchase(purchase)
+            event = "cloud_mirror_ok" if result.get("status") in ("mirrored", "already_mirrored") else "cloud_mirror_failed"
+            detail = result.get("error", "") if event == "cloud_mirror_failed" else f"invoice {result.get('invoice_id', '')[:8]}"
+            with self.transaction() as conn:
+                self._audit(conn, event, f"Cloud mirror {result.get('status')}: {detail}".rstrip(": "))
+        except Exception as error:  # noqa: BLE001 - mirror bookkeeping must never break the demo
+            try:
+                with self.transaction() as conn:
+                    self._audit(conn, "cloud_mirror_failed", f"Cloud mirror error: {str(error)[:200]}")
+            except Exception:  # noqa: BLE001
+                pass
+        return None
 
     def overview(self):
         with self.transaction() as conn:
