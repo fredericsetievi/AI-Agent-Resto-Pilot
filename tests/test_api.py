@@ -248,6 +248,20 @@ def test_error_envelope_validation_and_local_browser_boundary(client):
     assert client.get("/v1/overview", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
 
 
+def test_public_demo_mode_allows_hosted_boundary(tmp_path):
+    app = create_app(tmp_path / "public.sqlite3", public_demo=True)
+    with TestClient(app, base_url="https://restopilot.vercel.app", raise_server_exceptions=False) as client:
+        assert client.get("/health/live").status_code == 200
+        assert client.get("/v1/overview").status_code == 200
+        assert client.get("/v1/overview", headers={"Origin": "https://restopilot.vercel.app"}).status_code == 200
+        # Public mode has no session or cookie to protect, so foreign origins pass.
+        assert client.get("/v1/overview", headers={"Origin": "https://evil.example"}).status_code == 200
+        assert client.get("/v1/overview", headers={"Host": "restopilot.vercel.app"}).status_code == 200
+        assert client.get("/v1/overview", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 200
+        # Hardening headers still apply in public mode.
+        assert client.get("/health/live").headers["X-Content-Type-Options"] == "nosniff"
+
+
 def test_supplier_and_30_day_baseline_are_bounded(app, client):
     draft = pending(client)
     payload = edit_payload(draft, supplier="Different supplier")

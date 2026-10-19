@@ -1,4 +1,8 @@
-"""Loopback-only local demonstration API; demo identity is not authentication."""
+"""Local demonstration API; demo identity is not authentication.
+
+Loopback-only by default. Pass public_demo=True for a hosted demo deployment
+(e.g. Vercel); the boundary relaxes, but the demo still has no authentication.
+"""
 
 from __future__ import annotations
 
@@ -72,7 +76,7 @@ def _is_loopback_host(host):
         return False
 
 
-def create_app(db_path, seed=True, twilio_auth_token=None, public_base_url=None):
+def create_app(db_path, seed=True, twilio_auth_token=None, public_base_url=None, public_demo=False):
     app = FastAPI(title="RestoPilot local demo", version="0.1.0", description="Manual intake, rules extraction and SQLite. Synthetic demo identity; not production authentication.")
     store = Store(db_path, seed=seed)
     app.state.store = store
@@ -81,20 +85,24 @@ def create_app(db_path, seed=True, twilio_auth_token=None, public_base_url=None)
     @app.middleware("http")
     async def loopback_boundary(request: Request, call_next):
         public_webhook = request.method == "POST" and request.url.path == WEBHOOK_PATH and matches_public_host(request.headers.get("host", ""), configured_origin)
-        if not _is_loopback_host(request.headers.get("host", "")) and not public_webhook:
-            return error("invalid_host", "This local demo accepts loopback hosts only.", 403)
-        origin = request.headers.get("origin")
-        if origin:
-            try:
-                parsed = urlsplit(origin)
-                host = urlsplit("http://" + request.headers["host"])
-                # Browser requests must come from the exact local server origin.
-                if parsed.scheme != request.url.scheme or parsed.hostname != host.hostname or (parsed.port or (443 if parsed.scheme == "https" else 80)) != (host.port or 80) or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
-                    return error("invalid_origin", "Use this demo's own local browser origin.", 403)
-            except ValueError:
-                return error("invalid_origin", "Invalid browser origin.", 403)
-        if request.headers.get("sec-fetch-site") == "cross-site":
-            return error("cross_site_request", "Cross-site requests are not allowed in this local demo.", 403)
+        # public_demo relaxes the loopback boundary for hosted demo deployments
+        # (e.g. Vercel). It is opt-in per deployment; the local default stays
+        # loopback-only. Twilio signature validation is unaffected either way.
+        if not public_demo:
+            if not _is_loopback_host(request.headers.get("host", "")) and not public_webhook:
+                return error("invalid_host", "This local demo accepts loopback hosts only.", 403)
+            origin = request.headers.get("origin")
+            if origin:
+                try:
+                    parsed = urlsplit(origin)
+                    host = urlsplit("http://" + request.headers["host"])
+                    # Browser requests must come from the exact local server origin.
+                    if parsed.scheme != request.url.scheme or parsed.hostname != host.hostname or (parsed.port or (443 if parsed.scheme == "https" else 80)) != (host.port or 80) or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
+                        return error("invalid_origin", "Use this demo's own local browser origin.", 403)
+                except ValueError:
+                    return error("invalid_origin", "Invalid browser origin.", 403)
+            if request.headers.get("sec-fetch-site") == "cross-site":
+                return error("cross_site_request", "Cross-site requests are not allowed in this local demo.", 403)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
