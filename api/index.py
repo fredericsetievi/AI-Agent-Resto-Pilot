@@ -14,6 +14,9 @@ Optional environment variables:
     TWILIO_AUTH_TOKEN    Enables the signed Twilio webhook route.
     PUBLIC_BASE_URL      Public origin of this deployment, for webhook signature
                          host matching (e.g. https://your-app.vercel.app).
+    DIALOG360_API_KEY    Enables 360dialog sandbox API replies.
+    DIALOG360_WEBHOOK_TOKEN
+                         URL-safe secret embedded in the sandbox callback path.
 """
 
 import os
@@ -30,4 +33,6 @@ app = create_app(
     public_demo=os.environ.get("PUBLIC_DEMO") == "1",
     twilio_auth_token=os.environ.get("TWILIO_AUTH_TOKEN"),
     public_base_url=os.environ.get("PUBLIC_BASE_URL"),
+    dialog360_api_key=os.environ.get("DIALOG360_API_KEY"),
+    dialog360_webhook_token=os.environ.get("DIALOG360_WEBHOOK_TOKEN"),
 )

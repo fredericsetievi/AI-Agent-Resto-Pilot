@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def load_local_env(path):
-    """Read only the two supported secrets from a small, non-executable .env file."""
+    """Read only supported literal settings from a small, non-executable .env file."""
     values = {}
     if not path.exists():
         return values
@@ -24,7 +24,12 @@ def load_local_env(path):
             continue
         key, separator, value = line.partition("=")
         key, value = key.strip(), value.strip()
-        if not separator or key not in {"TWILIO_AUTH_TOKEN", "PUBLIC_BASE_URL"}:
+        if not separator or key not in {
+            "TWILIO_AUTH_TOKEN",
+            "PUBLIC_BASE_URL",
+            "DIALOG360_API_KEY",
+            "DIALOG360_WEBHOOK_TOKEN",
+        }:
             raise ValueError(f"Unsupported setting on {path.name} line {number}.")
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
@@ -41,15 +46,20 @@ def main():
     local_env = load_local_env(PROJECT_ROOT / ".env")
     twilio_auth_token = os.environ.get("TWILIO_AUTH_TOKEN") or local_env.get("TWILIO_AUTH_TOKEN")
     public_base_url = os.environ.get("PUBLIC_BASE_URL") or local_env.get("PUBLIC_BASE_URL")
+    dialog360_api_key = os.environ.get("DIALOG360_API_KEY") or local_env.get("DIALOG360_API_KEY")
+    dialog360_webhook_token = os.environ.get("DIALOG360_WEBHOOK_TOKEN") or local_env.get("DIALOG360_WEBHOOK_TOKEN")
     print("RestoPilot demo: manual intake, WhatsApp simulator, rules extraction, SQLite, local demo identity.")
     print(f"Open http://127.0.0.1:{args.port} · Database: {args.db}")
     print("Twilio webhook: configured" if twilio_auth_token and public_base_url else "Twilio webhook: disabled (set TWILIO_AUTH_TOKEN and PUBLIC_BASE_URL to enable)")
+    print("360dialog sandbox: configured" if dialog360_api_key and dialog360_webhook_token and public_base_url else "360dialog sandbox: disabled (set DIALOG360_API_KEY, DIALOG360_WEBHOOK_TOKEN and PUBLIC_BASE_URL to enable)")
     uvicorn.run(
         create_app(
             str(args.db),
             seed=not args.empty,
             twilio_auth_token=twilio_auth_token,
             public_base_url=public_base_url,
+            dialog360_api_key=dialog360_api_key,
+            dialog360_webhook_token=dialog360_webhook_token,
         ),
         host="127.0.0.1",
         port=args.port,

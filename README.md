@@ -33,8 +33,9 @@ Use `--empty` with a **new** database path to start with the ingredient catalog 
 - Persistent WhatsApp simulator: purchase note, correlated `ya`/`batal`, replay protection, dashboard correction, and restart-safe conversation history.
 - Live-ready Twilio webhook with official signature validation, strict public-route scoping, TwiML preparation, sender/channel isolation, and a safe text fallback for media.
 - Trial-account polling fallback that imports only inbound WhatsApp records from Twilio's Messages API, reuses the same transaction/idempotency path, and never claims or attempts an outbound reply.
+- Free 360dialog sandbox transport for a real one-number test: HTTPS webhook intake, persistent event deduplication, and API-delivered draft/confirmation replies.
 
-The dashboard labels simulated and live behavior explicitly. Extraction uses deterministic rules; Atoms and StepFun are not part of the active scope. **A real joined-phone → Twilio → signed webhook → draft → `ya` → recorded purchase round trip has passed.** OCR, voice, managed login, PostgreSQL, and production deployment are not implemented. The demo identity and phone-to-owner mapping are not production authentication. The launcher binds to loopback; when configured, only the exact signed Twilio webhook may accept the configured public host. Stock is an estimate, and purchase approval does not mark a payment as made.
+The dashboard labels simulated and live behavior explicitly. Extraction uses deterministic rules; Atoms and StepFun are not part of the active scope. **A real joined-phone → Twilio → signed webhook → draft → `ya` → recorded purchase round trip has passed.** OCR, voice, managed login, PostgreSQL, and production deployment are not implemented. The demo identity and phone-to-owner mapping are not production authentication. The launcher binds to loopback; when configured, only the exact provider webhook paths may accept the configured public host. Stock is an estimate, and purchase approval does not mark a payment as made.
 
 ## Optional Twilio testing
 
@@ -56,6 +57,20 @@ export TWILIO_WHATSAPP_TO='whatsapp:+<trial-recipient-number>'
 
 The poller never sends a Twilio message. See [the Twilio setup guide](docs/TWILIO.md) for safe setup, filtering, idempotency, and trial limitations. If a webhook-capable sender becomes available, `.env.example` documents the separate signed-webhook configuration.
 
+## Optional 360dialog sandbox testing
+
+The free 360dialog sandbox is a better match for a visible two-way rehearsal than
+the current Twilio Trial fallback: it forwards messages from your own WhatsApp
+account to the configured webhook and accepts an API reply back to that same
+account. It is test-only, capped at 200 messages, and cannot contact other users.
+It does not remove the need to resolve Meta/WABA restrictions for production.
+
+See [the 360dialog sandbox guide](docs/DIALOG360.md) for key rotation, tunnel,
+environment, webhook-registration, and end-to-end phone test instructions.
+A real phone → public webhook → persistent draft → 360dialog API reply passed on
+October 19, 2026; the adapter includes the payload and success-response variants
+observed during that live test.
+
 ## Verify and rehearse
 
 ```sh
@@ -64,7 +79,7 @@ node --check frontend/app.js
 node --test tests/frontend.test.cjs
 ```
 
-See [the demo script and next milestones](docs/DEMO.md), [dated delivery roadmap](docs/ROADMAP.md), [Twilio setup guide](docs/TWILIO.md), and [current architecture](ARCHITECTURE.md). The API exposes its local OpenAPI schema at `/openapi.json` and interactive documentation at `/docs` while running.
+See [the demo script and next milestones](docs/DEMO.md), [dated delivery roadmap](docs/ROADMAP.md), [Twilio setup guide](docs/TWILIO.md), [360dialog sandbox guide](docs/DIALOG360.md), and [current architecture](ARCHITECTURE.md). The API exposes its local OpenAPI schema at `/openapi.json` and interactive documentation at `/docs` while running.
 
 The dependency pins reproduce the installed environment tested for this local milestone. Review and upgrade dependencies, implement managed authentication and tenant isolation, and verify PostgreSQL concurrency before any public deployment.
 

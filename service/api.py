@@ -6,6 +6,7 @@ Loopback-only by default. Pass public_demo=True for a hosted demo deployment
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Annotated, Literal
@@ -20,7 +21,22 @@ from starlette.exceptions import HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from .db import DomainError, Store
+from .dialog360 import (
+    OUTBOUND_PENDING as DIALOG360_OUTBOUND_PENDING,
+    OUTBOUND_SENDING as DIALOG360_OUTBOUND_SENDING,
+    OUTBOUND_SENT as DIALOG360_OUTBOUND_SENT,
+    SANDBOX as DIALOG360_SANDBOX,
+    Dialog360Error,
+    matches_webhook_token,
+    parse_sandbox_webhook,
+    sandbox_event_key,
+    sandbox_webhook_path,
+    send_sandbox_text,
+)
 from .whatsapp import LIVE, WEBHOOK_PATH, matches_public_host, public_origin, twilio_event_key, twiml_reply, validate_signature
+
+
+logger = logging.getLogger("restopilot.api")
 
 
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
@@ -76,15 +92,26 @@ def _is_loopback_host(host):
         return False
 
 
-def create_app(db_path, seed=True, twilio_auth_token=None, public_base_url=None, public_demo=False):
+def create_app(
+    db_path,
+    seed=True,
+    twilio_auth_token=None,
+    public_base_url=None,
+    public_demo=False,
+    dialog360_api_key=None,
+    dialog360_webhook_token=None,
+    dialog360_http_client=None,
+):
     app = FastAPI(title="RestoPilot local demo", version="0.1.0", description="Manual intake, rules extraction and SQLite. Synthetic demo identity; not production authentication.")
     store = Store(db_path, seed=seed)
     app.state.store = store
     configured_origin = public_origin(public_base_url)
+    dialog360_path = sandbox_webhook_path(dialog360_webhook_token) if dialog360_webhook_token else None
 
     @app.middleware("http")
     async def loopback_boundary(request: Request, call_next):
-        public_webhook = request.method == "POST" and request.url.path == WEBHOOK_PATH and matches_public_host(request.headers.get("host", ""), configured_origin)
+        public_webhook_path = request.url.path == WEBHOOK_PATH or (dialog360_path and request.url.path == dialog360_path)
+        public_webhook = request.method == "POST" and public_webhook_path and matches_public_host(request.headers.get("host", ""), configured_origin)
         # public_demo relaxes the loopback boundary for hosted demo deployments
         # (e.g. Vercel). It is opt-in per deployment; the local default stays
         # loopback-only. Twilio signature validation is unaffected either way.
@@ -216,6 +243,61 @@ def create_app(db_path, seed=True, twilio_auth_token=None, public_base_url=None,
         payload = {"sender": sender, "text": text, "event_id": sid, "num_media": int(media_text)}
         result = await run_in_threadpool(store.whatsapp_ingest, event_key, payload, transport=LIVE, channel=channel)
         return Response(twiml_reply(result["messages"][-1]["body"]), media_type="application/xml")
+
+    @app.post("/webhooks/360dialog/sandbox/{webhook_token}")
+    async def dialog360_sandbox_webhook(webhook_token: str, request: Request):
+        if not dialog360_api_key or not dialog360_path:
+            raise DomainError("dialog360_not_configured", "Set DIALOG360_API_KEY, DIALOG360_WEBHOOK_TOKEN and PUBLIC_BASE_URL before accepting sandbox webhooks.", 503)
+        if not matches_webhook_token(webhook_token, dialog360_webhook_token):
+            raise DomainError("invalid_dialog360_webhook_token", "Invalid 360dialog webhook token.", 403)
+        if request.url.query:
+            raise DomainError("invalid_webhook_url", "Configure the webhook without query parameters.", 400)
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+            raise DomainError("invalid_content_type", "360dialog webhook requires JSON.", 415)
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > 65536:
+                raise DomainError("webhook_too_large", "Webhook payload exceeds 64 KiB.", 413)
+        try:
+            messages = parse_sandbox_webhook(bytes(raw))
+        except Dialog360Error as exc:
+            logger.warning("Rejected 360dialog sandbox webhook: %s", exc)
+            raise DomainError("invalid_dialog360_webhook", str(exc), exc.status)
+
+        for message in messages:
+            event_id = message["event_id"]
+            payload = {key: message[key] for key in ("sender", "text", "event_id", "num_media")}
+            result = await run_in_threadpool(
+                store.whatsapp_ingest,
+                sandbox_event_key(event_id),
+                payload,
+                transport=DIALOG360_SANDBOX,
+                channel=DIALOG360_SANDBOX,
+                outbound_status=DIALOG360_OUTBOUND_PENDING,
+            )
+            outbound = result["messages"][-1]
+            claimed = await run_in_threadpool(
+                store.claim_whatsapp_message,
+                outbound["id"],
+                DIALOG360_OUTBOUND_PENDING,
+                DIALOG360_OUTBOUND_SENDING,
+            )
+            if not claimed:
+                continue
+            try:
+                await send_sandbox_text(
+                    dialog360_api_key,
+                    message["recipient_field"],
+                    message["sender"],
+                    outbound["body"],
+                    client=dialog360_http_client,
+                )
+            except Dialog360Error as exc:
+                await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], DIALOG360_OUTBOUND_PENDING)
+                raise DomainError("dialog360_send_failed", str(exc), exc.status)
+            await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], DIALOG360_OUTBOUND_SENT)
+        return {"ok": True}
 
     frontend = Path(__file__).resolve().parent.parent / "frontend"
     if frontend.exists():

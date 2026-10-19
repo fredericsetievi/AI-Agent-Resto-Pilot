@@ -7,10 +7,12 @@ from service.__main__ import load_local_env
 
 def test_local_env_reads_only_supported_literal_values(tmp_path):
     path = tmp_path / ".env"
-    path.write_text("# local only\nTWILIO_AUTH_TOKEN='secret'\nPUBLIC_BASE_URL=https://demo.example\n", encoding="utf-8")
+    path.write_text("# local only\nTWILIO_AUTH_TOKEN='secret'\nPUBLIC_BASE_URL=https://demo.example\nDIALOG360_API_KEY='sandbox-key'\nDIALOG360_WEBHOOK_TOKEN=abcdefghijklmnopqrstuvwxyz012345\n", encoding="utf-8")
     assert load_local_env(path) == {
         "TWILIO_AUTH_TOKEN": "secret",
         "PUBLIC_BASE_URL": "https://demo.example",
+        "DIALOG360_API_KEY": "sandbox-key",
+        "DIALOG360_WEBHOOK_TOKEN": "abcdefghijklmnopqrstuvwxyz012345",
     }
 
 

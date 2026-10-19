@@ -354,6 +354,24 @@ class Store:
         with self.transaction() as conn:
             return self._whatsapp_snapshot(conn, self._whatsapp_thread(conn, sender, SIMULATOR, SIMULATOR))
 
+    def claim_whatsapp_message(self, message_id, expected_status, claimed_status):
+        """Atomically claim one provider delivery so webhook retries do not resend it."""
+        with self.transaction() as conn:
+            changed = conn.execute(
+                "UPDATE whatsapp_messages SET status=? WHERE id=? AND direction='outbound' AND status=?",
+                (claimed_status, message_id, expected_status),
+            ).rowcount
+            return changed == 1
+
+    def set_whatsapp_message_status(self, message_id, status):
+        with self.transaction() as conn:
+            changed = conn.execute(
+                "UPDATE whatsapp_messages SET status=? WHERE id=? AND direction='outbound'",
+                (status, message_id),
+            ).rowcount
+            if changed != 1:
+                raise DomainError("whatsapp_message_not_found", "Outbound WhatsApp message was not found.", 404)
+
     def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None):
         """Persist inbound, decision/ledger, outbound and dedupe in one commit."""
         channel = channel or transport
