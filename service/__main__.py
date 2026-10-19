@@ -11,8 +11,11 @@ from service.api import create_app
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+SUPPORTED_ENV_KEYS = {"TWILIO_AUTH_TOKEN", "PUBLIC_BASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY"}
+
+
 def load_local_env(path):
-    """Read only the two supported secrets from a small, non-executable .env file."""
+    """Read only the supported secrets from a small, non-executable .env file."""
     values = {}
     if not path.exists():
         return values
@@ -24,7 +27,7 @@ def load_local_env(path):
             continue
         key, separator, value = line.partition("=")
         key, value = key.strip(), value.strip()
-        if not separator or key not in {"TWILIO_AUTH_TOKEN", "PUBLIC_BASE_URL"}:
+        if not separator or key not in SUPPORTED_ENV_KEYS:
             raise ValueError(f"Unsupported setting on {path.name} line {number}.")
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
