@@ -11,12 +11,15 @@ Optional environment variables:
                          is ephemeral: state resets when the function recycles.
     DEMO_SEED=0          Start with an empty database instead of the synthetic
                          opening purchases.
-    TWILIO_AUTH_TOKEN    Enables the signed Twilio webhook route.
     PUBLIC_BASE_URL      Public origin of this deployment, for webhook signature
                          host matching (e.g. https://your-app.vercel.app).
-    DIALOG360_API_KEY    Enables 360dialog sandbox API replies.
-    DIALOG360_WEBHOOK_TOKEN
-                         URL-safe secret embedded in the sandbox callback path.
+    META_WHATSAPP_ACCESS_TOKEN
+    META_APP_SECRET
+    META_WEBHOOK_VERIFY_TOKEN
+    META_WABA_ID
+    META_PHONE_NUMBER_ID Enable the Meta WhatsApp Cloud API transport.
+    META_GRAPH_API_VERSION
+                         Pinned Graph version; defaults to v23.0.
 """
 
 import os
@@ -31,8 +34,11 @@ app = create_app(
     os.environ.get("DEMO_DB_PATH", "/tmp/restopilot.sqlite3"),
     seed=os.environ.get("DEMO_SEED", "1") != "0",
     public_demo=os.environ.get("PUBLIC_DEMO") == "1",
-    twilio_auth_token=os.environ.get("TWILIO_AUTH_TOKEN"),
     public_base_url=os.environ.get("PUBLIC_BASE_URL"),
-    dialog360_api_key=os.environ.get("DIALOG360_API_KEY"),
-    dialog360_webhook_token=os.environ.get("DIALOG360_WEBHOOK_TOKEN"),
+    meta_access_token=os.environ.get("META_WHATSAPP_ACCESS_TOKEN"),
+    meta_app_secret=os.environ.get("META_APP_SECRET"),
+    meta_verify_token=os.environ.get("META_WEBHOOK_VERIFY_TOKEN"),
+    meta_waba_id=os.environ.get("META_WABA_ID"),
+    meta_phone_number_id=os.environ.get("META_PHONE_NUMBER_ID"),
+    meta_graph_api_version=os.environ.get("META_GRAPH_API_VERSION", "v23.0"),
 )

@@ -7,10 +7,9 @@ Loopback-only by default. Pass public_demo=True for a hosted demo deployment
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from typing import Annotated, Literal
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -21,19 +20,24 @@ from starlette.exceptions import HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from .db import DomainError, Store
-from .dialog360 import (
-    OUTBOUND_PENDING as DIALOG360_OUTBOUND_PENDING,
-    OUTBOUND_SENDING as DIALOG360_OUTBOUND_SENDING,
-    OUTBOUND_SENT as DIALOG360_OUTBOUND_SENT,
-    SANDBOX as DIALOG360_SANDBOX,
-    Dialog360Error,
-    matches_webhook_token,
-    parse_sandbox_webhook,
-    sandbox_event_key,
-    sandbox_webhook_path,
-    send_sandbox_text,
+from .whatsapp import (
+    LIVE,
+    OUTBOUND_PENDING,
+    OUTBOUND_SENDING,
+    OUTBOUND_SENT,
+    WEBHOOK_PATH,
+    MetaWhatsAppError,
+    matches_public_host,
+    matches_verify_token,
+    meta_event_key,
+    parse_webhook,
+    public_origin,
+    send_text,
+    validate_graph_version,
+    validate_meta_id,
+    validate_verify_token,
+    validate_webhook_signature,
 )
-from .whatsapp import LIVE, WEBHOOK_PATH, matches_public_host, public_origin, twilio_event_key, twiml_reply, validate_signature
 
 
 logger = logging.getLogger("restopilot.api")
@@ -95,26 +99,31 @@ def _is_loopback_host(host):
 def create_app(
     db_path,
     seed=True,
-    twilio_auth_token=None,
     public_base_url=None,
     public_demo=False,
-    dialog360_api_key=None,
-    dialog360_webhook_token=None,
-    dialog360_http_client=None,
+    meta_access_token=None,
+    meta_app_secret=None,
+    meta_verify_token=None,
+    meta_waba_id=None,
+    meta_phone_number_id=None,
+    meta_graph_api_version="v23.0",
+    meta_http_client=None,
 ):
     app = FastAPI(title="RestoPilot local demo", version="0.1.0", description="Manual intake, rules extraction and SQLite. Synthetic demo identity; not production authentication.")
     store = Store(db_path, seed=seed)
     app.state.store = store
     configured_origin = public_origin(public_base_url)
-    dialog360_path = sandbox_webhook_path(dialog360_webhook_token) if dialog360_webhook_token else None
+    meta_waba_id = validate_meta_id(meta_waba_id, "META_WABA_ID") if meta_waba_id else None
+    meta_phone_number_id = validate_meta_id(meta_phone_number_id, "META_PHONE_NUMBER_ID") if meta_phone_number_id else None
+    meta_verify_token = validate_verify_token(meta_verify_token) if meta_verify_token else None
+    meta_graph_api_version = validate_graph_version(meta_graph_api_version)
 
     @app.middleware("http")
     async def loopback_boundary(request: Request, call_next):
-        public_webhook_path = request.url.path == WEBHOOK_PATH or (dialog360_path and request.url.path == dialog360_path)
-        public_webhook = request.method == "POST" and public_webhook_path and matches_public_host(request.headers.get("host", ""), configured_origin)
+        public_webhook = request.method in ("GET", "POST") and request.url.path == WEBHOOK_PATH and matches_public_host(request.headers.get("host", ""), configured_origin)
         # public_demo relaxes the loopback boundary for hosted demo deployments
         # (e.g. Vercel). It is opt-in per deployment; the local default stays
-        # loopback-only. Twilio signature validation is unaffected either way.
+        # loopback-only. Meta webhook signature validation is unaffected either way.
         if not public_demo:
             if not _is_loopback_host(request.headers.get("host", "")) and not public_webhook:
                 return error("invalid_host", "This local demo accepts loopback hosts only.", 403)
@@ -206,97 +215,76 @@ def create_app(
     def simulate_whatsapp(body: SimulatedMessage, actor=Depends(owner), idempotency_key=Depends(key)):
         return {"data": store.whatsapp_ingest(idempotency_key, body.model_dump())}
 
-    @app.post(WEBHOOK_PATH)
-    async def twilio_whatsapp(request: Request):
-        if not twilio_auth_token or not configured_origin:
-            raise DomainError("twilio_not_configured", "Set TWILIO_AUTH_TOKEN and an HTTPS PUBLIC_BASE_URL before accepting live Twilio webhooks.", 503)
-        if request.url.query:
-            raise DomainError("invalid_webhook_url", "Configure the webhook without query parameters.", 400)
-        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/x-www-form-urlencoded":
-            raise DomainError("invalid_content_type", "Twilio webhook requires form-urlencoded data.", 415)
-        raw = bytearray()
-        async for chunk in request.stream():
-            raw.extend(chunk)
-            if len(raw) > 65536:
-                raise DomainError("webhook_too_large", "Webhook payload exceeds 64 KiB.", 413)
-        try:
-            pairs = parse_qsl(raw.decode("utf-8"), keep_blank_values=True, strict_parsing=True, max_num_fields=100, errors="strict")
-            params = dict(pairs)
-        except (UnicodeError, ValueError):
-            raise DomainError("invalid_webhook_form", "Malformed Twilio webhook form.", 400)
-        if len(params) != len(pairs):
-            raise DomainError("invalid_webhook_form", "Repeated webhook fields are not supported.", 400)
-        try:
-            valid = validate_signature(twilio_auth_token, configured_origin + WEBHOOK_PATH, params, request.headers.get("x-twilio-signature", ""))
-        except ImportError:
-            raise DomainError("twilio_sdk_unavailable", "Install the pinned Twilio SDK before accepting live webhooks.", 503)
-        if not valid:
-            raise DomainError("invalid_twilio_signature", "Invalid Twilio request signature.", 403)
-        sender, recipient, sid = params.get("From", ""), params.get("To", ""), params.get("MessageSid", "")
-        if not re.fullmatch(r"whatsapp:\+[1-9]\d{6,14}", sender) or not re.fullmatch(r"whatsapp:\+[1-9]\d{6,14}", recipient) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", sid):
-            raise DomainError("invalid_twilio_message", "Valid WhatsApp From, To and MessageSid fields are required.", 400)
-        media_text, text = params.get("NumMedia", "0"), params.get("Body", "").strip()
-        if not re.fullmatch(r"\d{1,2}", media_text) or int(media_text) > 10 or len(text) > 10000 or (not text and not int(media_text)):
-            raise DomainError("invalid_twilio_message", "Provide a bounded text message or supported media count.", 400)
-        channel = LIVE + ":" + recipient
-        event_key = twilio_event_key(recipient, sid)
-        payload = {"sender": sender, "text": text, "event_id": sid, "num_media": int(media_text)}
-        result = await run_in_threadpool(store.whatsapp_ingest, event_key, payload, transport=LIVE, channel=channel)
-        return Response(twiml_reply(result["messages"][-1]["body"]), media_type="application/xml")
+    @app.get(WEBHOOK_PATH)
+    async def verify_meta_whatsapp(request: Request):
+        if not meta_verify_token or not configured_origin:
+            raise DomainError("meta_not_configured", "Set META_WEBHOOK_VERIFY_TOKEN and an HTTPS PUBLIC_BASE_URL before verifying the Meta webhook.", 503)
+        params = request.query_params
+        required = ("hub.mode", "hub.verify_token", "hub.challenge")
+        if any(len(params.getlist(name)) != 1 for name in required):
+            raise DomainError("invalid_meta_verification", "Invalid Meta webhook verification request.", 400)
+        challenge = params.get("hub.challenge", "")
+        if params.get("hub.mode") != "subscribe" or not matches_verify_token(params.get("hub.verify_token"), meta_verify_token):
+            raise DomainError("invalid_meta_verification", "Meta webhook verification failed.", 403)
+        if not challenge.isdigit() or len(challenge) > 200:
+            raise DomainError("invalid_meta_verification", "Invalid Meta webhook verification challenge.", 400)
+        return Response(challenge, media_type="text/plain")
 
-    @app.post("/webhooks/360dialog/sandbox/{webhook_token}")
-    async def dialog360_sandbox_webhook(webhook_token: str, request: Request):
-        if not dialog360_api_key or not dialog360_path:
-            raise DomainError("dialog360_not_configured", "Set DIALOG360_API_KEY, DIALOG360_WEBHOOK_TOKEN and PUBLIC_BASE_URL before accepting sandbox webhooks.", 503)
-        if not matches_webhook_token(webhook_token, dialog360_webhook_token):
-            raise DomainError("invalid_dialog360_webhook_token", "Invalid 360dialog webhook token.", 403)
+    @app.post(WEBHOOK_PATH)
+    async def meta_whatsapp(request: Request):
+        if not all((meta_access_token, meta_app_secret, meta_verify_token, meta_waba_id, meta_phone_number_id, configured_origin)):
+            raise DomainError("meta_not_configured", "Configure all Meta WhatsApp settings and PUBLIC_BASE_URL before accepting live webhooks.", 503)
         if request.url.query:
             raise DomainError("invalid_webhook_url", "Configure the webhook without query parameters.", 400)
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
-            raise DomainError("invalid_content_type", "360dialog webhook requires JSON.", 415)
+            raise DomainError("invalid_content_type", "Meta WhatsApp webhook requires JSON.", 415)
         raw = bytearray()
         async for chunk in request.stream():
             raw.extend(chunk)
             if len(raw) > 65536:
                 raise DomainError("webhook_too_large", "Webhook payload exceeds 64 KiB.", 413)
+        if not validate_webhook_signature(meta_app_secret, bytes(raw), request.headers.get("x-hub-signature-256", "")):
+            raise DomainError("invalid_meta_signature", "Invalid Meta webhook signature.", 403)
         try:
-            messages = parse_sandbox_webhook(bytes(raw))
-        except Dialog360Error as exc:
-            logger.warning("Rejected 360dialog sandbox webhook: %s", exc)
-            raise DomainError("invalid_dialog360_webhook", str(exc), exc.status)
+            messages = parse_webhook(bytes(raw), waba_id=meta_waba_id, phone_number_id=meta_phone_number_id)
+        except MetaWhatsAppError as exc:
+            logger.warning("Rejected Meta WhatsApp webhook: %s", exc)
+            raise DomainError("invalid_meta_webhook", str(exc), exc.status)
 
         for message in messages:
             event_id = message["event_id"]
             payload = {key: message[key] for key in ("sender", "text", "event_id", "num_media")}
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
-                sandbox_event_key(event_id),
+                meta_event_key(meta_phone_number_id, event_id),
                 payload,
-                transport=DIALOG360_SANDBOX,
-                channel=DIALOG360_SANDBOX,
-                outbound_status=DIALOG360_OUTBOUND_PENDING,
+                transport=LIVE,
+                channel=LIVE + ":" + meta_phone_number_id,
+                outbound_status=OUTBOUND_PENDING,
             )
             outbound = result["messages"][-1]
             claimed = await run_in_threadpool(
                 store.claim_whatsapp_message,
                 outbound["id"],
-                DIALOG360_OUTBOUND_PENDING,
-                DIALOG360_OUTBOUND_SENDING,
+                OUTBOUND_PENDING,
+                OUTBOUND_SENDING,
             )
             if not claimed:
                 continue
             try:
-                await send_sandbox_text(
-                    dialog360_api_key,
-                    message["recipient_field"],
+                await send_text(
+                    meta_access_token,
+                    meta_phone_number_id,
+                    meta_graph_api_version,
                     message["sender"],
                     outbound["body"],
-                    client=dialog360_http_client,
+                    client=meta_http_client,
                 )
-            except Dialog360Error as exc:
-                await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], DIALOG360_OUTBOUND_PENDING)
-                raise DomainError("dialog360_send_failed", str(exc), exc.status)
-            await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], DIALOG360_OUTBOUND_SENT)
+            except (MetaWhatsAppError, ValueError) as exc:
+                await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], OUTBOUND_PENDING)
+                status = exc.status if isinstance(exc, MetaWhatsAppError) else 500
+                raise DomainError("meta_send_failed", str(exc), status)
+            await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], OUTBOUND_SENT)
         return {"ok": True}
 
     frontend = Path(__file__).resolve().parent.parent / "frontend"
