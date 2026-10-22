@@ -65,9 +65,9 @@ def test_extract_invoice_maps_printed_lines():
     assert result["supplier"] == "Petik Segar"
     assert result["items"] == [
         {"ingredient_id": "cabai", "raw_name": "cabai merah", "quantity": "3", "unit": "kg", "line_total_idr": 150000},
-        {"ingredient_id": None, "raw_name": "kecombrang", "quantity": "0.5", "unit": "kg", "line_total_idr": 31000},
+        {"ingredient_id": "kecombrang", "raw_name": "kecombrang", "quantity": "0.5", "unit": "kg", "line_total_idr": 31000},
     ]
-    assert result["warnings"] == ["Line 2: unknown ingredient 'kecombrang'; select a catalog item manually."]
+    assert result["warnings"] == []
 
     call = client.calls[0]
     assert call["url"] == MODEL_URL

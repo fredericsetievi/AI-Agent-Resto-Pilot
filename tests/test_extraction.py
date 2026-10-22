@@ -1,4 +1,17 @@
-from service.extraction import extract_purchase, normalize_item
+from service.extraction import extract_purchase, match_catalog_name, normalize_item
+
+
+def test_market_names_map_by_prefix_but_prepared_products_stay_unknown():
+    assert match_catalog_name("Bawang Merah Kupas")[1] == "bawang"
+    assert match_catalog_name("bawang putih kupas")[1] == "bawang_putih"
+    assert match_catalog_name("b merah kapos")[1] == "bawang"
+    assert match_catalog_name("combrang")[1] == "kecombrang"
+    assert match_catalog_name("gula merah batok")[1] == "gula_merah"
+    # A different ingredient that merely contains a catalog word.
+    assert match_catalog_name("daun bawang")[1] is None
+    # A prepared product is not the raw ingredient.
+    assert match_catalog_name("cabe kering 1kg")[1] is None
+    assert match_catalog_name("ultima @ 10kg")[1] is None
 
 
 def test_requested_examples_and_price_does_not_become_quantity():

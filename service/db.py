@@ -26,6 +26,10 @@ CATALOG = [
     {"id": "beras", "name": "Beras", "unit": "kg", "reorder_threshold": "20"},
     {"id": "minyak", "name": "Minyak goreng", "unit": "l", "reorder_threshold": "5"},
     {"id": "bawang", "name": "Bawang merah", "unit": "kg", "reorder_threshold": "3"},
+    {"id": "bawang_putih", "name": "Bawang putih", "unit": "kg", "reorder_threshold": "2"},
+    {"id": "kecombrang", "name": "Kecombrang", "unit": "kg", "reorder_threshold": "1"},
+    {"id": "gula_merah", "name": "Gula merah", "unit": "kg", "reorder_threshold": "5"},
+    {"id": "daun_pisang", "name": "Daun pisang", "unit": "kg", "reorder_threshold": "2"},
 ]
 CATALOG_BY_ID = {item["id"]: item for item in CATALOG}
 RESTAURANT = {"id": "demo-resto", "name": "Warung Nusantara"}
