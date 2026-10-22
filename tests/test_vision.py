@@ -72,7 +72,7 @@ def test_extract_invoice_maps_printed_lines():
     call = client.calls[0]
     assert call["url"] == MODEL_URL
     assert call["headers"]["Authorization"] == "Bearer synthetic-stepfun-key"
-    assert call["json"]["model"] == "step-1v"
+    assert call["json"]["model"] == "step-1o-turbo-vision"
     assert call["json"]["temperature"] == 0
     image_part = call["json"]["messages"][0]["content"][1]
     assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")

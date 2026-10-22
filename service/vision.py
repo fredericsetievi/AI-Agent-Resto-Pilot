@@ -20,7 +20,7 @@ from .extraction import canonical_unit_name, match_catalog_name
 
 
 DEFAULT_BASE_URL = "https://api.stepfun.com/v1"
-DEFAULT_MODEL = "step-1v"
+DEFAULT_MODEL = "step-1o-turbo-vision"
 MAX_ITEMS = 20
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 SUPPORTED_MEDIA_TYPES = ("image/jpeg", "image/png", "image/webp")
@@ -81,7 +81,7 @@ def validate_base_url(value):
 def validate_model(value):
     value = (value or DEFAULT_MODEL).strip()
     if not value or len(value) > 100 or any(char.isspace() for char in value):
-        raise ValueError("STEPFUN_VISION_MODEL must be a single model name such as step-1v-8k.")
+        raise ValueError("STEPFUN_VISION_MODEL must be a single model name such as step-1o-turbo-vision.")
     return value
 
 
