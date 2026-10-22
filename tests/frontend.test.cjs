@@ -91,7 +91,7 @@ test('WhatsApp simulator renders the requested route and a clear non-live label'
   h.run(`state.data={restaurant:{name:'Demo kitchen'},drafts:[]};state.whatsappLoaded=true;navigate()`);
   assert.equal(h.element('#page-title').textContent,'A WhatsApp flow you can rehearse.');
   assert.match(h.element('#content').innerHTML,/SIMULATED/);
-  assert.match(h.element('#content').innerHTML,/TWILIO-SHAPED WEBHOOK/);
+  assert.match(h.element('#content').innerHTML,/META CLOUD API FLOW/);
   assert.match(h.element('#content').innerHTML,/does not connect to WhatsApp or send a live message/);
   const index=fs.readFileSync('frontend/index.html','utf8');
   assert.match(index,/#whatsapp[^>]*>.*WhatsApp demo/s);
@@ -114,16 +114,16 @@ test('simulator POST uses the requested body and reuses event id and idempotency
   const first=JSON.parse(requests[0].options.body), second=JSON.parse(requests[1].options.body);
   assert.deepEqual(first,second);
   assert.equal(first.text,'beli cabai 3 kg 150rb');
-  assert.equal(first.sender,'whatsapp:demo-owner');
+  assert.equal(first.sender,'demo-owner');
   assert.match(first.event_id,/^[0-9a-f-]{36}$/i);
 });
 
 test('message history GET uses the fixed demo sender',async()=>{
   let request;
-  const h=harness({fetchImpl:async(path,options)=>{request={path,options};return {ok:true,json:async()=>({data:{thread:{sender:'whatsapp:demo-owner'},messages:[]}})}}});
+  const h=harness({fetchImpl:async(path,options)=>{request={path,options};return {ok:true,json:async()=>({data:{thread:{sender:'demo-owner'},messages:[]}})}}});
   h.run(`state.data={restaurant:{name:'Demo kitchen'},drafts:[],metrics:{purchases_today_idr:0,low_stock_count:0,recorded_purchases:0},purchases:[],inventory:[],activity:[],ingredients:[]};location.hash='#whatsapp';navigate()`);
   await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(request.path,'/v1/whatsapp/messages?sender=whatsapp%3Ademo-owner');
+  assert.equal(request.path,'/v1/whatsapp/messages?sender=demo-owner');
 });
 
 test('review warnings are deduplicated and capped at four visible details',()=>{
