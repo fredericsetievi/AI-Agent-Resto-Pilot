@@ -15,6 +15,7 @@ from typing import Any
 _ALIASES: tuple[tuple[str, str], ...] = (
     ("cabai merah", "cabai"),
     ("cabai", "cabai"),
+    ("cabe merah", "cabai"),
     ("cabe", "cabai"),
     ("telur ayam", "telur"),
     ("telur", "telur"),
@@ -22,8 +23,25 @@ _ALIASES: tuple[tuple[str, str], ...] = (
     ("minyak goreng", "minyak"),
     ("minyak", "minyak"),
     ("bawang merah", "bawang"),
+    ("b merah", "bawang"),
     ("bawang", "bawang"),
+    ("bawang putih", "bawang_putih"),
+    ("bawang putih kupas", "bawang_putih"),
+    ("bp kapos", "bawang_putih"),
+    ("kecombrang", "kecombrang"),
+    ("combrang", "kecombrang"),
+    ("gula merah", "gula_merah"),
+    ("gula jawa", "gula_merah"),
+    ("daun pisang", "daun_pisang"),
+    ("daun pising", "daun_pisang"),
+    ("daun pusang", "daun_pisang"),
 )
+
+# Market names carry preparation words that do not change the ingredient.
+_NAME_NOISE = {"kupas", "iris", "rajang", "halus", "segar", "mentah", "buah", "dll", "dan", "per"}
+# A prepared product is not the raw ingredient; leaving it unmatched asks the owner.
+_NAME_BLOCKERS = {"kering", "bubuk", "instan", "kaleng", "botol", "sachet", "saset"}
+_NAME_TOKEN = re.compile(r"[a-z]+")
 
 _UNIT_ALIASES = {
     "kg": "kg",
@@ -50,7 +68,7 @@ _UNIT_ALIASES = {
     "buah": "buah",
 }
 
-_EXPECTED_UNIT = {"cabai": "kg", "telur": "kg", "beras": "kg", "bawang": "kg", "minyak": "l"}
+_EXPECTED_UNIT = {"cabai": "kg", "telur": "kg", "beras": "kg", "bawang": "kg", "minyak": "l", "bawang_putih": "kg", "kecombrang": "kg", "gula_merah": "kg", "daun_pisang": "kg"}
 _MAX_VALUE = Decimal("1000000")
 _MAX_TOTAL = 1_000_000_000_000
 _NUMBER = r"[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)"
@@ -151,7 +169,30 @@ def _match_name(name: str) -> tuple[str, str | None]:
     for alias, canonical_id in _ALIASES:
         if candidate == alias:
             return candidate, canonical_id
-    return candidate, None
+    tokens = [token for token in _NAME_TOKEN.findall(candidate) if token not in _NAME_NOISE]
+    if not tokens or _NAME_BLOCKERS.intersection(tokens):
+        return candidate, None
+    # Longest alias that opens the printed name wins, so "bawang putih kupas"
+    # beats the shorter "bawang" alias. Prefix-only matching keeps "daun bawang"
+    # from collapsing into "bawang".
+    best: tuple[int, str] | None = None
+    for alias, canonical_id in _ALIASES:
+        alias_tokens = [token for token in _NAME_TOKEN.findall(alias) if token not in _NAME_NOISE]
+        if alias_tokens and tokens[: len(alias_tokens)] == alias_tokens and (best is None or len(alias_tokens) > best[0]):
+            best = (len(alias_tokens), canonical_id)
+    return candidate, best[1] if best else None
+
+
+def match_catalog_name(name: str) -> tuple[str, str | None]:
+    """Public alias lookup so non-text extractors reuse the same catalog mapping."""
+    return _match_name(name)
+
+
+def canonical_unit_name(unit: str | None) -> str | None:
+    """Public unit alias lookup so non-text extractors reuse the same unit vocabulary."""
+    if not isinstance(unit, str) or not unit.strip():
+        return None
+    return _UNIT_ALIASES.get(unit.strip().casefold(), unit.strip().casefold())
 
 
 def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None, list[str]]:

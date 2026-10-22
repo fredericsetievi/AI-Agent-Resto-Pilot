@@ -26,6 +26,10 @@ CATALOG = [
     {"id": "beras", "name": "Beras", "unit": "kg", "reorder_threshold": "20"},
     {"id": "minyak", "name": "Minyak goreng", "unit": "l", "reorder_threshold": "5"},
     {"id": "bawang", "name": "Bawang merah", "unit": "kg", "reorder_threshold": "3"},
+    {"id": "bawang_putih", "name": "Bawang putih", "unit": "kg", "reorder_threshold": "2"},
+    {"id": "kecombrang", "name": "Kecombrang", "unit": "kg", "reorder_threshold": "1"},
+    {"id": "gula_merah", "name": "Gula merah", "unit": "kg", "reorder_threshold": "5"},
+    {"id": "daun_pisang", "name": "Daun pisang", "unit": "kg", "reorder_threshold": "2"},
 ]
 CATALOG_BY_ID = {item["id"]: item for item in CATALOG}
 RESTAURANT = {"id": "demo-resto", "name": "Warung Nusantara"}
@@ -263,6 +267,13 @@ class Store:
         def action(conn):
             return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier"), extracted["items"], extracted["warnings"]))
         return self._idempotent(key, "intake", payload, action)
+
+    def intake_image(self, key, image_sha256, source_label, supplier, items, warnings):
+        """Create a draft from a vision extractor; the photo digest keys idempotency."""
+        payload = {"image_sha256": image_sha256, "source_label": source_label, "supplier": supplier}
+        def action(conn):
+            return self._present(conn, self._new_draft(conn, source_label, supplier, items, warnings))
+        return self._idempotent(key, "intake_image", payload, action)
 
     def _check_editable(self, draft, version):
         if draft["version"] != version:

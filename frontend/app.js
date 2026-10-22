@@ -11,9 +11,9 @@ const titles = {overview:['Your kitchen, in view.','Purchases, stock, and the de
 const WHATSAPP_SENDER = 'demo-owner';
 const state = {data:null, draft:null, page:'overview', dirty:false, busy:false, online:false, intakeKey:null, decisions:new Map(), mutationKeys:new Map(), refreshId:0, whatsappMessages:[], whatsappDraft:null, whatsappResult:null, whatsappLoading:false, whatsappError:'', whatsappLoaded:false, whatsappPending:null, whatsappSending:false};
 
-async function api(path, {method='GET', body, key} = {}) {
+async function api(path, {method='GET', body, key, timeout=15000} = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(path, {method, signal:controller.signal, headers:{Accept:'application/json', ...(body ? {'Content-Type':'application/json'} : {}), ...(key ? {'Idempotency-Key':key} : {})}, ...(body ? {body:JSON.stringify(body)} : {})});
     const payload = await response.json();
@@ -207,14 +207,37 @@ async function decide(decision) {
   } catch(error) { handleReviewError(error); }
   finally {reviewBusy(false);}
 }
+const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+function readPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('The photo could not be read. Try another file.'));
+    reader.onload = () => {
+      const data = String(reader.result || '').split(',')[1];
+      data ? resolve(data) : reject(new Error('The photo could not be read. Try another file.'));
+    };
+    reader.readAsDataURL(file);
+  });
+}
 $('#intake-form').addEventListener('submit',async event => {
   event.preventDefault();const button=$('button[type="submit"]',event.target);if(button.disabled)return;
-  const body={text:$('#purchase-text').value.trim(),supplier:$('#purchase-supplier').value.trim() || null};
-  if(!body.text){showError('intake-error','Enter a purchase message first.');return;}
-  const fingerprint=JSON.stringify(body);
+  const photo=$('#purchase-photo').files[0] || null;
+  const supplier=$('#purchase-supplier').value.trim() || null;
+  const text=$('#purchase-text').value.trim();
+  if(photo && text){showError('intake-error','Use either a photo or a typed message, not both.');return;}
+  if(!photo && !text){showError('intake-error','Choose a photo or type a purchase message first.');return;}
+  if(photo && !PHOTO_TYPES.includes(photo.type)){showError('intake-error','Use a JPEG, PNG, or WEBP photo.');return;}
+  if(photo && photo.size > MAX_PHOTO_BYTES){showError('intake-error','That photo is over 5 MB. Take a smaller photo.');return;}
+  const fingerprint=photo ? `photo:${photo.name}:${photo.size}:${photo.lastModified}:${supplier || ''}` : JSON.stringify({text,supplier});
   if(state.intakeKey?.fingerprint!==fingerprint)state.intakeKey={fingerprint,key:crypto.randomUUID()};
-  button.disabled=true;button.textContent='Preparing…';showError('intake-error','');
-  try { const draft=await api('/v1/intake',{method:'POST',body,key:state.intakeKey.key});$('#intake-dialog').close();event.target.reset();state.intakeKey=null;await refresh();await openReview(draft.id); }
+  button.disabled=true;button.textContent=photo?'Reading photo…':'Preparing…';showError('intake-error','');
+  try {
+    const draft=photo
+      ? await api('/v1/intake/image',{method:'POST',body:{image_base64:await readPhoto(photo),media_type:photo.type,supplier},key:state.intakeKey.key,timeout:90000})
+      : await api('/v1/intake',{method:'POST',body:{text,supplier},key:state.intakeKey.key});
+    $('#intake-dialog').close();event.target.reset();state.intakeKey=null;await refresh();await openReview(draft.id);
+  }
   catch(error) {showError('intake-error',error.message);}
   finally {button.disabled=false;button.textContent='Prepare draft →';}
 });

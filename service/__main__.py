@@ -22,6 +22,9 @@ SUPPORTED_ENV_KEYS = {
     "META_WABA_ID",
     "META_PHONE_NUMBER_ID",
     "META_GRAPH_API_VERSION",
+    "STEPFUN_API_KEY",
+    "STEPFUN_VISION_MODEL",
+    "STEPFUN_BASE_URL",
 }
 
 
@@ -70,14 +73,19 @@ def main():
         "meta_graph_api_version": setting("META_GRAPH_API_VERSION", "v23.0"),
     }
     meta_configured = public_base_url and all(meta_settings.values())
+    vision_api_key = setting("STEPFUN_API_KEY")
     print("RestoPilot demo: manual intake, WhatsApp simulator, rules extraction, SQLite, local demo identity.")
     print(f"Open http://127.0.0.1:{args.port} · Database: {args.db}")
     print("Meta WhatsApp Cloud API: configured" if meta_configured else "Meta WhatsApp Cloud API: disabled (see .env.example)")
+    print("StepFun Vision: configured" if vision_api_key else "StepFun Vision: disabled (set STEPFUN_API_KEY)")
     uvicorn.run(
         create_app(
             str(args.db),
             seed=not args.empty,
             public_base_url=public_base_url,
+            vision_api_key=vision_api_key,
+            vision_model=setting("STEPFUN_VISION_MODEL"),
+            vision_base_url=setting("STEPFUN_BASE_URL"),
             **meta_settings,
         ),
         host="127.0.0.1",

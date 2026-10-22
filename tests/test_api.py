@@ -57,7 +57,7 @@ def edit_payload(draft, **changes):
 def test_seed_comparison_and_overview(client):
     state = overview(client)
     assert state["mode"] == {"transport": "manual", "extraction": "rules", "storage": "sqlite", "identity": "demo"}
-    assert state["metrics"] == {"purchases_today_idr": 0, "pending_approvals": 1, "low_stock_count": 4, "recorded_purchases": 2}
+    assert state["metrics"] == {"purchases_today_idr": 0, "pending_approvals": 1, "low_stock_count": 8, "recorded_purchases": 2}
     draft = pending(client)
     comparison = draft["items"][0]["comparison"]
     assert comparison["status"] == "price_increase"
