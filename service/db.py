@@ -264,6 +264,13 @@ class Store:
             return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier"), extracted["items"], extracted["warnings"]))
         return self._idempotent(key, "intake", payload, action)
 
+    def intake_image(self, key, image_sha256, source_label, supplier, items, warnings):
+        """Create a draft from a vision extractor; the photo digest keys idempotency."""
+        payload = {"image_sha256": image_sha256, "source_label": source_label, "supplier": supplier}
+        def action(conn):
+            return self._present(conn, self._new_draft(conn, source_label, supplier, items, warnings))
+        return self._idempotent(key, "intake_image", payload, action)
+
     def _check_editable(self, draft, version):
         if draft["version"] != version:
             raise DomainError("version_conflict", "The draft changed. Refresh it before continuing.")

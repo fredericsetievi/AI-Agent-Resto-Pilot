@@ -6,6 +6,7 @@ Loopback-only by default. Pass public_demo=True for a hosted demo deployment
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Annotated, Literal
@@ -20,6 +21,15 @@ from starlette.exceptions import HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from .db import DomainError, Store
+from .vision import (
+    DEFAULT_BASE_URL as VISION_DEFAULT_BASE_URL,
+    DEFAULT_MODEL as VISION_DEFAULT_MODEL,
+    StepFunVisionError,
+    decode_image as decode_vision_image,
+    extract_invoice,
+    validate_base_url as validate_vision_base_url,
+    validate_model as validate_vision_model,
+)
 from .whatsapp import (
     LIVE,
     OUTBOUND_PENDING,
@@ -83,6 +93,13 @@ class SimulatedMessage(Model):
     event_id: Sender | None = None
 
 
+class ImageIntake(Model):
+    image_base64: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8_000_000)]
+    media_type: Literal["image/jpeg", "image/png", "image/webp"] = "image/jpeg"
+    supplier: ShortText | None = None
+    source_label: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] = "Foto nota"
+
+
 def error(code, message, status):
     return JSONResponse({"error": {"code": code, "message": message}}, status_code=status)
 
@@ -108,6 +125,10 @@ def create_app(
     meta_phone_number_id=None,
     meta_graph_api_version="v23.0",
     meta_http_client=None,
+    vision_api_key=None,
+    vision_model=None,
+    vision_base_url=None,
+    vision_http_client=None,
 ):
     app = FastAPI(title="RestoPilot local demo", version="0.1.0", description="Manual intake, rules extraction and SQLite. Synthetic demo identity; not production authentication.")
     store = Store(db_path, seed=seed)
@@ -117,6 +138,8 @@ def create_app(
     meta_phone_number_id = validate_meta_id(meta_phone_number_id, "META_PHONE_NUMBER_ID") if meta_phone_number_id else None
     meta_verify_token = validate_verify_token(meta_verify_token) if meta_verify_token else None
     meta_graph_api_version = validate_graph_version(meta_graph_api_version)
+    vision_model = validate_vision_model(vision_model) if vision_model else VISION_DEFAULT_MODEL
+    vision_base_url = validate_vision_base_url(vision_base_url) if vision_base_url else VISION_DEFAULT_BASE_URL
 
     @app.middleware("http")
     async def loopback_boundary(request: Request, call_next):
@@ -198,6 +221,34 @@ def create_app(
     @app.post("/v1/intake", status_code=201)
     def intake(body: Intake, idempotency_key=Depends(key), actor=Depends(identity)):
         return {"data": store.intake(idempotency_key, body.model_dump())}
+
+    @app.post("/v1/intake/image", status_code=201)
+    async def intake_image(body: ImageIntake, idempotency_key=Depends(key), actor=Depends(identity)):
+        if not vision_api_key:
+            raise DomainError("vision_not_configured", "Set STEPFUN_API_KEY before reading invoice photos.", 503)
+        try:
+            photo = decode_vision_image(body.image_base64, body.media_type)
+            extracted = await extract_invoice(
+                photo,
+                media_type=body.media_type,
+                api_key=vision_api_key,
+                model=vision_model,
+                base_url=vision_base_url,
+                client=vision_http_client,
+            )
+        except StepFunVisionError as exc:
+            logger.warning("StepFun vision intake failed: %s", exc)
+            raise DomainError("vision_failed", str(exc), exc.status)
+        # Only the photo digest enters the idempotency record, never the image.
+        return {"data": await run_in_threadpool(
+            store.intake_image,
+            idempotency_key,
+            hashlib.sha256(photo).hexdigest(),
+            body.source_label,
+            body.supplier or extracted["supplier"],
+            extracted["items"],
+            extracted["warnings"],
+        )}
 
     @app.patch("/v1/drafts/{draft_id}")
     def edit(draft_id: str, body: Edit, actor=Depends(owner), idempotency_key=Depends(key)):

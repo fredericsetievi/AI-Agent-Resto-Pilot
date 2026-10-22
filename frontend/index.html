@@ -35,14 +35,16 @@
   </div>
   <dialog id="intake-dialog" aria-labelledby="intake-title">
     <div class="dialog-heading"><div><p class="eyebrow">QUICK LOG</p><h2 id="intake-title">What came into the kitchen?</h2></div><button class="icon-button" data-close="intake-dialog" aria-label="Close purchase form">×</button></div>
-    <p class="muted">Type your purchase in Indonesian. You’ll review it before anything is recorded.</p>
+    <p class="muted">Type your purchase in Indonesian, or attach a photo of the supplier nota. You’ll review it before anything is recorded.</p>
     <form id="intake-form">
       <label for="purchase-text">Purchase message</label>
-      <textarea id="purchase-text" name="text" rows="4" required maxlength="4000" placeholder="beli cabai 3 kg 150rb"></textarea>
+      <textarea id="purchase-text" name="text" rows="4" maxlength="4000" placeholder="beli cabai 3 kg 150rb"></textarea>
       <div class="examples"><span>Try:</span><button type="button" data-example="beli cabai 3 kg 150rb">Cabai · 3 kg</button><button type="button" data-example="beli beras">Missing details</button><button type="button" data-example="beli cabai 500 g Rp25.000">Grams → kg</button></div>
+      <label for="purchase-photo">Or photograph the supplier nota <span class="muted">(JPEG, PNG, or WEBP, max 5 MB)</span></label>
+      <input id="purchase-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp">
       <label for="purchase-supplier">Supplier <span class="muted">(optional)</span></label>
       <input id="purchase-supplier" name="supplier" maxlength="100" placeholder="e.g. Pasar Pagi">
-      <p class="field-help">For several items, use one line per item. Photos and voice notes are planned for the connected demo.</p>
+      <p class="field-help">For several items, use one line per item. A photo is read by StepFun vision; anything it cannot read stays blank for you to fill in. Voice notes are not supported yet.</p>
       <div id="intake-error" class="notice error" role="alert" hidden></div>
       <div class="dialog-footer"><span class="muted">Nothing posts without your approval.</span><button class="button primary" type="submit">Prepare draft <span aria-hidden="true">→</span></button></div>
     </form>

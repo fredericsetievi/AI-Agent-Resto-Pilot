@@ -154,6 +154,18 @@ def _match_name(name: str) -> tuple[str, str | None]:
     return candidate, None
 
 
+def match_catalog_name(name: str) -> tuple[str, str | None]:
+    """Public alias lookup so non-text extractors reuse the same catalog mapping."""
+    return _match_name(name)
+
+
+def canonical_unit_name(unit: str | None) -> str | None:
+    """Public unit alias lookup so non-text extractors reuse the same unit vocabulary."""
+    if not isinstance(unit, str) or not unit.strip():
+        return None
+    return _UNIT_ALIASES.get(unit.strip().casefold(), unit.strip().casefold())
+
+
 def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None, list[str]]:
     warnings: list[str] = []
     source = clause.strip()
