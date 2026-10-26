@@ -24,9 +24,10 @@ MESSAGES_URL = f"https://graph.facebook.com/{GRAPH_VERSION}/{PHONE_NUMBER_ID}/me
 
 
 class FakeResponse:
-    def __init__(self, status_code=200, body=None):
+    def __init__(self, status_code=200, body=None, content=b""):
         self.status_code = status_code
         self._body = body if body is not None else {"messages": [{"id": "wamid.outbound"}]}
+        self.content = content
 
     def json(self):
         return self._body
@@ -38,8 +39,26 @@ class FakeMetaClient:
         self.responses = []
 
     async def post(self, url, *, headers, json):
-        self.calls.append({"url": url, "headers": headers, "json": json})
+        self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json})
         return self.responses.pop(0) if self.responses else FakeResponse()
+
+    async def get(self, url, *, headers):
+        self.calls.append({"method": "GET", "url": url, "headers": headers})
+        return self.responses.pop(0)
+
+
+class FakeVisionClient:
+    def __init__(self):
+        self.calls = []
+        self.responses = []
+
+    async def post(self, url, *, headers, json):
+        self.calls.append({"url": url, "headers": headers, "json": json})
+        return self.responses.pop(0)
+
+
+def vision_completion(payload):
+    return FakeResponse(body={"choices": [{"message": {"content": json.dumps(payload)}}]})
 
 
 def payload(text="beli cabai 3 kg 150rb", *, event_id=None, sender=SENDER, phone_number_id=PHONE_NUMBER_ID, waba_id=WABA_ID, message_type="text"):
@@ -188,6 +207,71 @@ def test_media_is_not_fetched_and_gets_safe_text_reply(client, provider, app):
     with app.state.store.transaction() as conn:
         bodies = " ".join(row[0] for row in conn.execute("SELECT body FROM whatsapp_messages"))
     assert "private-secret" not in bodies
+
+
+def photo_app(tmp_path, provider, vision):
+    return create_app(
+        tmp_path / "meta-photo.sqlite3",
+        public_base_url=ORIGIN,
+        meta_access_token=ACCESS_TOKEN,
+        meta_app_secret=APP_SECRET,
+        meta_verify_token=VERIFY_TOKEN,
+        meta_waba_id=WABA_ID,
+        meta_phone_number_id=PHONE_NUMBER_ID,
+        meta_graph_api_version=GRAPH_VERSION,
+        meta_http_client=provider,
+        vision_api_key="synthetic-stepfun-key",
+        vision_http_client=vision,
+    )
+
+
+def test_inbound_photo_is_read_by_vision_and_becomes_a_draft(tmp_path, provider):
+    vision = FakeVisionClient()
+    vision.responses.append(vision_completion({
+        "supplier": "Petik Segar",
+        "items": [{"raw_name": "Cabai merah", "quantity": "3", "unit": "kg", "line_total_idr": 150000, "confidence": "high"}],
+        "unreadable": [],
+    }))
+    provider.responses.extend([
+        FakeResponse(body={"url": "https://lookaside.example/media/one", "mime_type": "image/jpeg"}),
+        FakeResponse(content=b"\xff\xd8\xff\xe0" + b"\x00" * 64),
+    ])
+    app = photo_app(tmp_path, provider, vision)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        body = payload(event_id="wamid.photo", message_type="image")
+        body["entry"][0]["changes"][0]["value"]["messages"][0]["image"]["link"] = "http://127.0.0.1/private-secret"
+        assert webhook(client, body).status_code == 200
+
+        replies = [call for call in provider.calls if call["method"] == "POST"]
+        assert "Total Rp150.000" in replies[0]["json"]["text"]["body"]
+        assert provider.calls[0]["url"].startswith(f"https://graph.facebook.com/{GRAPH_VERSION}/provider-media-id")
+        assert provider.calls[1]["url"] == "https://lookaside.example/media/one"
+        assert vision.calls[0]["json"]["model"] == "step-1o-turbo-vision"
+        with app.state.store.transaction() as conn:
+            bodies = " ".join(row[0] for row in conn.execute("SELECT body FROM whatsapp_messages"))
+            draft = json.loads(conn.execute("SELECT body FROM drafts ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+        assert "[Foto nota] Foto nota WhatsApp" in bodies
+        assert "private-secret" not in bodies
+        assert "Foto/audio belum diproses" not in bodies
+        assert draft["status"] == "pending_approval"
+        assert draft["supplier"] == "Petik Segar"
+        assert draft["items"][0]["ingredient_id"] == "cabai"
+
+
+def test_inbound_photo_with_a_failed_read_falls_back_to_the_safe_reply(tmp_path, provider):
+    vision = FakeVisionClient()
+    vision.responses.append(FakeResponse(status_code=500))
+    provider.responses.extend([
+        FakeResponse(body={"url": "https://lookaside.example/media/two", "mime_type": "image/jpeg"}),
+        FakeResponse(content=b"\xff\xd8\xff\xe0" + b"\x00" * 64),
+    ])
+    app = photo_app(tmp_path, provider, vision)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        before = app.state.store.overview()["drafts"]
+        assert webhook(client, payload(event_id="wamid.photo-fail", message_type="image")).status_code == 200
+        replies = [call for call in provider.calls if call["method"] == "POST"]
+        assert "Foto/audio belum diproses" in replies[0]["json"]["text"]["body"]
+        assert app.state.store.overview()["drafts"] == before
 
 
 def test_send_failure_is_safe_and_retryable(client, provider):

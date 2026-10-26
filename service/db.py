@@ -389,6 +389,10 @@ class Store:
     def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None):
         """Persist inbound, decision/ledger, outbound and dedupe in one commit."""
         channel = channel or transport
+        extracted_photo = payload.get("extracted")
+        source_label = payload.get("source_label") or "Foto nota WhatsApp"
+        # A vision read is not byte-identical across retries, so it stays out of
+        # the dedupe fingerprint; the Meta event itself is the replay guard.
         payload = {"sender": payload["sender"], "text": payload["text"], "event_id": payload.get("event_id"), "num_media": payload.get("num_media", 0)}
         event_id = payload["event_id"] or "sim:" + key
         fingerprint = hashlib.sha256(encode({"sender": payload["sender"], "text": payload["text"], "num_media": payload["num_media"]}).encode()).hexdigest()
@@ -406,7 +410,16 @@ class Store:
                 thread.update(active_draft_id=None, active_version=None)
             command = payload["text"].strip().casefold()
             result = {}
-            if payload["num_media"]:
+            if extracted_photo:
+                if draft:
+                    reply = "Masih ada draf aktif; foto ini tidak menggantikannya. Tinjau di dashboard, balas YA jika barang diterima, atau BATAL.\n" + draft_reply(draft)
+                    result["action"] = "active_draft_exists"
+                else:
+                    draft = self._new_draft(conn, source_label, extracted_photo.get("supplier"), extracted_photo.get("items") or [], extracted_photo.get("warnings") or [])
+                    thread.update(active_draft_id=draft["id"], active_version=draft["version"])
+                    reply = draft_reply(draft)
+                    result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
+            elif payload["num_media"]:
                 reply = "Foto/audio belum diproses. Kirim rincian pembelian sebagai teks atau gunakan dashboard. Tidak ada pembelian yang dicatat."
                 result["action"] = "media_unsupported"
             elif command in ("ya", "batal"):
@@ -442,7 +455,12 @@ class Store:
                 result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
             conn.execute("UPDATE whatsapp_threads SET active_draft_id=?, active_version=? WHERE id=?", (thread["active_draft_id"], thread["active_version"], thread["id"]))
             draft_id = draft["id"] if draft else None
-            inbound_body = payload["text"] if not payload["num_media"] else f"[Media omitted: {payload['num_media']} attachment(s)] " + payload["text"]
+            if extracted_photo:
+                inbound_body = f"[Foto nota] {source_label}"
+            elif payload["num_media"]:
+                inbound_body = f"[Media omitted: {payload['num_media']} attachment(s)] " + payload["text"]
+            else:
+                inbound_body = payload["text"]
             reply_status = outbound_status or ("simulated" if transport == SIMULATOR else "prepared")
             for direction, body, status in (("inbound", inbound_body, "received"), ("outbound", reply, reply_status)):
                 conn.execute("INSERT INTO whatsapp_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (uuid.uuid4().hex, thread["id"], direction, body, now(), transport, status, draft_id))

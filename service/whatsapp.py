@@ -25,6 +25,10 @@ _META_ID = re.compile(r"[1-9]\d{5,30}")
 _MESSAGE_ID = re.compile(r"[\x21-\x7e]{1,500}")
 _PHONE = re.compile(r"[1-9]\d{6,14}")
 _GRAPH_VERSION = re.compile(r"v[1-9]\d{0,2}\.0")
+# Media IDs are opaque strings; accept the documented alphabet and bound length.
+_MEDIA_ID = re.compile(r"[A-Za-z0-9_-]{5,200}")
+IMAGE_MEDIA_TYPES = ("image/jpeg", "image/png", "image/webp")
+MAX_MEDIA_BYTES = 5 * 1024 * 1024
 
 
 class MetaWhatsAppError(Exception):
@@ -158,9 +162,63 @@ def _normalize_message(message):
         if not isinstance(text, str) or not text.strip() or len(text) > 10_000:
             raise MetaWhatsAppError("Invalid Meta WhatsApp text message.", 400)
         text, num_media = text.strip(), 0
-    else:
+        media_id = None
+    elif message.get("type") == "image":
+        image = message.get("image")
+        media_id = image.get("id") if isinstance(image, dict) else None
+        if not isinstance(media_id, str) or not _MEDIA_ID.fullmatch(media_id):
+            raise MetaWhatsAppError("Invalid Meta WhatsApp image message.", 400)
         text, num_media = "", 1
-    return {"sender": sender, "text": text, "event_id": message_id, "num_media": num_media}
+    else:
+        text, num_media, media_id = "", 1, None
+    return {"sender": sender, "text": text, "event_id": message_id, "num_media": num_media, "media_id": media_id}
+
+
+async def download_image(media_id, access_token, graph_version, *, client=None):
+    """Fetch one inbound photo: resolve the media URL, then download the bytes.
+
+    Meta serves media in two hops and requires the access token on both. Only
+    the documented image types and a 5 MiB cap are accepted.
+    """
+    if not access_token or not access_token.strip():
+        raise MetaWhatsAppError("Meta WhatsApp Cloud API is not configured.", 503)
+    if not isinstance(media_id, str) or not _MEDIA_ID.fullmatch(media_id):
+        raise MetaWhatsAppError("Invalid Meta WhatsApp media ID.", 400)
+    graph_version = validate_graph_version(graph_version)
+    headers = {"Authorization": f"Bearer {access_token}"}
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=30.0, follow_redirects=False)
+    try:
+        try:
+            lookup = await client.get(f"https://graph.facebook.com/{graph_version}/{media_id}", headers=headers)
+        except httpx.HTTPError:
+            raise MetaWhatsAppError("Meta WhatsApp media could not be reached.")
+        if lookup.status_code != 200:
+            raise MetaWhatsAppError(f"Meta WhatsApp rejected the media lookup (HTTP {lookup.status_code}).")
+        try:
+            media = lookup.json()
+        except ValueError:
+            raise MetaWhatsAppError("Meta WhatsApp returned an invalid media response.")
+        url = media.get("url") if isinstance(media, dict) else None
+        mime = media.get("mime_type") if isinstance(media, dict) else None
+        parsed = urlsplit(url) if isinstance(url, str) else None
+        if not parsed or parsed.scheme != "https" or not parsed.hostname:
+            raise MetaWhatsAppError("Meta WhatsApp returned an unusable media URL.")
+        if mime not in IMAGE_MEDIA_TYPES:
+            raise MetaWhatsAppError("Meta WhatsApp sent an unsupported image type.")
+        try:
+            download = await client.get(url, headers=headers)
+        except httpx.HTTPError:
+            raise MetaWhatsAppError("Meta WhatsApp media download failed.")
+        if download.status_code != 200:
+            raise MetaWhatsAppError(f"Meta WhatsApp media download failed (HTTP {download.status_code}).")
+        raw = download.content
+        if not raw or len(raw) > MAX_MEDIA_BYTES:
+            raise MetaWhatsAppError("Meta WhatsApp image is empty or exceeds 5 MiB.")
+        return raw, mime
+    finally:
+        if owns_client:
+            await client.aclose()
 
 
 async def send_text(access_token, phone_number_id, graph_version, recipient, body, *, client=None):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal, InvalidOperation
+from difflib import SequenceMatcher
 from typing import Any
 
 
@@ -42,6 +43,9 @@ _NAME_NOISE = {"kupas", "iris", "rajang", "halus", "segar", "mentah", "buah", "d
 # A prepared product is not the raw ingredient; leaving it unmatched asks the owner.
 _NAME_BLOCKERS = {"kering", "bubuk", "instan", "kaleng", "botol", "sachet", "saset"}
 _NAME_TOKEN = re.compile(r"[a-z]+")
+# Measured on real notas: "kombrang"->kecombrang is 0.89 and "cabay"->cabai is
+# 0.80, while unrelated items score below 0.60. 0.78 takes the safe band.
+_FUZZY_CUTOFF = 0.78
 
 _UNIT_ALIASES = {
     "kg": "kg",
@@ -180,7 +184,23 @@ def _match_name(name: str) -> tuple[str, str | None]:
         alias_tokens = [token for token in _NAME_TOKEN.findall(alias) if token not in _NAME_NOISE]
         if alias_tokens and tokens[: len(alias_tokens)] == alias_tokens and (best is None or len(alias_tokens) > best[0]):
             best = (len(alias_tokens), canonical_id)
-    return candidate, best[1] if best else None
+    if best:
+        return candidate, best[1]
+
+    # Spelling slips ("kombrang", "bwang merah") are close enough to recover,
+    # but only when the same word opens the name; that keeps a different item
+    # from being pulled in on a coincidental letter overlap.
+    scored: list[tuple[float, str]] = []
+    head = tokens[0]
+    for alias, canonical_id in _ALIASES:
+        alias_tokens = [token for token in _NAME_TOKEN.findall(alias) if token not in _NAME_NOISE]
+        if not alias_tokens or alias_tokens[0][0] != head[0]:
+            continue
+        scored.append((SequenceMatcher(a=" ".join(tokens[: len(alias_tokens)]), b=" ".join(alias_tokens)).ratio(), canonical_id))
+    scored.sort(reverse=True)
+    if scored and scored[0][0] >= _FUZZY_CUTOFF:
+        return candidate, scored[0][1]
+    return candidate, None
 
 
 def match_catalog_name(name: str) -> tuple[str, str | None]:

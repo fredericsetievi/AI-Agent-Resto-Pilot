@@ -12,6 +12,10 @@ def test_market_names_map_by_prefix_but_prepared_products_stay_unknown():
     # A prepared product is not the raw ingredient.
     assert match_catalog_name("cabe kering 1kg")[1] is None
     assert match_catalog_name("ultima @ 10kg")[1] is None
+    # Letter slips with the same opening word are recovered.
+    assert match_catalog_name("kombrang")[1] == "kecombrang"
+    assert match_catalog_name("bwang merah")[1] == "bawang"
+    assert match_catalog_name("cabay")[1] == "cabai"
 
 
 def test_requested_examples_and_price_does_not_become_quantity():

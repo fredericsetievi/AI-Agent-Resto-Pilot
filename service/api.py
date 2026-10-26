@@ -37,6 +37,7 @@ from .whatsapp import (
     OUTBOUND_SENT,
     WEBHOOK_PATH,
     MetaWhatsAppError,
+    download_image,
     matches_public_host,
     matches_verify_token,
     meta_event_key,
@@ -305,6 +306,28 @@ def create_app(
         for message in messages:
             event_id = message["event_id"]
             payload = {key: message[key] for key in ("sender", "text", "event_id", "num_media")}
+            if message.get("media_id") and vision_api_key:
+                # A photo is read before the draft is created so the owner gets
+                # the same review-and-confirm flow as typed text.
+                try:
+                    photo, media_type = await download_image(
+                        message["media_id"],
+                        meta_access_token,
+                        meta_graph_api_version,
+                        client=meta_http_client,
+                    )
+                    payload["extracted"] = await extract_invoice(
+                        photo,
+                        media_type=media_type,
+                        api_key=vision_api_key,
+                        model=vision_model,
+                        base_url=vision_base_url,
+                        client=vision_http_client,
+                    )
+                    payload["source_label"] = "Foto nota WhatsApp"
+                except (MetaWhatsAppError, StepFunVisionError) as exc:
+                    # A failed read falls back to the safe media reply; no draft.
+                    logger.warning("WhatsApp photo intake failed: %s", exc)
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),

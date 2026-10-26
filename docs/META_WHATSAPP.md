@@ -35,12 +35,22 @@ https://your-public-https-host.example/webhooks/meta/whatsapp
 
 In Meta's Webhooks configuration, select the WhatsApp Business Account object and subscribe to the `messages` field. Use the same App Secret and verify token as the configured app values. Verification should return Meta's numeric challenge as plain text. Inbound POSTs must include a valid `X-Hub-Signature-256` signature; the app also checks WABA and Phone Number IDs.
 
+## Inbound invoice photos
+
+When `STEPFUN_API_KEY` is set, an inbound WhatsApp `image` message is read in the same webhook request:
+
+1. The app resolves the Meta media ID, downloads the file and enforces the documented JPEG/PNG/WEBP types and the 5 MiB cap.
+2. StepFun vision returns the same item shape as the text parser, so the photo becomes an ordinary draft.
+3. The owner still reviews and confirms with `YA`; a photo never records stock or ledger entries by itself. Unreadable fields stay blank and force `needs_clarification`.
+
+If the download or vision read fails, the sender gets the existing safe text reply and no draft is created. Without `STEPFUN_API_KEY`, photos also get that safe reply. PDF files are not accepted by either the Cloud API image type or the vision endpoint. Because the read happens before the webhook responds, a slow vision call may make Meta retry; the persisted event dedupe prevents a duplicate draft or a second reply.
+
 ## Run and test
 
 1. Start the app with a fresh rehearsal database: `.venv/bin/python -m service --db data/meta-rehearsal.sqlite3`.
 2. Confirm the startup line reports `Meta WhatsApp Cloud API: configured`.
 3. In Meta, complete callback verification and enable the `messages` subscription.
-4. Send a text message from a WhatsApp account allowed by the Meta test setup. Confirm the inbound message creates a persisted draft and the app sends its response through the Cloud API.
+4. Send a text message from a WhatsApp account allowed by the Meta test setup, or send a photo of a supplier nota. Confirm the inbound message creates a persisted draft and the app sends its response through the Cloud API.
 5. Confirm the draft through the supported WhatsApp flow only when its details are correct and goods were received, then verify the resulting purchase and stock movement in the dashboard. Otherwise use the dashboard correction or rejection path.
 6. Re-send or replay the same provider event if possible and confirm it does not create duplicate purchase records.
 
