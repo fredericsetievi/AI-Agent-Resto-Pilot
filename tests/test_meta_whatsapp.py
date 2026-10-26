@@ -311,7 +311,7 @@ def test_inbound_photo_is_read_by_vision_and_becomes_a_draft(tmp_path, provider)
         assert webhook(client, body).status_code == 200
 
         replies = [call for call in provider.calls if call["method"] == "POST"]
-        assert "Total Rp150.000" in replies[0]["json"]["text"]["body"]
+        assert "Total: Rp150.000" in replies[0]["json"]["text"]["body"]
         assert provider.calls[0]["url"].startswith(f"https://graph.facebook.com/{GRAPH_VERSION}/provider-media-id")
         assert provider.calls[1]["url"] == "https://lookaside.example/media/one"
         assert vision.calls[0]["json"]["model"] == "step-1o-turbo-vision"
@@ -439,7 +439,7 @@ def test_inbound_voice_note_is_transcribed_and_becomes_a_draft(tmp_path, provide
         assert asr["data"] == {"model": "step-asr-1.1", "response_format": "json"}
         assert asr["files"]["file"] == ("voice.ogg", OGG, "audio/ogg")
         replies = [call for call in provider.calls if call["method"] == "POST" and call["url"] == MESSAGES_URL]
-        assert "Total Rp150.000" in replies[0]["json"]["text"]["body"]
+        assert "Total: Rp150.000" in replies[0]["json"]["text"]["body"]
 
         with app.state.store.transaction() as conn:
             bodies = " ".join(row[0] for row in conn.execute("SELECT body FROM whatsapp_messages"))

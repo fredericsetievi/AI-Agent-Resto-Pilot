@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -17,7 +18,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .extraction import extract_purchase, normalize_item
-from .whatsapp import SIMULATOR, draft_reply, weekly_summary_reply
+from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, draft_reply, parse_payment_followup, weekly_summary_reply
 
 
 CATALOG = [
@@ -32,9 +33,13 @@ CATALOG = [
     {"id": "daun_pisang", "name": "Daun pisang", "unit": "kg", "reorder_threshold": "2"},
 ]
 CATALOG_BY_ID = {item["id"]: item for item in CATALOG}
-RESTAURANT = {"id": "demo-resto", "name": "Warung Nusantara"}
+RESTAURANT = {"id": "demo-resto", "name": "Warung Bu Sari"}
 RESTAURANT_TIMEZONE = ZoneInfo("Asia/Jakarta")
 SUMMARY_COMMANDS = ("ringkas", "ringkasan", "summary")
+# Casual confirmations owners actually type; anything ambiguous falls through
+# to normal message handling instead of guessing.
+APPROVE_COMMANDS = frozenset({"ya", "y", "ya benar", "ok", "oke", "betul", "setuju", "sip", "approve"})
+REJECT_COMMANDS = frozenset({"batal", "cancel", "tidak", "jangan"})
 SUMMARY_WINDOW_DAYS = 7
 MAX_TRANSCRIPT_CHARS = 10_000
 
@@ -71,6 +76,10 @@ class DomainError(Exception):
 class Store:
     def __init__(self, path, seed=True):
         self.path = str(path)
+        # The catalog is static plus ingredients auto-created from chat drafts;
+        # copies keep the module-level constants untouched across instances.
+        self._catalog = [dict(item) for item in CATALOG]
+        self._catalog_by_id = dict(CATALOG_BY_ID)
         if self.path == ":memory:":
             # A shared-memory URI keeps one database across per-request connections.
             self.path = f"file:restopilot-{uuid.uuid4().hex}?mode=memory&cache=shared"
@@ -79,6 +88,7 @@ class Store:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
             self._keeper = None
         self.initialize(seed)
+        self._load_custom_ingredients()
 
     def connect(self):
         conn = sqlite3.connect(self.path, timeout=15, isolation_level=None, uri=self.path.startswith("file:"))
@@ -110,17 +120,31 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS movements (id TEXT PRIMARY KEY, purchase_id TEXT REFERENCES purchases(id), ingredient_id TEXT NOT NULL, quantity TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(purchase_id, ingredient_id))",
                 "CREATE TABLE IF NOT EXISTS activity (id TEXT PRIMARY KEY, event TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS idempotency (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS whatsapp_threads (id TEXT PRIMARY KEY, channel TEXT NOT NULL, sender TEXT NOT NULL, transport TEXT NOT NULL, active_draft_id TEXT REFERENCES drafts(id), active_version INTEGER, UNIQUE(channel, sender))",
+                "CREATE TABLE IF NOT EXISTS whatsapp_threads (id TEXT PRIMARY KEY, channel TEXT NOT NULL, sender TEXT NOT NULL, transport TEXT NOT NULL, active_draft_id TEXT REFERENCES drafts(id), active_version INTEGER, pending_followup TEXT, UNIQUE(channel, sender))",
                 "CREATE TABLE IF NOT EXISTS whatsapp_messages (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES whatsapp_threads(id), direction TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, transport TEXT NOT NULL, status TEXT NOT NULL, draft_id TEXT REFERENCES drafts(id))",
                 "CREATE TABLE IF NOT EXISTS whatsapp_events (channel TEXT NOT NULL, event_id TEXT NOT NULL, thread_id TEXT NOT NULL REFERENCES whatsapp_threads(id), fingerprint TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY(channel, event_id))",
+                "CREATE TABLE IF NOT EXISTS custom_ingredients (id TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL, reorder_threshold TEXT NOT NULL, created_at TEXT NOT NULL)",
             ):
                 conn.execute(statement)
+            # Databases created before the follow-up state existed keep their
+            # whatsapp_threads table; add the column in place.
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(whatsapp_threads)")}
+            if "pending_followup" not in columns:
+                conn.execute("ALTER TABLE whatsapp_threads ADD COLUMN pending_followup TEXT")
             if not conn.execute("SELECT 1 FROM metadata WHERE key='initialized'").fetchone():
                 for ingredient in CATALOG:
                     conn.execute("INSERT INTO inventory VALUES (?, '0')", (ingredient["id"],))
                 if seed:
                     self._seed(conn)
                 conn.execute("INSERT INTO metadata VALUES ('initialized', ?)", (now(),))
+
+    def _load_custom_ingredients(self):
+        """Reload chat-created ingredients so the catalog survives a restart."""
+        with self.transaction() as conn:
+            for row in conn.execute("SELECT id, name, unit, reorder_threshold FROM custom_ingredients ORDER BY rowid"):
+                entry = {"id": row["id"], "name": row["name"], "unit": row["unit"], "reorder_threshold": row["reorder_threshold"]}
+                self._catalog.append(entry)
+                self._catalog_by_id[entry["id"]] = entry
 
     def _seed(self, conn):
         for ingredient, qty, total, age in [("cabai", "3", 129000, 3), ("telur", "10", 430000, 2)]:
@@ -149,9 +173,12 @@ class Store:
             result = dict(normalize_item(dict(item)))
             local_warnings = list(result.get("warnings", []))
             # The ledger enforces its own invariants even if an extractor changes.
-            ingredient = CATALOG_BY_ID.get(result.get("ingredient_id"))
+            # An unmapped item that kept its raw name self-heals: the ingredient
+            # is auto-created from that name when the draft is approved.
+            ingredient = self._catalog_by_id.get(result.get("ingredient_id"))
             if not ingredient:
-                local_warnings.append("Select a known ingredient.")
+                if not str(result.get("raw_name") or "").strip():
+                    local_warnings.append("Select a known ingredient.")
             try:
                 quantity = Decimal(str(result.get("canonical_quantity")))
                 if not quantity.is_finite() or quantity <= 0 or quantity > Decimal("1000000000"):
@@ -328,6 +355,41 @@ class Store:
         self.maybe_cloud_mirror(draft)
         return draft
 
+    @staticmethod
+    def _slugify(raw_name):
+        slug = re.sub(r"[^a-z0-9]+", "_", str(raw_name).casefold()).strip("_")
+        return re.sub(r"_+", "_", slug)[:100]
+
+    def _resolve_new_ingredients(self, conn, draft):
+        """Link unmapped draft items to catalog entries, creating missing ones.
+
+        Runs inside the approval transaction before posting: every recorded
+        item must own a real ingredient for stock and history to line up.
+        Returns the display names of ingredients created by this approval.
+        """
+        created = []
+        for item in draft["items"]:
+            if item.get("ingredient_id") or not str(item.get("raw_name") or "").strip():
+                continue
+            raw_name = item["raw_name"]
+            slug = self._slugify(raw_name)
+            if not slug:
+                raise DomainError("clarification_required", "The ingredient name is not usable; correct it on the dashboard.", 422)
+            if slug not in self._catalog_by_id:
+                name = str(raw_name).strip().capitalize()
+                unit = item.get("canonical_unit") or "kg"
+                conn.execute("INSERT INTO custom_ingredients VALUES (?, ?, ?, ?, ?)", (slug, name, unit, "0", now()))
+                conn.execute("INSERT INTO inventory VALUES (?, '0')", (slug,))
+                entry = {"id": slug, "name": name, "unit": unit, "reorder_threshold": "0"}
+                self._catalog.append(entry)
+                self._catalog_by_id[slug] = entry
+                self._audit(conn, "ingredient_created", f"Bahan baru '{name}' ditambahkan ke katalog otomatis.")
+                created.append(name)
+            item["ingredient_id"] = slug
+        if created:
+            draft["new_ingredients"] = created
+        return draft
+
     def _decide(self, conn, draft, payload):
         """Shared transaction-internal decision path for dashboard and WhatsApp."""
         self._check_editable(draft, payload["expected_version"])
@@ -341,6 +403,7 @@ class Store:
                 raise DomainError("clarification_required", "Review and correct all draft warnings before approval.", 422)
             if not payload["received"]:
                 raise DomainError("receipt_required", "Confirm that the goods were received before recording stock.", 422)
+            draft = self._resolve_new_ingredients(conn, draft)
             draft = self._post(conn, draft)
         return self._present(conn, draft)
 
@@ -349,9 +412,10 @@ class Store:
         if row:
             return dict(row)
         thread = {"id": hashlib.sha256((channel + "\0" + sender).encode()).hexdigest()[:32], "channel": channel,
-                  "sender": sender, "transport": transport, "active_draft_id": None, "active_version": None}
+                  "sender": sender, "transport": transport, "active_draft_id": None, "active_version": None,
+                  "pending_followup": None}
         if create:
-            conn.execute("INSERT INTO whatsapp_threads VALUES (?, ?, ?, ?, NULL, NULL)", (thread["id"], channel, sender, transport))
+            conn.execute("INSERT INTO whatsapp_threads (id, channel, sender, transport, active_draft_id, active_version, pending_followup) VALUES (?, ?, ?, ?, NULL, NULL, NULL)", (thread["id"], channel, sender, transport))
         return thread
 
     def _whatsapp_snapshot(self, conn, thread, draft=None, result=None):
@@ -414,6 +478,10 @@ class Store:
             if draft and draft["status"] not in ("pending_approval", "needs_clarification"):
                 draft = None
                 thread.update(active_draft_id=None, active_version=None)
+            # The payment/supplier follow-up is a one-shot offer: the very next
+            # message either answers it or the opportunity lapses.
+            pending_purchase = thread.get("pending_followup")
+            thread["pending_followup"] = None
             command = payload["text"].strip().casefold()
             result = {}
             if extracted_photo:
@@ -440,11 +508,26 @@ class Store:
             elif payload["num_media"]:
                 reply = "Foto/audio belum diproses. Kirim rincian pembelian sebagai teks atau gunakan dashboard. Tidak ada pembelian yang dicatat."
                 result["action"] = "media_unsupported"
-            elif command in ("ya", "batal"):
+            elif pending_purchase and not draft and (followup := parse_payment_followup(payload["text"])):
+                self._update_purchase_payment(conn, pending_purchase, followup["payment_status"], followup["supplier"])
+                if followup["skip"]:
+                    reply = FOLLOWUP_ACK
+                    result["action"] = "followup_skipped"
+                else:
+                    details = []
+                    if followup["payment_status"] == "paid":
+                        details.append("Pembayaran dicatat: lunas.")
+                    elif followup["payment_status"] == "unpaid":
+                        details.append("Pembayaran dicatat: utang (belum dibayar).")
+                    if followup["supplier"]:
+                        details.append(f"Penjual: {followup['supplier']}.")
+                    reply = "Oke, catatan diperbarui. " + " ".join(details) if details else FOLLOWUP_ACK
+                    result["action"] = "purchase_updated"
+            elif command in APPROVE_COMMANDS or command in REJECT_COMMANDS:
                 if not draft:
                     reply = "Tidak ada draf aktif untuk nomor ini. Kirim rincian pembelian terlebih dahulu; YA tidak mencatat pembelian lain."
                     result["action"] = "no_active_draft"
-                elif command == "batal":
+                elif command in REJECT_COMMANDS:
                     draft = self._decide(conn, draft, {"expected_version": draft["version"], "decision": "reject", "received": False})
                     thread.update(active_draft_id=None, active_version=None)
                     reply = f"Draf {draft['id'][:8]} dibatalkan. Pembelian dan stok tidak berubah."
@@ -460,7 +543,12 @@ class Store:
                 else:
                     draft = self._decide(conn, draft, {"expected_version": thread["active_version"], "decision": "approve", "received": True})
                     thread.update(active_draft_id=None, active_version=None)
-                    reply = f"Pembelian {draft['id'][:8]} tercatat. Barang diterima ditambahkan ke estimasi stok. Status pembayaran tidak diketahui."
+                    confirmation = f"Pembelian {draft['id'][:8]} tercatat. Stok diperbarui."
+                    names = draft.get("new_ingredients") or []
+                    if names:
+                        confirmation += " " + ", ".join(f"'{name}'" for name in names) + " ditambahkan sebagai bahan baru."
+                    thread["pending_followup"] = draft["purchase_id"]
+                    reply = confirmation + "\n" + PAYMENT_FOLLOWUP_PROMPT
                     result.update(action="approved", purchase_id=draft["purchase_id"])
             elif command in SUMMARY_COMMANDS:
                 # A read-only report: never creates or disturbs an active draft.
@@ -473,11 +561,19 @@ class Store:
                 result["action"] = "active_draft_exists"
             else:
                 extracted = extract_purchase(payload["text"])
-                draft = self._new_draft(conn, payload["text"], None, extracted["items"], extracted["warnings"])
-                thread.update(active_draft_id=draft["id"], active_version=draft["version"])
-                reply = draft_reply(draft)
-                result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
-            conn.execute("UPDATE whatsapp_threads SET active_draft_id=?, active_version=? WHERE id=?", (thread["active_draft_id"], thread["active_version"], thread["id"]))
+                # Plain text with no purchase signal (a greeting, chat noise) is
+                # an intent miss: every parsed line is a bare word with no
+                # catalog match, quantity, or price. Answer with help instead of
+                # filing an empty draft on the attention list.
+                if all(item.get("ingredient_id") is None and item.get("quantity") is None and item.get("line_total_idr") is None for item in extracted["items"]):
+                    reply = HELP_REPLY
+                    result["action"] = "help_reply"
+                else:
+                    draft = self._new_draft(conn, payload["text"], None, extracted["items"], extracted["warnings"])
+                    thread.update(active_draft_id=draft["id"], active_version=draft["version"])
+                    reply = draft_reply(draft)
+                    result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
+            conn.execute("UPDATE whatsapp_threads SET active_draft_id=?, active_version=?, pending_followup=? WHERE id=?", (thread["active_draft_id"], thread["active_version"], thread.get("pending_followup"), thread["id"]))
             draft_id = draft["id"] if draft else None
             if extracted_photo:
                 inbound_body = f"[Foto nota] {source_label}"
@@ -511,7 +607,7 @@ class Store:
             if isinstance(total, int) and not isinstance(total, bool) and 0 < total <= 1_000_000_000_000:
                 summary["total_spend_idr"] += total
             for item in purchase.get("items") or []:
-                ingredient = CATALOG_BY_ID.get(item.get("ingredient_id"))
+                ingredient = self._catalog_by_id.get(item.get("ingredient_id"))
                 if ingredient and item.get("canonical_quantity") and item.get("canonical_unit"):
                     key = (item["ingredient_id"], item["canonical_unit"])
                     quantities[key] = quantities.get(key, Decimal(0)) + Decimal(item["canonical_quantity"])
@@ -526,7 +622,7 @@ class Store:
                         summary["biggest_price_spike"] = {"name": ingredient["name"] if ingredient else str(item.get("raw_name") or ""), "change_percent": format(change, "f")}
         if quantities:
             (ingredient_id, unit), total = max(quantities.items(), key=lambda entry: (entry[1], entry[0]))
-            summary["top_item"] = {"name": CATALOG_BY_ID[ingredient_id]["name"], "quantity": decimal_string(total), "unit": unit}
+            summary["top_item"] = {"name": self._catalog_by_id[ingredient_id]["name"], "quantity": decimal_string(total), "unit": unit}
         return summary
 
     def weekly_summary(self, days=SUMMARY_WINDOW_DAYS):
@@ -561,10 +657,29 @@ class Store:
                     if ingredient_id and price and ingredient_id not in last_prices:
                         last_prices[ingredient_id] = price
             rows = []
-            for ingredient in CATALOG:
+            for ingredient in self._catalog:
                 quantity = conn.execute("SELECT quantity FROM inventory WHERE ingredient_id=?", (ingredient["id"],)).fetchone()[0]
                 rows.append({"item": ingredient["name"], "unit": ingredient["unit"], "current_stock": quantity, "last_unit_price": last_prices.get(ingredient["id"])})
             return rows
+
+    def _update_purchase_payment(self, conn, purchase_id, payment_status, supplier):
+        """Persist payment/supplier details on one recorded purchase."""
+        row = conn.execute("SELECT body FROM purchases WHERE id=?", (purchase_id,)).fetchone()
+        if not row:
+            raise DomainError("not_found", "Purchase not found.", 404)
+        purchase = json.loads(row["body"])
+        if payment_status:
+            purchase["payment_status"] = payment_status
+        if supplier:
+            purchase["supplier"] = supplier
+        conn.execute("UPDATE purchases SET body=?, supplier=? WHERE id=?", (encode(purchase), purchase.get("supplier"), purchase_id))
+        self._audit(conn, "purchase_updated", f"Purchase {purchase_id[:8]} payment details completed via WhatsApp follow-up.")
+        return purchase
+
+    def update_purchase_payment(self, purchase_id, payment_status=None, supplier=None):
+        """Public update path so dashboard or tests can complete a recorded purchase."""
+        with self.transaction() as conn:
+            return self._update_purchase_payment(conn, purchase_id, payment_status, supplier)
 
     def maybe_cloud_mirror(self, draft) -> dict | None:
         """Mirror a freshly recorded purchase into Supabase (opt-in, fail-soft).
@@ -603,7 +718,7 @@ class Store:
             drafts = [self._present(conn, json.loads(row["body"])) for row in conn.execute("SELECT body FROM drafts ORDER BY rowid DESC")]
             purchases = [json.loads(row["body"]) for row in conn.execute("SELECT body FROM purchases ORDER BY created_at DESC, id DESC")]
             inventory = []
-            for ingredient in CATALOG:
+            for ingredient in self._catalog:
                 quantity = conn.execute("SELECT quantity FROM inventory WHERE ingredient_id=?", (ingredient["id"],)).fetchone()[0]
                 inventory.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
                                   "unit": ingredient["unit"], "reorder_threshold": ingredient["reorder_threshold"],

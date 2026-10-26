@@ -245,8 +245,8 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
         warnings.append(f"Line {line_number}: unit is missing; choose a supported unit or pack.")
     if line_total is None:
         warnings.append(f"Line {line_number}: line total is missing or unsupported.")
-    if ingredient_id is None:
-        warnings.append(f"Line {line_number}: unknown ingredient '{raw_name}'; select a catalog item manually.")
+    # An unknown ingredient is not a parse failure: the item stays intact and
+    # the store decides between dashboard correction and auto-create on approval.
 
     return {
         "ingredient_id": ingredient_id,
@@ -319,7 +319,9 @@ def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
         result["canonical_quantity"] = _plain_decimal(canonical_quantity)
         result["canonical_unit"] = canonical_unit
 
-    if ingredient_id not in _EXPECTED_UNIT:
+    if ingredient_id not in _EXPECTED_UNIT and not str(item.get("raw_name") or "").strip():
+        # With a raw name the store can auto-create the ingredient on approval;
+        # without one, only a manual catalog selection can resolve the item.
         warnings.append("Ingredient is not mapped to the demo catalog; select a catalog item manually.")
 
     total_raw = item.get("line_total_idr")

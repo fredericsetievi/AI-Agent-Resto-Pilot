@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from service.api import create_app
+from service.whatsapp import draft_reply, parse_payment_followup
 
 
 SENDER = "demo-owner"
@@ -174,3 +175,124 @@ def test_concurrent_same_event_creates_one_draft_and_message_pair(client):
     assert results[0] == results[1]
     assert len(results[0]["messages"]) == 2
     assert len(overview(client)["drafts"]) == 4
+
+
+def test_unmapped_ingredient_self_heals_on_approval(client):
+    created = data(simulate(client, "Beli gula 1 kg 20 rb"))
+    draft = created["draft"]
+    assert draft["status"] == "pending_approval"
+    assert draft["items"][0]["ingredient_id"] is None and draft["items"][0]["raw_name"] == "gula"
+    reply = created["messages"][-1]["body"]
+    assert "'gula' belum ada di daftar bahan" in reply and "ditambahkan otomatis" in reply
+    approved = data(simulate(client, "ya"))
+    assert approved["result"]["action"] == "approved"
+    confirmation = approved["messages"][-1]["body"]
+    assert "tercatat" in confirmation and "'Gula' ditambahkan sebagai bahan baru" in confirmation
+    state = overview(client)
+    purchase = state["purchases"][0]
+    assert purchase["items"][0]["ingredient_id"] == "gula" and purchase["payment_status"] == "unknown"
+    assert next(row for row in state["inventory"] if row["ingredient_id"] == "gula")["name"] == "Gula"
+    # A repeat purchase of the same unknown ingredient links without duplicating.
+    data(simulate(client, "Beli gula 2 kg 40 rb"))
+    again = data(simulate(client, "oke"))
+    assert again["result"]["action"] == "approved"
+    assert "bahan baru" not in again["messages"][-1]["body"]
+    state = overview(client)
+    assert next(row["quantity"] for row in state["inventory"] if row["ingredient_id"] == "gula") == "3"
+    assert sum(1 for row in state["inventory"] if row["ingredient_id"] == "gula") == 1
+
+
+def test_payment_followup_completes_the_recorded_purchase(client):
+    data(simulate(client, "Cabai 3 kg 150rb"))
+    approved = data(simulate(client, "ya"))
+    ask = approved["messages"][-1]["body"]
+    assert "lunas" in ask and "utang" in ask and "skip" in ask
+    followup = data(simulate(client, "Lunas, dari Pasar Pagi"))
+    assert followup["result"]["action"] == "purchase_updated"
+    purchase = overview(client)["purchases"][0]
+    assert purchase["payment_status"] == "paid" and purchase["supplier"] == "Pasar Pagi"
+
+    data(simulate(client, "Telur 1 kg 30rb"))
+    assert data(simulate(client, "sip"))["result"]["action"] == "approved"
+    unpaid = data(simulate(client, "utang"))
+    assert unpaid["result"]["action"] == "purchase_updated"
+    purchase = overview(client)["purchases"][0]
+    assert purchase["payment_status"] == "unpaid" and not purchase["supplier"]
+
+
+def test_payment_followup_skips_and_lapses_without_blocking(client):
+    data(simulate(client, "Cabai 3 kg 150rb"))
+    assert data(simulate(client, "ya"))["result"]["action"] == "approved"
+    skipped = data(simulate(client, "skip"))
+    assert skipped["result"]["action"] == "followup_skipped"
+    assert "dicatat" in skipped["messages"][-1]["body"]
+    assert overview(client)["purchases"][0]["payment_status"] == "unknown"
+
+    data(simulate(client, "Beras 1 kg 20rb"))
+    assert data(simulate(client, "oke"))["result"]["action"] == "approved"
+    # A new purchase right after a recording is a draft, never a payment detail.
+    newdraft = data(simulate(client, "Minyak 2 l 40rb"))
+    assert newdraft["result"]["action"] == "draft_created"
+    assert newdraft["draft"]["items"][0]["ingredient_id"] == "minyak"
+
+
+def test_approval_and_rejection_variants_are_accepted(client):
+    for word in ("YA", "y", "Ok", "oke", "SIP", "Setuju", "betul", "approve", "ya benar"):
+        data(simulate(client, "Beras 1 kg 20rb"))
+        assert data(simulate(client, word))["result"]["action"] == "approved", word
+    for word in ("BATAL", "cancel", "tidak", "jangan"):
+        data(simulate(client, "Beras 1 kg 20rb"))
+        assert data(simulate(client, word))["result"]["action"] == "rejected", word
+
+
+def test_payment_followup_parser_matches_spec_examples():
+    assert parse_payment_followup("lunas") == {"payment_status": "paid", "supplier": None, "skip": False}
+    assert parse_payment_followup("LUNAS SEMUA")["payment_status"] == "paid"
+    assert parse_payment_followup("sudah dibayar")["payment_status"] == "paid"
+    assert parse_payment_followup("utang")["payment_status"] == "unpaid"
+    assert parse_payment_followup("belum bayar")["payment_status"] == "unpaid"
+    assert parse_payment_followup("lunas, dari Pasar Pagi") == {"payment_status": "paid", "supplier": "Pasar Pagi", "skip": False}
+    assert parse_payment_followup("utang di Bu Siti")["supplier"] == "Bu Siti"
+    assert parse_payment_followup("dari Pasar Pagi") == {"payment_status": None, "supplier": "Pasar Pagi", "skip": False}
+    assert parse_payment_followup("skip") == {"payment_status": None, "supplier": None, "skip": True}
+    # Purchase messages and small talk never masquerade as payment replies.
+    assert parse_payment_followup("Beli telur 2 kg 30rb") is None
+    assert parse_payment_followup("halo") is None
+    assert parse_payment_followup("ya") is None
+
+
+def test_draft_reply_template_is_scannable_and_keeps_the_reference():
+    draft = {
+        "id": "83216d28abcdef1234", "version": 1, "status": "pending_approval",
+        "supplier": None, "warnings": [], "total_idr": 100000,
+        "items": [
+            {"ingredient_id": "bawang", "raw_name": "bawang", "quantity": "2", "unit": "kg", "line_total_idr": 80000, "unit_price_idr": "40000"},
+            {"ingredient_id": None, "raw_name": "gula", "quantity": "1", "unit": "kg", "line_total_idr": 20000, "unit_price_idr": "20000"},
+        ],
+    }
+    lines = draft_reply(draft).splitlines()
+    assert lines[0] == "Draf 83216d28:"
+    assert "• Bawang merah — 2 kg × Rp40.000 = Rp80.000" in lines
+    assert "• Gula — 1 kg × Rp20.000 = Rp20.000" in lines
+    assert "Total: Rp100.000" in lines
+    assert any("Catatan: 'gula' belum ada di daftar bahan" in line and "balas YA" in line for line in lines)
+    assert lines[-1].startswith("Balas YA") and "BATAL" in lines[-1]
+
+
+def test_greeting_text_gets_help_instead_of_an_empty_draft(client):
+    before = len(overview(client)["drafts"])
+    result = data(simulate(client, "hello"))
+    assert "draft" not in result
+    assert result["result"]["action"] == "help_reply"
+    assert result["thread"]["active_draft_id"] is None
+    reply = result["messages"][-1]
+    assert reply["direction"] == "outbound" and reply["draft_id"] is None
+    assert "asisten pembelian RestoPilot" in reply["body"]
+    assert "Beli bawang 2 kg 80 rb" in reply["body"]
+    assert len(overview(client)["drafts"]) == before
+    # Texts carrying purchase signal still draft, even when incomplete.
+    assert data(simulate(client, "beli beras"))["result"]["action"] == "review_required"
+    assert data(simulate(client, "batal"))["result"]["action"] == "rejected"
+    created = data(simulate(client, "Beli bawang 2 kg 80 rb"))
+    assert created["result"]["action"] == "draft_created"
+    assert created["draft"]["items"][0]["raw_name"] == "bawang"

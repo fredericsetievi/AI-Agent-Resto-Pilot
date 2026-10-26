@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import re
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 
 import httpx
@@ -362,13 +363,108 @@ async def upload_audio(access_token, phone_number_id, graph_version, data, *, mi
     return media_id
 
 
+CATALOG_NAMES = {
+    "cabai": "Cabai merah",
+    "telur": "Telur ayam",
+    "beras": "Beras",
+    "minyak": "Minyak goreng",
+    "bawang": "Bawang merah",
+    "bawang_putih": "Bawang putih",
+    "kecombrang": "Kecombrang",
+    "gula_merah": "Gula merah",
+    "daun_pisang": "Daun pisang",
+}
+PAYMENT_FOLLOWUP_PROMPT = (
+    "Untuk melengkapi catatan: balas 'lunas' atau 'utang' — boleh plus nama penjual, "
+    "contoh: 'lunas, dari Pasar Pagi'. Balas 'skip' untuk lewati."
+)
+FOLLOWUP_ACK = "Oke, dicatat tanpa detail pembayaran."
+# Greetings and chat noise parse to zero purchase lines; invite the owner in
+# instead of filing an empty draft on the dashboard.
+HELP_REPLY = (
+    "Halo! 👋 Saya asisten pembelian RestoPilot. Kirim catatan belanja seperti "
+    "'Beli bawang 2 kg 80 rb', foto nota, atau voice note — saya langsung buatkan drafnya."
+)
+_PAYMENT_PAID = re.compile(r"(?i)\b(?:lunas(?:\s+semua)?|paid|sudah\s+(?:bayar|dibayar)|udah\s+(?:bayar|lunas))\b")
+_PAYMENT_UNPAID = re.compile(r"(?i)\b(?:belum\s+(?:lunas|bayar|dibayar)|utang|hutang|kredit|credit)\b")
+_PAYMENT_SKIP = ("skip", "lewati")
+_SUPPLIER_LEAD = re.compile(r"(?i)^\s*(?:dari|di)\s+(.+)$")
+_SUPPLIER_TAIL = re.compile(r"(?i)\bdari\s+(.{1,100})")
+_SUPPLIER_DI_TAIL = re.compile(r"(?i)\bdi\s+(.{1,100})")
+
+
+def _idr(value):
+    """Format an integer rupiah amount with Indonesian thousands separators."""
+    return f"{int(value):,}".replace(",", ".")
+
+
+def _item_line(item):
+    name = CATALOG_NAMES.get(item.get("ingredient_id"))
+    if not name:
+        raw = str(item.get("raw_name") or "").strip()
+        name = raw.capitalize() if raw else "Item"
+    total = item.get("line_total_idr")
+    head = name if item.get("quantity") is None else f"{name} — {item['quantity']} {item.get('unit') or ''}".rstrip()
+    if isinstance(total, bool) or not isinstance(total, int) or total <= 0:
+        return f"• {head}"
+    price = item.get("unit_price_idr")
+    if price:
+        try:
+            unit_price = Decimal(str(price))
+        except InvalidOperation:
+            unit_price = None
+        if unit_price is not None and unit_price > 0 and unit_price == unit_price.to_integral_value():
+            return f"• {head} × Rp{_idr(unit_price)} = Rp{_idr(total)}"
+    return f"• {head} = Rp{_idr(total)}"
+
+
 def draft_reply(draft):
-    reference = f"Draf {draft['id'][:8]} v{draft['version']}"
+    reference = f"Draf {draft['id'][:8]}:"
+    lines = [_item_line(item) for item in draft["items"]]
+    notes = []
+    for item in draft["items"]:
+        if not item.get("ingredient_id") and item.get("raw_name"):
+            notes.append(f"Catatan: '{item['raw_name']}' belum ada di daftar bahan — akan ditambahkan otomatis saat kamu balas YA.")
+    notes.extend(f"Catatan: {warning}" for warning in draft.get("warnings", []))
     if draft["status"] == "needs_clarification":
-        return f"{reference} perlu dilengkapi. Buka dashboard untuk koreksi dan simpan. Setelah valid, balas YA untuk mencatat barang diterima, atau BATAL untuk menolak."
-    names = {"cabai": "Cabai", "telur": "Telur", "beras": "Beras", "minyak": "Minyak", "bawang": "Bawang"}
-    lines = [f"{names.get(item['ingredient_id'], 'Item')} {item['quantity']} {item['unit']}: Rp{item['line_total_idr']:,}".replace(",", ".") for item in draft["items"]]
-    return f"{reference}\n" + "\n".join(lines) + f"\nTotal Rp{draft['total_idr']:,}. Balas YA hanya jika detail benar dan barang sudah diterima; BATAL untuk menolak. Status pembayaran tidak diketahui.".replace(",", ".")
+        parts = [reference] + lines + notes
+        parts.append("Perbaiki di dashboard, lalu balas YA kalau sudah benar & barang diterima, atau BATAL untuk batal.")
+        return "\n".join(parts)
+    total = draft.get("total_idr")
+    parts = [reference] + lines
+    if isinstance(total, int) and not isinstance(total, bool) and total > 0:
+        parts.append(f"Total: Rp{_idr(total)}")
+    parts += notes
+    parts.append("Balas YA kalau sudah benar & barang diterima, BATAL untuk batal.")
+    return "\n".join(parts)
+
+
+def parse_payment_followup(text):
+    """Parse the one-shot payment/supplier reply asked after a recording.
+
+    Returns None when the message does not look like a follow-up answer, so
+    callers fall through to normal message handling (e.g. a new draft).
+    """
+    if not isinstance(text, str):
+        return None
+    candidate = text.strip()
+    if not candidate:
+        return None
+    if candidate.casefold() in _PAYMENT_SKIP:
+        return {"payment_status": None, "supplier": None, "skip": True}
+    unpaid = _PAYMENT_UNPAID.search(candidate)
+    paid = _PAYMENT_PAID.search(candidate)
+    payment_status = "unpaid" if unpaid else "paid" if paid else None
+    supplier = None
+    # A message that only opens with "dari/di X" names the supplier outright;
+    # mid-sentence "di X" is a common purchase-message shape, so it only
+    # counts as a supplier once a payment keyword made the reply explicit.
+    match = _SUPPLIER_LEAD.search(candidate) or _SUPPLIER_TAIL.search(candidate) or (_SUPPLIER_DI_TAIL.search(candidate) if payment_status else None)
+    if match:
+        supplier = re.sub(r"[\s.,;:!?\-\"']+$", "", match.group(1)).strip()[:100] or None
+    if payment_status is None and supplier is None:
+        return None
+    return {"payment_status": payment_status, "supplier": supplier, "skip": False}
 
 
 def weekly_summary_reply(summary, days=7):
