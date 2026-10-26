@@ -183,7 +183,7 @@ def test_unmapped_ingredient_self_heals_on_approval(client):
     assert draft["status"] == "pending_approval"
     assert draft["items"][0]["ingredient_id"] is None and draft["items"][0]["raw_name"] == "gula"
     reply = created["messages"][-1]["body"]
-    assert "'gula' belum ada di daftar bahan" in reply and "ditambahkan otomatis" in reply
+    assert "gula belum ada di daftar bahan" in reply and "ditambahkan otomatis" in reply
     approved = data(simulate(client, "ya"))
     assert approved["result"]["action"] == "approved"
     confirmation = approved["messages"][-1]["body"]
@@ -218,6 +218,20 @@ def test_payment_followup_completes_the_recorded_purchase(client):
     assert unpaid["result"]["action"] == "purchase_updated"
     purchase = overview(client)["purchases"][0]
     assert purchase["payment_status"] == "unpaid" and not purchase["supplier"]
+
+
+def test_supplier_reply_canonicalizes_against_recorded_suppliers(client):
+    data(simulate(client, "Cabai 3 kg 150rb"))
+    assert data(simulate(client, "ya"))["result"]["action"] == "approved"
+    first = data(simulate(client, "di AEON"))
+    assert "Penjual: AEON (pemasok baru)." in first["messages"][-1]["body"]
+    assert overview(client)["purchases"][0]["supplier"] == "AEON"
+
+    data(simulate(client, "Telur 1 kg 30rb"))
+    assert data(simulate(client, "sip"))["result"]["action"] == "approved"
+    second = data(simulate(client, "utang di aeon mall"))
+    assert "Penjual: AEON." in second["messages"][-1]["body"]
+    assert overview(client)["purchases"][0]["supplier"] == "AEON"
 
 
 def test_payment_followup_skips_and_lapses_without_blocking(client):
@@ -261,7 +275,7 @@ def test_payment_followup_parser_matches_spec_examples():
     assert parse_payment_followup("ya") is None
 
 
-def test_draft_reply_template_is_scannable_and_keeps_the_reference():
+def test_draft_reply_template_is_scannable_and_confirms_as_one():
     draft = {
         "id": "83216d28abcdef1234", "version": 1, "status": "pending_approval",
         "supplier": None, "warnings": [], "total_idr": 100000,
@@ -271,12 +285,38 @@ def test_draft_reply_template_is_scannable_and_keeps_the_reference():
         ],
     }
     lines = draft_reply(draft).splitlines()
-    assert lines[0] == "Draf 83216d28:"
+    assert lines[0] == "Draf pembelian:"
     assert "• Bawang merah — 2 kg × Rp40.000 = Rp80.000" in lines
     assert "• Gula — 1 kg × Rp20.000 = Rp20.000" in lines
     assert "Total: Rp100.000" in lines
-    assert any("Catatan: 'gula' belum ada di daftar bahan" in line and "balas YA" in line for line in lines)
-    assert lines[-1].startswith("Balas YA") and "BATAL" in lines[-1]
+    assert any("Catatan: gula belum ada di daftar bahan" in line and "balas YA" in line for line in lines)
+    assert lines[-1] == "Balas YA jika semua barang sudah diterima, BATAL untuk batal."
+
+
+def test_draft_reply_needs_clarification_shows_total_supplier_and_groups_notes():
+    draft = {
+        "id": "12eceb45b39b4632", "version": 1, "status": "needs_clarification",
+        "supplier": "PETEK SEGAR INDONESIA, PT", "total_idr": None,
+        "warnings": [
+            "Line 2: unknown ingredient 'pecombang'; select a catalog item manually.",
+            "Line 9: the photo was partly unreadable; verify this line.",
+        ],
+        "items": [
+            {"ingredient_id": "bawang", "raw_name": "banwang meksah kupas", "quantity": "3.5", "unit": "kg", "line_total_idr": 129500, "unit_price_idr": "37000"},
+            {"ingredient_id": None, "raw_name": "pecombang", "quantity": "1", "unit": "kg", "line_total_idr": 34000, "unit_price_idr": "34000"},
+        ],
+    }
+    reply = draft_reply(draft)
+    assert reply.startswith("Draf pembelian (perlu konfirmasi):")
+    assert "Pemasok: PETEK SEGAR INDONESIA, PT" in reply
+    assert "Total sementara: Rp163.500" in reply
+    # English dev-warnings never leak into the owner chat; unmapped items are
+    # grouped into one friendly note and other problems stay generic.
+    assert "unknown ingredient" not in reply
+    assert "select a catalog item" not in reply
+    assert "Catatan: pecombang belum ada di daftar bahan" in reply
+    assert "perlu dicek di dashboard" in reply
+    assert reply.splitlines()[-1].startswith("Balas YA untuk konfirmasi semua item")
 
 
 def test_greeting_text_gets_help_instead_of_an_empty_draft(client):

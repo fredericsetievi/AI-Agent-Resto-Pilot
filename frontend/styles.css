@@ -39,3 +39,22 @@
 @media(max-width:850px){.whatsapp-layout{grid-template-columns:1fr}.whatsapp-guide{order:-1}.whatsapp-guide ol{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.whatsapp-guide li{border:0;padding:4px 0}.whatsapp-guide li>span{display:none}}
 @media(max-width:620px){.whatsapp-panel{padding:14px}.whatsapp-topline{padding:0 3px 13px}.chat-messages{min-height:270px;padding:5px 11px 14px}.chat-next{padding:3px 11px 13px}.whatsapp-composer{flex-direction:column}.whatsapp-composer .button{width:100%}.whatsapp-guide{padding:18px}.whatsapp-guide ol{display:block}.whatsapp-guide li{border-bottom:1px solid var(--line);padding:10px 0}.whatsapp-guide li>span{display:grid}}
 .chat-message.inbound{justify-content:flex-end}.chat-message.outbound{justify-content:flex-start}.chat-message.inbound .chat-bubble{background:#e2efd6;border-top-right-radius:3px;border-top-left-radius:10px}.chat-message.outbound .chat-bubble{background:#fff;border-top-left-radius:3px;border-top-right-radius:10px}
+/* Dashboard polish: hero metric, inline draft actions, provenance chip, status pills */
+.metric-hero{background:var(--green-dark);border-color:var(--green-dark)}
+.metric-hero .metric-label{color:#b5c7ba}
+.metric-hero .metric-symbol{color:#8fa795}
+.metric-hero .metric-value{font-family:Georgia,"Times New Roman",serif;font-size:44px;font-weight:400;letter-spacing:-1.5px;color:#f4f7ec}
+.metric-hero small{font-size:10px;color:#b5c7ba}
+.hero-delta{display:inline-block;font-weight:600;margin-top:2px}
+.hero-delta.up{color:#b9dc9a}
+.hero-delta.down{color:#f2b3a8}
+.hero-delta.neutral{color:#e8d9a8}
+.badge.red{background:#fceeea;color:#a44035}
+.draft-bottom{flex-wrap:wrap;row-gap:10px}
+.draft-actions{display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+.button.mini{padding:8px 13px;font-size:11px;border-radius:6px}
+.provenance{display:inline-flex;align-items:center;gap:5px;font-size:9px;color:var(--muted);margin-top:7px;letter-spacing:.2px}
+.provenance.wa{color:#3f7654;font-weight:600}
+.provenance.wa svg{width:11px;height:11px;color:#25d366;flex-shrink:0}
+.inventory-row .stock.low{color:var(--red)}
+@media(max-width:620px){.metric-hero .metric-value{font-size:36px}.draft-actions{margin-left:0;width:100%;justify-content:flex-end}}

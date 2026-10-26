@@ -418,24 +418,62 @@ def _item_line(item):
     return f"• {head} = Rp{_idr(total)}"
 
 
-def draft_reply(draft):
-    reference = f"Draf {draft['id'][:8]}:"
-    lines = [_item_line(item) for item in draft["items"]]
-    notes = []
-    for item in draft["items"]:
-        if not item.get("ingredient_id") and item.get("raw_name"):
-            notes.append(f"Catatan: '{item['raw_name']}' belum ada di daftar bahan — akan ditambahkan otomatis saat kamu balas YA.")
-    notes.extend(f"Catatan: {warning}" for warning in draft.get("warnings", []))
-    if draft["status"] == "needs_clarification":
-        parts = [reference] + lines + notes
-        parts.append("Perbaiki di dashboard, lalu balas YA kalau sudah benar & barang diterima, atau BATAL untuk batal.")
-        return "\n".join(parts)
+# Raw extraction warnings are admin-facing English; the owner-facing reply
+# already covers unmapped items, so only flag "other" problems generically and
+# keep line-level detail on the dashboard.
+_UNMAPPED_WARNING = re.compile(r"unknown ingredient|not mapped", re.IGNORECASE)
+
+
+def _draft_total(draft):
     total = draft.get("total_idr")
-    parts = [reference] + lines
     if isinstance(total, int) and not isinstance(total, bool) and total > 0:
+        return total
+    parts = [
+        item["line_total_idr"]
+        for item in draft.get("items", [])
+        if isinstance(item.get("line_total_idr"), int)
+        and not isinstance(item["line_total_idr"], bool)
+        and item["line_total_idr"] > 0
+    ]
+    return sum(parts) if parts else None
+
+
+def draft_reply(draft):
+    lines = [_item_line(item) for item in draft["items"]]
+    unmapped = [
+        str(item["raw_name"]).strip()
+        for item in draft["items"]
+        if not item.get("ingredient_id") and item.get("raw_name")
+    ]
+    notes = []
+    if unmapped:
+        notes.append(
+            "Catatan: " + ", ".join(unmapped)
+            + " belum ada di daftar bahan — akan ditambahkan otomatis saat kamu balas YA."
+        )
+    if any(_UNMAPPED_WARNING.search(str(warning)) is None for warning in draft.get("warnings", [])):
+        notes.append("Catatan: ada baris yang perlu dicek di dashboard (harga, satuan, atau keterbacaan foto).")
+    supplier = str(draft.get("supplier") or "").strip()
+    total = _draft_total(draft)
+    if draft["status"] == "needs_clarification":
+        parts = ["Draf pembelian (perlu konfirmasi):"] + lines
+        if supplier:
+            parts.append(f"Pemasok: {supplier}")
+        if total:
+            parts.append(f"Total sementara: Rp{_idr(total)}")
+        parts += notes
+        if unmapped:
+            parts.append("Balas YA untuk konfirmasi semua item di atas — item baru otomatis masuk daftar bahan. Atau perbaiki dulu di dashboard. BATAL untuk batal.")
+        else:
+            parts.append("Perbaiki di dashboard, lalu balas YA kalau sudah benar & barang diterima. BATAL untuk batal.")
+        return "\n".join(parts)
+    parts = ["Draf pembelian:"] + lines
+    if supplier:
+        parts.append(f"Pemasok: {supplier}")
+    if total:
         parts.append(f"Total: Rp{_idr(total)}")
     parts += notes
-    parts.append("Balas YA kalau sudah benar & barang diterima, BATAL untuk batal.")
+    parts.append("Balas YA jika semua barang sudah diterima, BATAL untuk batal.")
     return "\n".join(parts)
 
 

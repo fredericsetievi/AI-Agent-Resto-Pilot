@@ -57,7 +57,7 @@ def edit_payload(draft, **changes):
 def test_seed_comparison_and_overview(client):
     state = overview(client)
     assert state["mode"] == {"transport": "manual", "extraction": "rules", "storage": "sqlite", "identity": "demo"}
-    assert state["metrics"] == {"purchases_today_idr": 0, "pending_approvals": 1, "low_stock_count": 8, "recorded_purchases": 2}
+    assert state["metrics"] == {"purchases_today_idr": 0, "purchases_yesterday_idr": 0, "pending_approvals": 1, "low_stock_count": 8, "recorded_purchases": 2}
     draft = pending(client)
     comparison = draft["items"][0]["comparison"]
     assert comparison["status"] == "price_increase"
@@ -65,6 +65,24 @@ def test_seed_comparison_and_overview(client):
     assert comparison["baseline_unit_price_idr"] == "43000"
     assert comparison["baseline_purchase_id"] in {row["id"] for row in state["purchases"]}
     assert all(row["payment_status"] == "unknown" for row in state["purchases"])
+
+
+def test_overview_delta_splits_today_from_yesterday(client):
+    state = overview(client)
+    assert state["metrics"]["purchases_yesterday_idr"] == 0
+    assert decision(client, pending(client)).status_code == 200
+    state = overview(client)
+    assert state["metrics"]["purchases_today_idr"] == 150000
+    assert state["metrics"]["purchases_yesterday_idr"] == 0
+
+
+def test_draft_provenance_reflects_intake_channel(client):
+    manual = client.post("/v1/intake", headers=headers(), json={"text": "beli cabai 3 kg 150rb"}).json()["data"]
+    simulated = client.post("/v1/whatsapp/simulate", headers=headers(), json={"sender": "demo-owner", "text": "beli telur 2 kg 60000"}).json()["data"]["draft"]
+    drafts = {draft["id"]: draft for draft in overview(client)["drafts"]}
+    assert "source" not in drafts[manual["id"]]
+    assert drafts[simulated["id"]]["source"]["kind"] == "simulator"
+    assert drafts[simulated["id"]]["source"]["created_at"]
 
 
 def test_intake_edit_approval_updates_real_stock_and_spend(client):

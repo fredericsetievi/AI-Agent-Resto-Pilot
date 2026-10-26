@@ -58,6 +58,13 @@ Rules, in priority order:
 5. raw_name is the printed item name, lowercase, without the quantity or price.
 6. Use "low" confidence when handwriting, glare, or a fold made the line hard
    to read, and add a short note to "unreadable".
+7. The nota may also list goods unrelated to the restaurant. The "items"
+   array must contain ONLY items used for restaurant or kitchen operations:
+   food ingredients, seasonings, beverages for the menu, and cooking or
+   packaging supplies. Never put a skipped item in "items". For every other
+   good — snacks, cigarettes, personal care, household goods, medicine —
+   add its name to "unreadable" prefixed with "skip:". When unsure whether
+   an item is kitchen-related, keep it in "items".
 """ % MAX_ITEMS
 
 

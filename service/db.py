@@ -18,7 +18,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .extraction import extract_purchase, normalize_item
-from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, draft_reply, parse_payment_followup, weekly_summary_reply
+from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, draft_reply, parse_payment_followup, weekly_summary_reply
 
 
 CATALOG = [
@@ -486,18 +486,18 @@ class Store:
             result = {}
             if extracted_photo:
                 if draft:
-                    reply = "Masih ada draf aktif; foto ini tidak menggantikannya. Tinjau di dashboard, balas YA jika barang diterima, atau BATAL.\n" + draft_reply(draft)
+                    reply = "Foto diterima. Masih ada draf yang menunggu konfirmasimu dulu, jadi foto ini belum dicatat:\n" + draft_reply(draft)
                     result["action"] = "active_draft_exists"
                 else:
                     draft = self._new_draft(conn, source_label, extracted_photo.get("supplier"), extracted_photo.get("items") or [], extracted_photo.get("warnings") or [])
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
-                    reply = draft_reply(draft)
+                    reply = "Nota diterima. Cek draf pembelian ini:\n" + draft_reply(draft)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
             elif transcript:
                 # A transcribed voice note follows the exact same review flow as
                 # typed text: parse it, propose a draft, wait for YA/BATAL.
                 if draft:
-                    reply = "Masih ada draf aktif; pesan suara ini tidak menggantikannya. Tinjau di dashboard, balas YA jika barang diterima, atau BATAL.\n" + draft_reply(draft)
+                    reply = "Pesan suara diterima. Masih ada draf yang menunggu konfirmasimu dulu, jadi pesan ini belum dicatat:\n" + draft_reply(draft)
                     result["action"] = "active_draft_exists"
                 else:
                     extracted = extract_purchase(transcript)
@@ -509,7 +509,7 @@ class Store:
                 reply = "Foto/audio belum diproses. Kirim rincian pembelian sebagai teks atau gunakan dashboard. Tidak ada pembelian yang dicatat."
                 result["action"] = "media_unsupported"
             elif pending_purchase and not draft and (followup := parse_payment_followup(payload["text"])):
-                self._update_purchase_payment(conn, pending_purchase, followup["payment_status"], followup["supplier"])
+                purchase, supplier_new = self._update_purchase_payment(conn, pending_purchase, followup["payment_status"], followup["supplier"])
                 if followup["skip"]:
                     reply = FOLLOWUP_ACK
                     result["action"] = "followup_skipped"
@@ -519,8 +519,9 @@ class Store:
                         details.append("Pembayaran dicatat: lunas.")
                     elif followup["payment_status"] == "unpaid":
                         details.append("Pembayaran dicatat: utang (belum dibayar).")
-                    if followup["supplier"]:
-                        details.append(f"Penjual: {followup['supplier']}.")
+                    if purchase.get("supplier"):
+                        suffix = " (pemasok baru)." if supplier_new else "."
+                        details.append(f"Penjual: {purchase['supplier']}{suffix}")
                     reply = "Oke, catatan diperbarui. " + " ".join(details) if details else FOLLOWUP_ACK
                     result["action"] = "purchase_updated"
             elif command in APPROVE_COMMANDS or command in REJECT_COMMANDS:
@@ -557,7 +558,7 @@ class Store:
                 result["action"] = "weekly_summary"
                 result["summary"] = summary
             elif draft:
-                reply = "Masih ada draf aktif; pesan baru ini tidak menggantikannya. Tinjau di dashboard, balas YA jika barang diterima, atau BATAL.\n" + draft_reply(draft)
+                reply = draft_reply(draft)
                 result["action"] = "active_draft_exists"
             else:
                 extracted = extract_purchase(payload["text"])
@@ -662,24 +663,61 @@ class Store:
                 rows.append({"item": ingredient["name"], "unit": ingredient["unit"], "current_stock": quantity, "last_unit_price": last_prices.get(ingredient["id"])})
             return rows
 
+    def _canonical_supplier(self, conn, supplier, exclude_id=None):
+        """Match a free-typed supplier name against suppliers already recorded.
+
+        Keeps one supplier on one canonical ledger name: 'di aeon', 'AEON',
+        and 'aeon mall' resolve to the stored form when a confident match
+        exists. Deterministic and auditable — exact match ignoring case and
+        spacing first, then containment of a 3+ character name. Returns
+        (canonical_name, matched_existing).
+        """
+        def norm(value):
+            return " ".join(str(value).casefold().split())
+
+        candidate = norm(supplier)
+        if not candidate:
+            return supplier, True
+        rows = conn.execute(
+            "SELECT DISTINCT supplier FROM purchases WHERE supplier IS NOT NULL AND supplier != '' AND id != ?",
+            (exclude_id or "",),
+        ).fetchall()
+        stored = {row["supplier"]: norm(row["supplier"]) for row in rows}
+        for name, normed in stored.items():
+            if normed == candidate:
+                return name, True
+        for name, normed in sorted(stored.items(), key=lambda item: len(item[1])):
+            if (len(candidate) >= 3 and candidate in normed) or (len(normed) >= 3 and normed in candidate):
+                return name, True
+        return supplier, False
+
     def _update_purchase_payment(self, conn, purchase_id, payment_status, supplier):
-        """Persist payment/supplier details on one recorded purchase."""
+        """Persist payment/supplier details on one recorded purchase.
+
+        Returns (purchase, supplier_new) where supplier_new is True when the
+        supplier text was stored as a brand-new ledger name instead of
+        resolving to an existing one.
+        """
         row = conn.execute("SELECT body FROM purchases WHERE id=?", (purchase_id,)).fetchone()
         if not row:
             raise DomainError("not_found", "Purchase not found.", 404)
         purchase = json.loads(row["body"])
         if payment_status:
             purchase["payment_status"] = payment_status
+        supplier_is_new = None
         if supplier:
-            purchase["supplier"] = supplier
+            canonical, matched_existing = self._canonical_supplier(conn, supplier, exclude_id=purchase_id)
+            purchase["supplier"] = canonical
+            supplier_is_new = not matched_existing
         conn.execute("UPDATE purchases SET body=?, supplier=? WHERE id=?", (encode(purchase), purchase.get("supplier"), purchase_id))
         self._audit(conn, "purchase_updated", f"Purchase {purchase_id[:8]} payment details completed via WhatsApp follow-up.")
-        return purchase
+        return purchase, supplier_is_new
 
     def update_purchase_payment(self, purchase_id, payment_status=None, supplier=None):
         """Public update path so dashboard or tests can complete a recorded purchase."""
         with self.transaction() as conn:
-            return self._update_purchase_payment(conn, purchase_id, payment_status, supplier)
+            purchase, _ = self._update_purchase_payment(conn, purchase_id, payment_status, supplier)
+            return purchase
 
     def maybe_cloud_mirror(self, draft) -> dict | None:
         """Mirror a freshly recorded purchase into Supabase (opt-in, fail-soft).
@@ -724,10 +762,21 @@ class Store:
                                   "unit": ingredient["unit"], "reorder_threshold": ingredient["reorder_threshold"],
                                   "low_stock": Decimal(quantity) < Decimal(ingredient["reorder_threshold"])})
             today = datetime.now(RESTAURANT_TIMEZONE).date()
+            # Provenance is read from the message ledger, never guessed: the
+            # earliest inbound WhatsApp message that produced each draft. Drafts
+            # without one came from dashboard intake and stay unattributed.
+            sources = {}
+            for row in conn.execute("SELECT draft_id, transport, created_at FROM whatsapp_messages WHERE direction='inbound' AND draft_id IS NOT NULL ORDER BY rowid"):
+                sources.setdefault(row["draft_id"], {"kind": "whatsapp" if row["transport"] == LIVE else "simulator", "created_at": row["created_at"]})
+            for draft in drafts:
+                if draft["id"] in sources:
+                    draft["source"] = sources[draft["id"]]
+            purchase_days = [datetime.fromisoformat(row["created_at"]).astimezone(RESTAURANT_TIMEZONE).date() for row in purchases]
             return {
                 "restaurant": RESTAURANT,
                 "mode": {"transport": "manual", "extraction": "rules", "storage": "sqlite", "identity": "demo"},
-                "metrics": {"purchases_today_idr": sum(row["total_idr"] for row in purchases if datetime.fromisoformat(row["created_at"]).astimezone(RESTAURANT_TIMEZONE).date() == today),
+                "metrics": {"purchases_today_idr": sum(row["total_idr"] for row, day in zip(purchases, purchase_days) if day == today),
+                            "purchases_yesterday_idr": sum(row["total_idr"] for row, day in zip(purchases, purchase_days) if day == today - timedelta(days=1)),
                             "pending_approvals": sum(row["status"] in ("pending_approval", "needs_clarification") for row in drafts),
                             "low_stock_count": sum(row["low_stock"] for row in inventory), "recorded_purchases": len(purchases)},
                 "drafts": drafts, "purchases": purchases, "inventory": inventory,
