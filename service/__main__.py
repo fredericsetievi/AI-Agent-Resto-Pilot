@@ -24,6 +24,9 @@ SUPPORTED_ENV_KEYS = {
     "META_GRAPH_API_VERSION",
     "STEPFUN_API_KEY",
     "STEPFUN_VISION_MODEL",
+    "STEPFUN_ASR_MODEL",
+    "STEPFUN_TTS_MODEL",
+    "STEPFUN_TTS_VOICE",
     "STEPFUN_BASE_URL",
 }
 
@@ -86,6 +89,9 @@ def main():
             vision_api_key=vision_api_key,
             vision_model=setting("STEPFUN_VISION_MODEL"),
             vision_base_url=setting("STEPFUN_BASE_URL"),
+            asr_model=setting("STEPFUN_ASR_MODEL"),
+            tts_model=setting("STEPFUN_TTS_MODEL"),
+            tts_voice=setting("STEPFUN_TTS_VOICE"),
             **meta_settings,
         ),
         host="127.0.0.1",

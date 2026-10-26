@@ -6,7 +6,9 @@ Loopback-only by default. Pass public_demo=True for a hosted demo deployment
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import logging
 from pathlib import Path
 from typing import Annotated, Literal
@@ -14,12 +16,22 @@ from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints
 from starlette.exceptions import HTTPException
 from starlette.concurrency import run_in_threadpool
 
+from .audio import (
+    DEFAULT_ASR_MODEL,
+    DEFAULT_TTS_MODEL,
+    DEFAULT_TTS_VOICE,
+    StepFunAudioError,
+    synthesize_speech,
+    transcribe_audio,
+    validate_asr_model,
+    validate_tts_model,
+)
 from .db import DomainError, Store
 from .vision import (
     DEFAULT_BASE_URL as VISION_DEFAULT_BASE_URL,
@@ -37,13 +49,16 @@ from .whatsapp import (
     OUTBOUND_SENT,
     WEBHOOK_PATH,
     MetaWhatsAppError,
+    download_audio,
     download_image,
     matches_public_host,
     matches_verify_token,
     meta_event_key,
     parse_webhook,
     public_origin,
+    send_audio_message,
     send_text,
+    upload_audio,
     validate_graph_version,
     validate_meta_id,
     validate_verify_token,
@@ -130,6 +145,9 @@ def create_app(
     vision_model=None,
     vision_base_url=None,
     vision_http_client=None,
+    asr_model=None,
+    tts_model=None,
+    tts_voice=None,
 ):
     app = FastAPI(title="RestoPilot local demo", version="0.1.0", description="Manual intake, rules extraction and SQLite. Synthetic demo identity; not production authentication.")
     store = Store(db_path, seed=seed)
@@ -141,6 +159,10 @@ def create_app(
     meta_graph_api_version = validate_graph_version(meta_graph_api_version)
     vision_model = validate_vision_model(vision_model) if vision_model else VISION_DEFAULT_MODEL
     vision_base_url = validate_vision_base_url(vision_base_url) if vision_base_url else VISION_DEFAULT_BASE_URL
+    # ASR/TTS share the StepFun account: the vision key and base URL serve audio too.
+    asr_model = validate_asr_model(asr_model) if asr_model else DEFAULT_ASR_MODEL
+    tts_model = validate_tts_model(tts_model) if tts_model else DEFAULT_TTS_MODEL
+    tts_voice = (tts_voice or DEFAULT_TTS_VOICE).strip() or DEFAULT_TTS_VOICE
 
     @app.middleware("http")
     async def loopback_boundary(request: Request, call_next):
@@ -267,6 +289,37 @@ def create_app(
     def simulate_whatsapp(body: SimulatedMessage, actor=Depends(owner), idempotency_key=Depends(key)):
         return {"data": store.whatsapp_ingest(idempotency_key, body.model_dump())}
 
+    def csv_attachment(rows, filename):
+        buffer = io.StringIO()
+        csv.writer(buffer).writerows(rows)
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.get("/v1/export/purchases.csv")
+    def export_purchases_csv(actor=Depends(identity)):
+        rows = store.export_purchases()
+        return csv_attachment(
+            [["id", "created_at", "supplier", "item_count", "total_idr", "status"]] + [
+                [row["id"], row["created_at"], row["supplier"], row["item_count"], row["total_idr"], row["status"]]
+                for row in rows
+            ],
+            "purchases.csv",
+        )
+
+    @app.get("/v1/export/stock.csv")
+    def export_stock_csv(actor=Depends(identity)):
+        rows = store.export_stock()
+        return csv_attachment(
+            [["item", "unit", "current_stock", "last_unit_price"]] + [
+                [row["item"], row["unit"], row["current_stock"], row["last_unit_price"]]
+                for row in rows
+            ],
+            "stock.csv",
+        )
+
     @app.get(WEBHOOK_PATH)
     async def verify_meta_whatsapp(request: Request):
         if not meta_verify_token or not configured_origin:
@@ -303,10 +356,37 @@ def create_app(
             logger.warning("Rejected Meta WhatsApp webhook: %s", exc)
             raise DomainError("invalid_meta_webhook", str(exc), exc.status)
 
+        async def summary_voice(text):
+            """Speak the summary and upload it; returns a Meta media ID or None.
+
+            TTS is an optional enhancement: any configuration, synthesis,
+            upload, or send problem degrades to the plain text reply and never
+            raises out of the webhook.
+            """
+            try:
+                speech = await synthesize_speech(
+                    text,
+                    api_key=vision_api_key,
+                    model=tts_model,
+                    voice=tts_voice,
+                    base_url=vision_base_url,
+                    client=vision_http_client,
+                )
+                return await upload_audio(
+                    meta_access_token,
+                    meta_phone_number_id,
+                    meta_graph_api_version,
+                    speech,
+                    client=meta_http_client,
+                )
+            except (MetaWhatsAppError, StepFunAudioError, ValueError) as exc:
+                logger.warning("WhatsApp summary voice reply unavailable: %s", exc)
+                return None
+
         for message in messages:
             event_id = message["event_id"]
             payload = {key: message[key] for key in ("sender", "text", "event_id", "num_media")}
-            if message.get("media_id") and vision_api_key:
+            if message.get("media_kind") == "image" and vision_api_key:
                 # A photo is read before the draft is created so the owner gets
                 # the same review-and-confirm flow as typed text.
                 try:
@@ -328,6 +408,26 @@ def create_app(
                 except (MetaWhatsAppError, StepFunVisionError) as exc:
                     # A failed read falls back to the safe media reply; no draft.
                     logger.warning("WhatsApp photo intake failed: %s", exc)
+            elif message.get("media_kind") == "audio" and vision_api_key:
+                # A voice note is transcribed and then parsed like typed text;
+                # a failed read falls back to the safe media reply; no draft.
+                try:
+                    audio, mime = await download_audio(
+                        message["media_id"],
+                        meta_access_token,
+                        meta_graph_api_version,
+                        client=meta_http_client,
+                    )
+                    payload["transcript"] = await transcribe_audio(
+                        audio,
+                        mime,
+                        api_key=vision_api_key,
+                        model=asr_model,
+                        base_url=vision_base_url,
+                        client=vision_http_client,
+                    )
+                except (MetaWhatsAppError, StepFunAudioError) as exc:
+                    logger.warning("WhatsApp voice intake failed: %s", exc)
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),
@@ -345,19 +445,38 @@ def create_app(
             )
             if not claimed:
                 continue
-            try:
-                await send_text(
-                    meta_access_token,
-                    meta_phone_number_id,
-                    meta_graph_api_version,
-                    message["sender"],
-                    outbound["body"],
-                    client=meta_http_client,
-                )
-            except (MetaWhatsAppError, ValueError) as exc:
-                await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], OUTBOUND_PENDING)
-                status = exc.status if isinstance(exc, MetaWhatsAppError) else 500
-                raise DomainError("meta_send_failed", str(exc), status)
+            # whatsapp_ingest nests the ingest result (action/summary) under "result".
+            summary_result = result.get("result") or {}
+            audio_id = None
+            if summary_result.get("action") == "weekly_summary" and summary_result.get("summary"):
+                audio_id = await summary_voice(outbound["body"])
+            if audio_id:
+                try:
+                    await send_audio_message(
+                        meta_access_token,
+                        meta_phone_number_id,
+                        meta_graph_api_version,
+                        message["sender"],
+                        audio_id,
+                        client=meta_http_client,
+                    )
+                except (MetaWhatsAppError, ValueError) as exc:
+                    logger.warning("WhatsApp audio reply failed; falling back to text: %s", exc)
+                    audio_id = None
+            if not audio_id:
+                try:
+                    await send_text(
+                        meta_access_token,
+                        meta_phone_number_id,
+                        meta_graph_api_version,
+                        message["sender"],
+                        outbound["body"],
+                        client=meta_http_client,
+                    )
+                except (MetaWhatsAppError, ValueError) as exc:
+                    await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], OUTBOUND_PENDING)
+                    status = exc.status if isinstance(exc, MetaWhatsAppError) else 500
+                    raise DomainError("meta_send_failed", str(exc), status)
             await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], OUTBOUND_SENT)
         return {"ok": True}
 

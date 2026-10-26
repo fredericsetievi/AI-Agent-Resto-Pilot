@@ -17,7 +17,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .extraction import extract_purchase, normalize_item
-from .whatsapp import SIMULATOR, draft_reply
+from .whatsapp import SIMULATOR, draft_reply, weekly_summary_reply
 
 
 CATALOG = [
@@ -34,6 +34,9 @@ CATALOG = [
 CATALOG_BY_ID = {item["id"]: item for item in CATALOG}
 RESTAURANT = {"id": "demo-resto", "name": "Warung Nusantara"}
 RESTAURANT_TIMEZONE = ZoneInfo("Asia/Jakarta")
+SUMMARY_COMMANDS = ("ringkas", "ringkasan", "summary")
+SUMMARY_WINDOW_DAYS = 7
+MAX_TRANSCRIPT_CHARS = 10_000
 
 
 def now():
@@ -391,8 +394,11 @@ class Store:
         channel = channel or transport
         extracted_photo = payload.get("extracted")
         source_label = payload.get("source_label") or "Foto nota WhatsApp"
-        # A vision read is not byte-identical across retries, so it stays out of
-        # the dedupe fingerprint; the Meta event itself is the replay guard.
+        # A voice transcript, like a vision read, is not byte-identical across
+        # Meta retries (ASR is non-deterministic), so it stays out of both
+        # dedupe fingerprints below; the Meta event itself is the replay guard.
+        transcript = payload.get("transcript")
+        transcript = transcript.strip()[:MAX_TRANSCRIPT_CHARS] if isinstance(transcript, str) else ""
         payload = {"sender": payload["sender"], "text": payload["text"], "event_id": payload.get("event_id"), "num_media": payload.get("num_media", 0)}
         event_id = payload["event_id"] or "sim:" + key
         fingerprint = hashlib.sha256(encode({"sender": payload["sender"], "text": payload["text"], "num_media": payload["num_media"]}).encode()).hexdigest()
@@ -416,6 +422,18 @@ class Store:
                     result["action"] = "active_draft_exists"
                 else:
                     draft = self._new_draft(conn, source_label, extracted_photo.get("supplier"), extracted_photo.get("items") or [], extracted_photo.get("warnings") or [])
+                    thread.update(active_draft_id=draft["id"], active_version=draft["version"])
+                    reply = draft_reply(draft)
+                    result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
+            elif transcript:
+                # A transcribed voice note follows the exact same review flow as
+                # typed text: parse it, propose a draft, wait for YA/BATAL.
+                if draft:
+                    reply = "Masih ada draf aktif; pesan suara ini tidak menggantikannya. Tinjau di dashboard, balas YA jika barang diterima, atau BATAL.\n" + draft_reply(draft)
+                    result["action"] = "active_draft_exists"
+                else:
+                    extracted = extract_purchase(transcript)
+                    draft = self._new_draft(conn, transcript, None, extracted["items"], extracted["warnings"])
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = draft_reply(draft)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
@@ -444,6 +462,12 @@ class Store:
                     thread.update(active_draft_id=None, active_version=None)
                     reply = f"Pembelian {draft['id'][:8]} tercatat. Barang diterima ditambahkan ke estimasi stok. Status pembayaran tidak diketahui."
                     result.update(action="approved", purchase_id=draft["purchase_id"])
+            elif command in SUMMARY_COMMANDS:
+                # A read-only report: never creates or disturbs an active draft.
+                summary = self._weekly_summary(conn, SUMMARY_WINDOW_DAYS)
+                reply = weekly_summary_reply(summary, SUMMARY_WINDOW_DAYS)
+                result["action"] = "weekly_summary"
+                result["summary"] = summary
             elif draft:
                 reply = "Masih ada draf aktif; pesan baru ini tidak menggantikannya. Tinjau di dashboard, balas YA jika barang diterima, atau BATAL.\n" + draft_reply(draft)
                 result["action"] = "active_draft_exists"
@@ -457,6 +481,8 @@ class Store:
             draft_id = draft["id"] if draft else None
             if extracted_photo:
                 inbound_body = f"[Foto nota] {source_label}"
+            elif transcript:
+                inbound_body = f"[Catatan suara] {transcript}"
             elif payload["num_media"]:
                 inbound_body = f"[Media omitted: {payload['num_media']} attachment(s)] " + payload["text"]
             else:
@@ -472,6 +498,73 @@ class Store:
         response = self._idempotent(key, "whatsapp:" + channel, payload, action)
         self.maybe_cloud_mirror(response.get("draft"))
         return response
+
+    def _weekly_summary(self, conn, days=SUMMARY_WINDOW_DAYS):
+        """Aggregate recorded purchases inside the window; zeroed when empty."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        summary = {"purchase_count": 0, "total_spend_idr": 0, "top_item": None, "biggest_price_spike": None}
+        quantities = {}
+        for row in conn.execute("SELECT body FROM purchases WHERE created_at>=? ORDER BY created_at, id", (cutoff,)):
+            purchase = json.loads(row["body"])
+            summary["purchase_count"] += 1
+            total = purchase.get("total_idr")
+            if isinstance(total, int) and not isinstance(total, bool) and 0 < total <= 1_000_000_000_000:
+                summary["total_spend_idr"] += total
+            for item in purchase.get("items") or []:
+                ingredient = CATALOG_BY_ID.get(item.get("ingredient_id"))
+                if ingredient and item.get("canonical_quantity") and item.get("canonical_unit"):
+                    key = (item["ingredient_id"], item["canonical_unit"])
+                    quantities[key] = quantities.get(key, Decimal(0)) + Decimal(item["canonical_quantity"])
+                comparison = item.get("comparison") or {}
+                if comparison.get("status") == "price_increase" and comparison.get("change_percent") is not None:
+                    try:
+                        change = Decimal(str(comparison["change_percent"]))
+                    except InvalidOperation:
+                        continue
+                    spike = summary["biggest_price_spike"]
+                    if spike is None or change > Decimal(spike["change_percent"]):
+                        summary["biggest_price_spike"] = {"name": ingredient["name"] if ingredient else str(item.get("raw_name") or ""), "change_percent": format(change, "f")}
+        if quantities:
+            (ingredient_id, unit), total = max(quantities.items(), key=lambda entry: (entry[1], entry[0]))
+            summary["top_item"] = {"name": CATALOG_BY_ID[ingredient_id]["name"], "quantity": decimal_string(total), "unit": unit}
+        return summary
+
+    def weekly_summary(self, days=SUMMARY_WINDOW_DAYS):
+        with self.transaction() as conn:
+            return self._weekly_summary(conn, days)
+
+    def export_purchases(self):
+        """Flat purchase rows for the CSV export; newest first."""
+        with self.transaction() as conn:
+            rows = []
+            for row in conn.execute("SELECT id, supplier, created_at, body FROM purchases ORDER BY created_at DESC, id DESC"):
+                purchase = json.loads(row["body"])
+                total = purchase.get("total_idr")
+                rows.append({
+                    "id": purchase.get("id") or row["id"],
+                    "created_at": row["created_at"],
+                    "supplier": row["supplier"] or "",
+                    "item_count": len(purchase.get("items") or []),
+                    "total_idr": total if isinstance(total, int) and not isinstance(total, bool) else "",
+                    "status": purchase.get("payment_status") or "",
+                })
+            return rows
+
+    def export_stock(self):
+        """Catalog stock rows with the most recent recorded unit price per ingredient."""
+        with self.transaction() as conn:
+            last_prices = {}
+            for row in conn.execute("SELECT body FROM purchases ORDER BY created_at DESC, id DESC"):
+                for item in json.loads(row["body"]).get("items") or []:
+                    ingredient_id = item.get("ingredient_id")
+                    price = item.get("unit_price_idr")
+                    if ingredient_id and price and ingredient_id not in last_prices:
+                        last_prices[ingredient_id] = price
+            rows = []
+            for ingredient in CATALOG:
+                quantity = conn.execute("SELECT quantity FROM inventory WHERE ingredient_id=?", (ingredient["id"],)).fetchone()[0]
+                rows.append({"item": ingredient["name"], "unit": ingredient["unit"], "current_stock": quantity, "last_unit_price": last_prices.get(ingredient["id"])})
+            return rows
 
     def maybe_cloud_mirror(self, draft) -> dict | None:
         """Mirror a freshly recorded purchase into Supabase (opt-in, fail-soft).

@@ -28,7 +28,15 @@ _GRAPH_VERSION = re.compile(r"v[1-9]\d{0,2}\.0")
 # Media IDs are opaque strings; accept the documented alphabet and bound length.
 _MEDIA_ID = re.compile(r"[A-Za-z0-9_-]{5,200}")
 IMAGE_MEDIA_TYPES = ("image/jpeg", "image/png", "image/webp")
+AUDIO_MEDIA_TYPES = ("audio/ogg", "audio/mpeg", "audio/mp4", "audio/aac", "audio/amr")
 MAX_MEDIA_BYTES = 5 * 1024 * 1024
+_AUDIO_FILENAMES = {
+    "audio/ogg": "audio.ogg",
+    "audio/mpeg": "audio.mp3",
+    "audio/mp4": "audio.m4a",
+    "audio/aac": "audio.aac",
+    "audio/amr": "audio.amr",
+}
 
 
 class MetaWhatsAppError(Exception):
@@ -161,24 +169,29 @@ def _normalize_message(message):
         text = text_value.get("body") if isinstance(text_value, dict) else None
         if not isinstance(text, str) or not text.strip() or len(text) > 10_000:
             raise MetaWhatsAppError("Invalid Meta WhatsApp text message.", 400)
-        text, num_media = text.strip(), 0
-        media_id = None
+        text, num_media, media_id, media_kind = text.strip(), 0, None, None
     elif message.get("type") == "image":
         image = message.get("image")
         media_id = image.get("id") if isinstance(image, dict) else None
         if not isinstance(media_id, str) or not _MEDIA_ID.fullmatch(media_id):
             raise MetaWhatsAppError("Invalid Meta WhatsApp image message.", 400)
-        text, num_media = "", 1
+        text, num_media, media_kind = "", 1, "image"
+    elif message.get("type") in ("audio", "voice"):
+        audio = message.get(message["type"])
+        media_id = audio.get("id") if isinstance(audio, dict) else None
+        if not isinstance(media_id, str) or not _MEDIA_ID.fullmatch(media_id):
+            raise MetaWhatsAppError("Invalid Meta WhatsApp audio message.", 400)
+        text, num_media, media_kind = "", 1, "audio"
     else:
-        text, num_media, media_id = "", 1, None
-    return {"sender": sender, "text": text, "event_id": message_id, "num_media": num_media, "media_id": media_id}
+        text, num_media, media_id, media_kind = "", 1, None, None
+    return {"sender": sender, "text": text, "event_id": message_id, "num_media": num_media, "media_id": media_id, "media_kind": media_kind}
 
 
-async def download_image(media_id, access_token, graph_version, *, client=None):
-    """Fetch one inbound photo: resolve the media URL, then download the bytes.
+async def _download_media(media_id, access_token, graph_version, *, allowed_types, label, cap, client=None):
+    """Fetch one inbound attachment: resolve the media URL, then download the bytes.
 
     Meta serves media in two hops and requires the access token on both. Only
-    the documented image types and a 5 MiB cap are accepted.
+    the documented types for this label and the given byte cap are accepted.
     """
     if not access_token or not access_token.strip():
         raise MetaWhatsAppError("Meta WhatsApp Cloud API is not configured.", 503)
@@ -204,8 +217,8 @@ async def download_image(media_id, access_token, graph_version, *, client=None):
         parsed = urlsplit(url) if isinstance(url, str) else None
         if not parsed or parsed.scheme != "https" or not parsed.hostname:
             raise MetaWhatsAppError("Meta WhatsApp returned an unusable media URL.")
-        if mime not in IMAGE_MEDIA_TYPES:
-            raise MetaWhatsAppError("Meta WhatsApp sent an unsupported image type.")
+        if mime not in allowed_types:
+            raise MetaWhatsAppError(f"Meta WhatsApp sent an unsupported {label} type.")
         try:
             download = await client.get(url, headers=headers)
         except httpx.HTTPError:
@@ -213,15 +226,49 @@ async def download_image(media_id, access_token, graph_version, *, client=None):
         if download.status_code != 200:
             raise MetaWhatsAppError(f"Meta WhatsApp media download failed (HTTP {download.status_code}).")
         raw = download.content
-        if not raw or len(raw) > MAX_MEDIA_BYTES:
-            raise MetaWhatsAppError("Meta WhatsApp image is empty or exceeds 5 MiB.")
+        if not raw or len(raw) > cap:
+            raise MetaWhatsAppError(f"Meta WhatsApp {label} is empty or exceeds {cap // (1024 * 1024)} MiB.")
         return raw, mime
     finally:
         if owns_client:
             await client.aclose()
 
 
-async def send_text(access_token, phone_number_id, graph_version, recipient, body, *, client=None):
+async def download_image(media_id, access_token, graph_version, *, client=None):
+    """Fetch one inbound photo: resolve the media URL, then download the bytes.
+
+    Meta serves media in two hops and requires the access token on both. Only
+    the documented image types and a 5 MiB cap are accepted.
+    """
+    return await _download_media(
+        media_id,
+        access_token,
+        graph_version,
+        allowed_types=IMAGE_MEDIA_TYPES,
+        label="image",
+        cap=MAX_MEDIA_BYTES,
+        client=client,
+    )
+
+
+async def download_audio(media_id, access_token, graph_version, *, client=None):
+    """Fetch one inbound voice note: resolve the media URL, then download the bytes.
+
+    Meta serves media in two hops and requires the access token on both. Only
+    the documented audio types and a 5 MiB cap are accepted.
+    """
+    return await _download_media(
+        media_id,
+        access_token,
+        graph_version,
+        allowed_types=AUDIO_MEDIA_TYPES,
+        label="audio",
+        cap=MAX_MEDIA_BYTES,
+        client=client,
+    )
+
+
+async def _send(access_token, phone_number_id, graph_version, recipient, payload, *, client=None):
     if not access_token or not access_token.strip():
         raise MetaWhatsAppError("Meta WhatsApp Cloud API is not configured.", 503)
     phone_number_id = validate_meta_id(phone_number_id, "META_PHONE_NUMBER_ID")
@@ -229,13 +276,6 @@ async def send_text(access_token, phone_number_id, graph_version, recipient, bod
     if not _PHONE.fullmatch(recipient):
         raise MetaWhatsAppError("Invalid Meta WhatsApp recipient.", 500)
     url = f"https://graph.facebook.com/{graph_version}/{phone_number_id}/messages"
-    payload = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": recipient,
-        "type": "text",
-        "text": {"preview_url": False, "body": body},
-    }
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=5.0, follow_redirects=False)
     try:
@@ -261,6 +301,67 @@ async def send_text(access_token, phone_number_id, graph_version, recipient, bod
     return message_id
 
 
+async def send_text(access_token, phone_number_id, graph_version, recipient, body, *, client=None):
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient,
+        "type": "text",
+        "text": {"preview_url": False, "body": body},
+    }
+    return await _send(access_token, phone_number_id, graph_version, recipient, payload, client=client)
+
+
+async def send_audio_message(access_token, phone_number_id, graph_version, recipient, audio_id, *, client=None):
+    """Send a previously uploaded audio attachment (a Meta media ID) as a reply."""
+    if not isinstance(audio_id, str) or not _MEDIA_ID.fullmatch(audio_id):
+        raise MetaWhatsAppError("Invalid Meta WhatsApp audio media ID.", 500)
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient,
+        "type": "audio",
+        "audio": {"id": audio_id},
+    }
+    return await _send(access_token, phone_number_id, graph_version, recipient, payload, client=client)
+
+
+async def upload_audio(access_token, phone_number_id, graph_version, data, *, mime="audio/mpeg", client=None):
+    """Upload one audio attachment and return the Meta media ID used to send it."""
+    if not access_token or not access_token.strip():
+        raise MetaWhatsAppError("Meta WhatsApp Cloud API is not configured.", 503)
+    phone_number_id = validate_meta_id(phone_number_id, "META_PHONE_NUMBER_ID")
+    graph_version = validate_graph_version(graph_version)
+    if not data:
+        raise MetaWhatsAppError("Meta WhatsApp refuses an empty audio upload.", 400)
+    url = f"https://graph.facebook.com/{graph_version}/{phone_number_id}/media"
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=30.0, follow_redirects=False)
+    try:
+        try:
+            response = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                files={"file": (_AUDIO_FILENAMES.get(mime, "audio"), data, mime)},
+                data={"messaging_product": "whatsapp", "type": "audio"},
+            )
+        except httpx.HTTPError:
+            raise MetaWhatsAppError("Meta WhatsApp media upload could not be reached.")
+    finally:
+        if owns_client:
+            await client.aclose()
+    if response.status_code != 200:
+        status = 429 if response.status_code == 429 else 502
+        raise MetaWhatsAppError(f"Meta WhatsApp rejected the media upload (HTTP {response.status_code}).", status)
+    try:
+        media_id = response.json()["id"]
+    except (ValueError, KeyError, TypeError):
+        raise MetaWhatsAppError("Meta WhatsApp returned an invalid media upload response.")
+    if not isinstance(media_id, str) or not _MEDIA_ID.fullmatch(media_id):
+        raise MetaWhatsAppError("Meta WhatsApp returned an invalid media ID.")
+    return media_id
+
+
 def draft_reply(draft):
     reference = f"Draf {draft['id'][:8]} v{draft['version']}"
     if draft["status"] == "needs_clarification":
@@ -268,3 +369,16 @@ def draft_reply(draft):
     names = {"cabai": "Cabai", "telur": "Telur", "beras": "Beras", "minyak": "Minyak", "bawang": "Bawang"}
     lines = [f"{names.get(item['ingredient_id'], 'Item')} {item['quantity']} {item['unit']}: Rp{item['line_total_idr']:,}".replace(",", ".") for item in draft["items"]]
     return f"{reference}\n" + "\n".join(lines) + f"\nTotal Rp{draft['total_idr']:,}. Balas YA hanya jika detail benar dan barang sudah diterima; BATAL untuk menolak. Status pembayaran tidak diketahui.".replace(",", ".")
+
+
+def weekly_summary_reply(summary, days=7):
+    """Format the weekly ledger summary as a short Indonesian WhatsApp reply."""
+    total = f"Rp{summary['total_spend_idr']:,}".replace(",", ".")
+    parts = [f"Ringkasan {days} hari: {summary['purchase_count']} pembelian, total {total}."]
+    top = summary.get("top_item")
+    if top:
+        parts.append(f"Terbanyak: {top['name']} {top['quantity']} {top['unit']}.")
+    spike = summary.get("biggest_price_spike")
+    if spike:
+        parts.append(f"Lonjakan harga terbesar: {spike['name']} +{spike['change_percent'].replace('.', ',')}%.")
+    return " ".join(parts)

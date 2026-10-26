@@ -20,6 +20,14 @@ Optional environment variables:
     META_PHONE_NUMBER_ID Enable the Meta WhatsApp Cloud API transport.
     META_GRAPH_API_VERSION
                          Pinned Graph version; defaults to v23.0.
+    STEPFUN_API_KEY      Enables invoice-photo vision, voice-note ASR and the
+                         TTS voice reply; without it photos and voice notes get
+                         the safe text reply and "ringkas" replies with text.
+    STEPFUN_VISION_MODEL
+    STEPFUN_ASR_MODEL
+    STEPFUN_TTS_MODEL
+    STEPFUN_TTS_VOICE    StepFun model/voice overrides; service defaults apply.
+    STEPFUN_BASE_URL     StepFun API base; defaults to api.stepfun.com/v1.
 """
 
 import os
@@ -41,4 +49,10 @@ app = create_app(
     meta_waba_id=os.environ.get("META_WABA_ID"),
     meta_phone_number_id=os.environ.get("META_PHONE_NUMBER_ID"),
     meta_graph_api_version=os.environ.get("META_GRAPH_API_VERSION", "v23.0"),
+    vision_api_key=os.environ.get("STEPFUN_API_KEY"),
+    vision_model=os.environ.get("STEPFUN_VISION_MODEL"),
+    vision_base_url=os.environ.get("STEPFUN_BASE_URL"),
+    asr_model=os.environ.get("STEPFUN_ASR_MODEL"),
+    tts_model=os.environ.get("STEPFUN_TTS_MODEL"),
+    tts_voice=os.environ.get("STEPFUN_TTS_VOICE"),
 )
