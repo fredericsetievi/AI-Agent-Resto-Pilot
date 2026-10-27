@@ -84,7 +84,7 @@ def test_overview_delta_splits_today_from_yesterday(client):
 
 def test_draft_provenance_reflects_intake_channel(client):
     manual = client.post("/v1/intake", headers=headers(), json={"text": "beli cabai 3 kg 150rb"}).json()["data"]
-    simulated = client.post("/v1/whatsapp/simulate", headers=headers(), json={"sender": "demo-owner", "text": "beli telur 2 kg 60000"}).json()["data"]["draft"]
+    simulated = client.post("/v1/whatsapp/simulate", headers=headers(), json={"sender": "628123456789", "text": "beli telur 2 kg 60000"}).json()["data"]["draft"]
     drafts = {draft["id"]: draft for draft in overview(client)["drafts"]}
     assert "source" not in drafts[manual["id"]]
     assert drafts[simulated["id"]]["source"]["kind"] == "simulator"
@@ -176,13 +176,15 @@ def test_stale_version_blocks_edit_and_approval(client):
 
 
 def test_admin_can_review_but_not_edit_or_decide_drafts(admin_client):
-    draft = pending(admin_client)
+    state = admin_client.get("/v1/admin/restaurants/demo-resto/overview").json()["data"]
+    draft = next(row for row in state["drafts"] if row["status"] == "pending_approval")
     assert admin_client.post("/v1/intake", headers=headers(), json={"text": "Cabai 2 kg 100rb"}).status_code == 403
     assert admin_client.patch(f"/v1/drafts/{draft['id']}", headers=headers(), json=edit_payload(draft)).status_code == 403
     assert decision(admin_client, draft).status_code == 403
     assert decision(admin_client, draft, approve=False).status_code == 403
     # The read-only admin view still sees the untouched queue.
-    assert len(overview(admin_client)["drafts"]) == 1
+    detail = admin_client.get("/v1/admin/restaurants/demo-resto").json()["data"]
+    assert detail["pending_drafts"] == 1
 
 
 def test_unauthenticated_requests_are_rejected(app):
