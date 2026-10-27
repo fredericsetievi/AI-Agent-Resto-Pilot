@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints
 from starlette.exceptions import HTTPException
@@ -36,6 +36,7 @@ from .audio import (
     validate_tts_model,
 )
 from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
+from .pg_store import PostgresStore
 from .extraction import extract_purchase
 from .text_llm import StepFunTextError, extract_message
 from .vision import (
@@ -75,6 +76,12 @@ from .whatsapp import (
 logger = logging.getLogger("restopilot.api")
 
 SESSION_COOKIE = "restopilot_session"
+
+
+def _test_sqlite_fallback():
+    """Tests force the SQLite path by importing service.api under FORCE_SQLITE=1."""
+    import os
+    return os.environ.get("FORCE_SQLITE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
@@ -193,7 +200,18 @@ def create_app(
     text_llm_http_client=None,
 ):
     app = FastAPI(title="RestoPilot local demo", version="0.2.0", description="Session login with resto owner and platform admin roles, per-restaurant tenant isolation, WhatsApp allowlist, rules extraction and SQLite.")
-    store = Store(db_path, seed=seed)
+    # The authority is Supabase Postgres when configured; the local SQLite
+    # file stays as an offline/demo fallback so the app still boots without it.
+    store = None
+    if not _test_sqlite_fallback():
+        try:
+            store = PostgresStore(seed=seed)
+            storage = "supabase"
+        except RuntimeError:
+            store = None
+    if store is None:
+        store = Store(db_path, seed=seed)
+        storage = "sqlite"
 
     # Text words that mean "operate on the previous draft" never reach the
     # model: a bare "ya" must stay a zero-cost command.
@@ -335,9 +353,14 @@ def create_app(
 
     @app.get("/health/ready")
     def ready():
-        with store.transaction() as conn:
-            conn.execute("SELECT 1 FROM metadata").fetchone()
-        return {"data": {"status": "ready", "storage": "sqlite"}}
+        if storage == "supabase":
+            from .pg import pg_connection
+            with pg_connection() as conn:
+                conn.cursor().execute("SELECT 1 FROM app_metadata")
+        else:
+            with store.transaction() as conn:
+                conn.execute("SELECT 1 FROM metadata").fetchone()
+        return {"data": {"status": "ready", "storage": storage}}
 
     @app.get("/v1/overview")
     def overview(actor=Depends(current_user)):
@@ -643,11 +666,22 @@ def create_app(
         return {"ok": True}
 
     frontend = Path(__file__).resolve().parent.parent / "frontend"
+    landing = Path(__file__).resolve().parent.parent / "landing"
     if frontend.exists():
         app.mount("/assets", StaticFiles(directory=frontend), name="assets")
+    if landing.exists():
+        app.mount("/landing-assets", StaticFiles(directory=landing), name="landing-assets")
 
     @app.get("/", include_in_schema=False)
     def index():
+        if not (landing / "index.html").exists():
+            if not (frontend / "index.html").exists():
+                return error("frontend_unavailable", "Frontend is not installed.", 503)
+            return RedirectResponse("/app", status_code=307)
+        return FileResponse(landing / "index.html")
+
+    @app.get("/app", include_in_schema=False)
+    def app_page():
         if not (frontend / "index.html").exists():
             return error("frontend_unavailable", "Frontend is not installed.", 503)
         return FileResponse(frontend / "index.html")

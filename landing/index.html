@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#183f35">
+  <meta name="description" content="RestoPilot — a WhatsApp-first AI operations assistant for Indonesian small and medium restaurants. Keep your POS; RestoPilot handles the money-out.">
+  <title>RestoPilot · From purchase to peace of mind</title>
+  <link rel="stylesheet" href="/landing-assets/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav-bar">
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">r<span>·</span></span>RestoPilot</a>
+      <nav aria-label="Site navigation">
+        <a href="#problem">The problem</a>
+        <a href="#solution">The solution</a>
+        <a href="#agents">Agents</a>
+        <a href="#principles">Why it's safe</a>
+        <a href="/app">Sign in</a>
+      </nav>
+      <a class="button primary nav-cta" href="/app">Open the dashboard</a>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- ================= HERO ================= -->
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">FOR INDONESIAN SMALL &amp; MEDIUM RESTAURANTS</p>
+          <h1>Your kitchen, in&nbsp;view. Your money-out, on&nbsp;record.</h1>
+          <p class="lede">RestoPilot is a WhatsApp-first AI operations assistant. Text what you bought — <em>“beli cabai 3 kg 150rb”</em> — review the draft, approve it, and every purchase, stock movement and price is recorded. No spreadsheets, no new POS.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="/app">Open the dashboard</a>
+            <a class="button" href="#problem">Why we built it</a>
+          </div>
+          <p class="hero-note">AI proposes · A human decides · One transaction records.</p>
+        </div>
+        <div class="hero-demo" aria-hidden="true">
+          <div class="chat-shell">
+            <p class="chat-date">HARI INI · WHATSAPP</p>
+            <div class="chat-messages">
+              <div class="chat-message outbound"><div class="chat-bubble"><p>beli cabai 3 kg 150rb dari pasar pagi</p><small>08.12</small></div></div>
+              <div class="chat-message inbound"><div class="chat-bubble"><p>Draft pembelian siap:</p><p>Cabai · 3 kg · Rp150.000<br>Pemasok: Pasar Pagi</p><p>Balas <strong>YA</strong> untuk setujui, atau koreksi dulu.</p><small>08.12</small></div></div>
+              <div class="chat-message outbound"><div class="chat-bubble"><p>YA</p><small>08.14</small></div></div>
+              <div class="chat-message inbound"><div class="chat-bubble chat-recorded"><p>✔ Tercatat. Pembelian Rp150.000, stok cabai diperbarui.</p><small>08.14</small></div></div>
+            </div>
+          </div>
+          <div class="hero-price">
+            <p class="hero-price-label">PRICE EVIDENCE</p>
+            <p class="hero-price-value">Telur +16.3%</p>
+            <p class="hero-price-sub">vs. your 30-day average from your own approved purchases</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= PROBLEM ================= -->
+    <section class="section" id="problem">
+      <div class="container">
+        <p class="eyebrow">THE PROBLEM</p>
+        <h2 class="section-title">Small restaurants run on WhatsApp, paper and memory.</h2>
+        <p class="section-lede">Indonesia counts 5.28 million F&amp;B service businesses (BPS, 2024), yet most owners manage purchasing, stock and suppliers by hand — through invoices, WhatsApp chats, spreadsheets, or physical market visits. With no dedicated procurement team, records stay scattered and decisions go unrecorded.</p>
+        <div class="problem-grid">
+          <article class="problem-card">
+            <p class="problem-num">01</p>
+            <h3>Procurement, Inventory &amp; Supplier Management</h3>
+            <p>Owners struggle to track stock levels, detect supplier price changes, compare suppliers, and decide what and when to purchase. The result: overstocking, stockouts, and unnecessary costs — and when a price spikes, nothing proves when it started.</p>
+          </article>
+          <article class="problem-card">
+            <p class="problem-num">02</p>
+            <h3>Sales &amp; Menu Management</h3>
+            <p>Owners may have sales records but lack the time or technical skills to analyze them in Excel. They need simple answers — which menus sell best, where sales are declining, what ingredients cost, what's actually profitable — not another complex spreadsheet.</p>
+          </article>
+        </div>
+        <div class="problem-quote">
+          <p>“One owner we interviewed tracks daily totals in Excel — never per item, never per stock count. Not every purchase has a receipt. She prefers texting, and wants alerts when stock runs low and prices jump.”</p>
+          <small>From our field interviews with restaurant owners — the findings RestoPilot is built on.</small>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SOLUTION ================= -->
+    <section class="section section-green" id="solution">
+      <div class="container">
+        <p class="eyebrow eyebrow-light">THE SOLUTION</p>
+        <h2 class="section-title">Keep your POS. RestoPilot owns the money-out.</h2>
+        <p class="section-lede">POS systems and QRIS already own money-in — customer sales. RestoPilot captures the other half: <strong>what was bought, from whom, at what unit price, what stock remains, and who is owed.</strong> A WhatsApp AI agent plus a simple web dashboard, built for messy real-world inputs.</p>
+        <div class="solution-grid">
+          <article class="solution-card">
+            <span class="solution-icon" aria-hidden="true">◌</span>
+            <h3>WhatsApp-first intake</h3>
+            <p>Send purchase text, receipt photos, or voice notes — the way owners already communicate. Informal Indonesian is parsed into a structured draft: items, quantities, units, prices, supplier.</p>
+          </article>
+          <article class="solution-card">
+            <span class="solution-icon" aria-hidden="true">☑</span>
+            <h3>Approval before anything records</h3>
+            <p>Nothing posts without the owner. Review and correct the draft on WhatsApp or the dashboard, then approve with a correlated <strong>YA</strong>. Missing or ambiguous fields are never silently guessed.</p>
+          </article>
+          <article class="solution-card">
+            <span class="solution-icon" aria-hidden="true">▤</span>
+            <h3>One atomic transaction</h3>
+            <p>Approval records the purchase, the stock movement, and the audit trail in a single transaction. The dashboard, the WhatsApp summary and the activity log always report the same truth.</p>
+          </article>
+          <article class="solution-card">
+            <span class="solution-icon" aria-hidden="true">▦</span>
+            <h3>Dashboard truth &amp; price evidence</h3>
+            <p>Purchases, inventory estimates, pending approvals and activity in one view. Same-supplier 30-day price comparisons surface spikes — like the Telur +16.3% case — straight from your own approved history.</p>
+          </article>
+        </div>
+        <div class="loop-diagram" role="img" aria-label="The RestoPilot loop: messy input, editable draft, owner approval, recorded purchase, dashboard truth and price evidence">
+          <div class="loop-step"><span>1</span>Messy input<br><small>WhatsApp text · nota photo · voice note</small></div>
+          <div class="loop-arrow" aria-hidden="true">→</div>
+          <div class="loop-step"><span>2</span>Editable draft<br><small>structured, correctable, never guessed</small></div>
+          <div class="loop-arrow" aria-hidden="true">→</div>
+          <div class="loop-step loop-accent"><span>3</span>Owner approval<br><small>correlated “YA” — human decides</small></div>
+          <div class="loop-arrow" aria-hidden="true">→</div>
+          <div class="loop-step"><span>4</span>Recorded purchase<br><small>purchase + stock + audit, atomically</small></div>
+          <div class="loop-arrow" aria-hidden="true">→</div>
+          <div class="loop-step"><span>5</span>Dashboard truth<br><small>inventory estimate · price evidence</small></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= AGENTS / FEATURES ================= -->
+    <section class="section" id="agents">
+      <div class="container">
+        <p class="eyebrow">THE AGENTS</p>
+        <h2 class="section-title">Two agents, built for the daily grind.</h2>
+        <p class="section-lede">RestoPilot starts where the pain is greatest. Each agent follows the same discipline: parse the mess, propose a draft, wait for the owner, then record — and the math is always done by validated code, never by the model.</p>
+
+        <article class="agent-card">
+          <div class="agent-head">
+            <div>
+              <p class="agent-flag">FLAGSHIP</p>
+              <h3>1 · Procurement, Inventory &amp; Supplier Management Agent</h3>
+              <p class="agent-sub">Manage purchases, invoices, stock and reorder decisions — from conversational quick-log to price evidence.</p>
+            </div>
+          </div>
+          <p class="agent-flow">Invoice / conversational log <span aria-hidden="true">→</span> Purchase <span aria-hidden="true">→</span> Inventory <span aria-hidden="true">→</span> Reorder</p>
+          <ul class="agent-steps">
+            <li>Extract purchases from invoice photos or conversational quick-log</li>
+            <li>Create a purchase record for owner review and approval</li>
+            <li>Update inventory from every approved purchase</li>
+            <li>Detect low stock before it becomes a stockout</li>
+            <li>Calculate reorder quantities from your own consumption history</li>
+            <li>Compare historical prices per supplier</li>
+            <li>Generate purchase recommendations with evidence</li>
+            <li>Ask for owner confirmation before anything records</li>
+          </ul>
+        </article>
+
+        <article class="agent-card">
+          <div class="agent-head">
+            <div>
+              <p class="agent-flag agent-flag-plain">PLANNED</p>
+              <h3>2 · Sales &amp; Menu Management Agent</h3>
+              <p class="agent-sub">Analyze sales, menu performance, costs and trends — simple answers, not spreadsheets.</p>
+            </div>
+          </div>
+          <p class="agent-flow">Sales data <span aria-hidden="true">→</span> Trend analysis <span aria-hidden="true">→</span> Menu performance <span aria-hidden="true">→</span> Business insights</p>
+          <ul class="agent-steps">
+            <li>Import sales data from existing records</li>
+            <li>Analyze sales trends over time</li>
+            <li>Rank menu items by performance</li>
+            <li>Analyze menu profitability against ingredient costs</li>
+            <li>Detect unusual sales changes and flag them early</li>
+            <li>Extract keywords and sentiment, mapped to menu items or staff changes</li>
+            <li>Identify popular menu combinations</li>
+            <li>Recommend menu actions owners can actually take</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <!-- ================= PRINCIPLES ================= -->
+    <section class="section section-tint" id="principles">
+      <div class="container">
+        <p class="eyebrow">WHY IT'S SAFE</p>
+        <h2 class="section-title">Honest by design.</h2>
+        <p class="section-lede">RestoPilot handles financial records, so it is deliberately narrow and deliberately human-in-the-loop:</p>
+        <div class="principle-grid">
+          <div class="principle"><strong>AI proposes; code calculates; a human decides.</strong>Unit-price math, unit conversion, price comparison, stock ledger and approval workflow are deterministic code — never LLM-decided.</div>
+          <div class="principle"><strong>Approval is correlated, never generic.</strong>A “YA” approves only the action explicitly tied to that conversation — never an unrelated pending draft. Stale versions, duplicates and cross-tenant decisions are rejected.</div>
+          <div class="principle"><strong>Every restaurant is an isolated tenant.</strong>A WhatsApp number is linked to exactly one restaurant. A registered number's conversation is scoped to its own restaurant, always.</div>
+          <div class="principle"><strong>Honesty over impressive numbers.</strong>Stock is an estimate (no POS consumption data yet). A recorded purchase is not a recorded payment. Comparisons come only from your own approved history.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CTA ================= -->
+    <section class="section cta">
+      <div class="container cta-inner">
+        <h2>From purchase to peace of mind.</h2>
+        <p>Run the demo: send a purchase over WhatsApp, review the draft, approve it, and watch the dashboard record the truth.</p>
+        <a class="button primary" href="/app">Sign in to the demo <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span class="brand"><span class="brand-mark" aria-hidden="true">r<span>·</span></span>RestoPilot</span>
+      <p>AIID Capstone · DeepWisdom Atoms (agent-first track) + StepFun models track · Frederic Setievi, Muneeb Alvi, Annabel Leonardi</p>
+      <p class="footer-fine">Demo-grade authentication · Stock is an estimate · Nothing posts without your approval.</p>
+    </div>
+  </footer>
+</body>
+</html>

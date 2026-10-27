@@ -128,6 +128,45 @@ class DomainError(Exception):
         super().__init__(message)
 
 
+def normalize_items_for_catalog(items, catalog):
+    """Shared item normalization used by both the SQLite and Postgres stores."""
+    normalized, warnings = [], []
+    if not items:
+        warnings.append("Add at least one purchase item.")
+    for index, item in enumerate(items):
+        result = dict(normalize_item(dict(item)))
+        local_warnings = list(result.get("warnings", []))
+        # The ledger enforces its own invariants even if an extractor changes.
+        # An unmapped item that kept its raw name self-heals: the ingredient
+        # is auto-created from that name when the draft is approved.
+        ingredient = catalog["by_id"].get(result.get("ingredient_id"))
+        if not ingredient:
+            if not str(result.get("raw_name") or "").strip():
+                local_warnings.append("Select a known ingredient.")
+        try:
+            quantity = Decimal(str(result.get("canonical_quantity")))
+            if not quantity.is_finite() or quantity <= 0 or quantity > Decimal("1000000000"):
+                raise InvalidOperation
+            result["canonical_quantity"] = decimal_string(quantity)
+        except (InvalidOperation, ValueError, TypeError):
+            local_warnings.append("Enter a valid positive quantity.")
+            result["canonical_quantity"] = None
+        if ingredient and result.get("canonical_unit") != ingredient["unit"]:
+            local_warnings.append(f"Use a unit convertible to {ingredient['unit']} for this ingredient.")
+            result["canonical_quantity"] = None
+        amount = result.get("line_total_idr")
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0 or amount > 1_000_000_000_000:
+            local_warnings.append("Enter a valid positive whole-rupiah line total.")
+        if result.get("canonical_quantity") and isinstance(amount, int) and not isinstance(amount, bool) and amount > 0:
+            result["unit_price_idr"] = decimal_string(Decimal(amount) / Decimal(result["canonical_quantity"]))
+        else:
+            result["unit_price_idr"] = None
+        result["warnings"] = list(dict.fromkeys(local_warnings))
+        warnings.extend(f"Item {index + 1}: {warning}" for warning in result["warnings"])
+        normalized.append(result)
+    return normalized, list(dict.fromkeys(warnings))
+
+
 class Store:
     def __init__(self, path, seed=True):
         self.path = str(path)
@@ -283,41 +322,7 @@ class Store:
         conn.execute("INSERT INTO activity (id, event, message, created_at, restaurant_id) VALUES (?, ?, ?, ?, ?)", (uuid.uuid4().hex, event, message, now(), restaurant_id))
 
     def _normalize(self, items, catalog):
-        normalized, warnings = [], []
-        if not items:
-            warnings.append("Add at least one purchase item.")
-        for index, item in enumerate(items):
-            result = dict(normalize_item(dict(item)))
-            local_warnings = list(result.get("warnings", []))
-            # The ledger enforces its own invariants even if an extractor changes.
-            # An unmapped item that kept its raw name self-heals: the ingredient
-            # is auto-created from that name when the draft is approved.
-            ingredient = catalog["by_id"].get(result.get("ingredient_id"))
-            if not ingredient:
-                if not str(result.get("raw_name") or "").strip():
-                    local_warnings.append("Select a known ingredient.")
-            try:
-                quantity = Decimal(str(result.get("canonical_quantity")))
-                if not quantity.is_finite() or quantity <= 0 or quantity > Decimal("1000000000"):
-                    raise InvalidOperation
-                result["canonical_quantity"] = decimal_string(quantity)
-            except (InvalidOperation, ValueError, TypeError):
-                local_warnings.append("Enter a valid positive quantity.")
-                result["canonical_quantity"] = None
-            if ingredient and result.get("canonical_unit") != ingredient["unit"]:
-                local_warnings.append(f"Use a unit convertible to {ingredient['unit']} for this ingredient.")
-                result["canonical_quantity"] = None
-            amount = result.get("line_total_idr")
-            if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0 or amount > 1_000_000_000_000:
-                local_warnings.append("Enter a valid positive whole-rupiah line total.")
-            if result.get("canonical_quantity") and isinstance(amount, int) and not isinstance(amount, bool) and amount > 0:
-                result["unit_price_idr"] = decimal_string(Decimal(amount) / Decimal(result["canonical_quantity"]))
-            else:
-                result["unit_price_idr"] = None
-            result["warnings"] = list(dict.fromkeys(local_warnings))
-            warnings.extend(f"Item {index + 1}: {warning}" for warning in result["warnings"])
-            normalized.append(result)
-        return normalized, list(dict.fromkeys(warnings))
+        return normalize_items_for_catalog(items, catalog)
 
     def _comparison(self, conn, item, supplier, restaurant_id):
         comparison = {"status": "insufficient_history", "change_percent": None, "baseline_unit_price_idr": None, "baseline_purchase_id": None,

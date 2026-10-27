@@ -25,6 +25,18 @@ A first launch seeds the demo restaurant with its two logins, the WhatsApp numbe
 
 Use `--empty` with a new database path to omit sample purchases and stock. No reset command is provided.
 
+## Storage: Supabase Postgres (authority) with SQLite fallback
+
+When `SUPABASE_URL` and `SUPABASE_DB_PASSWORD` are set (see `.env.example`), everything — logins, sessions, restaurants, drafts, purchases, stock, WhatsApp threads — lives in your Supabase Postgres project, and `/health/ready` reports `"storage": "supabase"`. The schema lives in `supabase/migrations/` (`0003_authority_postgres.sql` creates the authority tables; run it in the Supabase SQL Editor if your project predates it).
+
+To copy an existing local SQLite file into Supabase once:
+
+```sh
+.venv/Scripts/python -m service.migrate_to_pg --db data/restopilot.sqlite3
+```
+
+The SQLite file is kept untouched. Without the password set, the app falls back to the local SQLite file so it still boots offline. Tests stay hermetic: they only touch Supabase when run with `TEST_PG=1` (see `tests/test_pg_store.py`).
+
 ## Login roles and multi-tenant isolation
 
 Every restaurant is a tenant with its own drafts, purchases, inventory, ingredient catalog, price baselines and activity. An owner only ever sees their own restaurant; the admin console can view any restaurant's dashboard but cannot log, edit, or approve purchases — those decisions stay with the owner.

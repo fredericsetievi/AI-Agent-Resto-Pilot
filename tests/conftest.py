@@ -1,8 +1,16 @@
 """Shared fixtures: keep the suite hermetic against a developer's local .env."""
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
 from service import supabase_db
+
+# The suite is hermetic: it always runs on the local SQLite store unless a
+# test module opts into the live cloud (tests/test_pg_store.py sets TEST_PG
+# and is skipped by default). FORCE_SQLITE makes create_app ignore a
+# developer's SUPABASE_DB_PASSWORD.
+os.environ.setdefault("FORCE_SQLITE", "1")
 from service.db import DEMO_NUMBERS, DEMO_USERS
 
 
