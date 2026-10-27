@@ -30,6 +30,9 @@ SUPPORTED_ENV_KEYS = {
     "STEPFUN_BASE_URL",
     "STEPFUN_TEXT_MODEL",
     "LLM_TEXT_EXTRACTION",
+    "AUDIO_ASR_BASE_URL",
+    "AUDIO_ASR_API_KEY",
+    "AUDIO_ASR_MODEL",
 }
 
 
@@ -81,6 +84,11 @@ def main():
     vision_api_key = setting("STEPFUN_API_KEY")
     text_llm_enabled = vision_api_key and (setting("LLM_TEXT_EXTRACTION") or "").strip().casefold() in {"1", "true", "yes", "on"}
     text_llm_model = setting("STEPFUN_TEXT_MODEL")
+    asr_api_key = setting("AUDIO_ASR_API_KEY")
+    asr_base_url = setting("AUDIO_ASR_BASE_URL")
+    asr_model_override = setting("AUDIO_ASR_MODEL")
+    custom_asr = bool(asr_api_key and asr_base_url)
+    asr_model_setting = (asr_model_override if custom_asr else None) or setting("STEPFUN_ASR_MODEL")
     print("RestoPilot demo: manual intake, WhatsApp simulator, rules extraction, SQLite, local demo identity.")
     print(f"Open http://127.0.0.1:{args.port} · Database: {args.db}")
     print("Meta WhatsApp Cloud API: configured" if meta_configured else "Meta WhatsApp Cloud API: disabled (see .env.example)")
@@ -89,6 +97,10 @@ def main():
         print(f"StepFun text rescue: enabled (model {text_llm_model or 'default'}; rules stay first)")
     else:
         print("StepFun text rescue: disabled (set STEPFUN_API_KEY and LLM_TEXT_EXTRACTION=1)")
+    if custom_asr:
+        print(f"Voice note ASR: custom provider {asr_base_url} (model {asr_model_override or 'default'})")
+    else:
+        print("Voice note ASR: StepFun (set AUDIO_ASR_BASE_URL/AUDIO_ASR_API_KEY/AUDIO_ASR_MODEL to override)")
     uvicorn.run(
         create_app(
             str(args.db),
@@ -97,7 +109,9 @@ def main():
             vision_api_key=vision_api_key,
             vision_model=setting("STEPFUN_VISION_MODEL"),
             vision_base_url=setting("STEPFUN_BASE_URL"),
-            asr_model=setting("STEPFUN_ASR_MODEL"),
+            asr_model=asr_model_setting,
+            asr_api_key=asr_api_key,
+            asr_base_url=asr_base_url,
             tts_model=setting("STEPFUN_TTS_MODEL"),
             tts_voice=setting("STEPFUN_TTS_VOICE"),
             text_llm_enabled=bool(text_llm_enabled),

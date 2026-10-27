@@ -72,6 +72,15 @@ from .whatsapp import (
 logger = logging.getLogger("restopilot.api")
 
 
+def effective_asr_config(asr_api_key, asr_base_url, vision_api_key, vision_base_url):
+    """Resolve the voice-note ASR provider: an explicit AUDIO_ASR_* override
+    (e.g. a multilingual speech service) wins; otherwise ASR shares the StepFun
+    account and base URL with vision, exactly as before."""
+    key = (asr_api_key or "").strip() or vision_api_key
+    base = validate_vision_base_url(asr_base_url) if asr_base_url else vision_base_url
+    return key, base
+
+
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
 Quantity = Annotated[str, StringConstraints(strip_whitespace=True, max_length=40)]
 Sender = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
@@ -149,6 +158,8 @@ def create_app(
     vision_base_url=None,
     vision_http_client=None,
     asr_model=None,
+    asr_api_key=None,
+    asr_base_url=None,
     tts_model=None,
     tts_voice=None,
     text_llm_enabled=False,
@@ -195,8 +206,11 @@ def create_app(
     meta_graph_api_version = validate_graph_version(meta_graph_api_version)
     vision_model = validate_vision_model(vision_model) if vision_model else VISION_DEFAULT_MODEL
     vision_base_url = validate_vision_base_url(vision_base_url) if vision_base_url else VISION_DEFAULT_BASE_URL
-    # ASR/TTS share the StepFun account: the vision key and base URL serve audio too.
+    # ASR may run on its own provider (AUDIO_ASR_*); without an override it
+    # shares the StepFun account and base URL with vision. TTS always stays on
+    # the StepFun account.
     asr_model = validate_asr_model(asr_model) if asr_model else DEFAULT_ASR_MODEL
+    asr_api_key, asr_base_url = effective_asr_config(asr_api_key, asr_base_url, vision_api_key, vision_base_url)
     tts_model = validate_tts_model(tts_model) if tts_model else DEFAULT_TTS_MODEL
     tts_voice = (tts_voice or DEFAULT_TTS_VOICE).strip() or DEFAULT_TTS_VOICE
 
@@ -461,9 +475,9 @@ def create_app(
                     payload["transcript"] = await transcribe_audio(
                         audio,
                         mime,
-                        api_key=vision_api_key,
+                        api_key=asr_api_key,
                         model=asr_model,
-                        base_url=vision_base_url,
+                        base_url=asr_base_url,
                         client=vision_http_client,
                     )
                     if payload["transcript"].strip():

@@ -170,3 +170,19 @@ def test_model_and_base_url_validation():
         validate_asr_model("two models")
     with pytest.raises(ValueError, match="STEPFUN_TTS_MODEL"):
         validate_tts_model("x" * 101)
+
+def test_effective_asr_config_prefers_the_explicit_provider_and_falls_back():
+    from service.api import effective_asr_config
+
+    # An explicit AUDIO_ASR_* provider wins over the shared StepFun account.
+    key, base = effective_asr_config(
+        "other-key", "https://llmapi.paratera.com/v1", "stepfun-key", "https://api.stepfun.com/v1",
+    )
+    assert (key, base) == ("other-key", "https://llmapi.paratera.com/v1")
+    # Whitespace-only overrides do not count as configured.
+    key, base = effective_asr_config("  ", "https://llmapi.paratera.com/v1", "stepfun-key", "https://api.stepfun.com/v1")
+    assert key == "stepfun-key" and base == "https://llmapi.paratera.com/v1"
+    # Without an override, ASR shares vision's StepFun account unchanged.
+    assert effective_asr_config(None, None, "stepfun-key", "https://api.stepfun.com/v1") == (
+        "stepfun-key", "https://api.stepfun.com/v1",
+    )
