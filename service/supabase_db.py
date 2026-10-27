@@ -56,16 +56,25 @@ def _item_uuid(purchase_id: str, index: int) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"restopilot:item:{purchase_id}:{index}"))
 
 
-def build_mirror_payloads(purchase: dict) -> dict:
+def tenant_uuid(restaurant_id: str) -> str:
+    """Deterministic cloud tenant UUID so repeated mirrors upsert one row."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"restopilot:{restaurant_id}"))
+
+
+def build_mirror_payloads(purchase: dict, restaurant: dict | None = None) -> dict:
     """Map a recorded purchase (service.db purchase body) onto the cloud schema.
 
     Pure function so tests can verify the mapping without any network access.
-    Uncertain extraction fields stay NULL; price_spike_pct is set only when the
-    recorded comparison evidence says "price_increase".
+    The restaurant record comes from the SQLite tenants table; it defaults to
+    the seeded demo restaurant. Uncertain extraction fields stay NULL;
+    price_spike_pct is set only when the recorded comparison evidence says
+    "price_increase".
     """
+    restaurant = restaurant or dict(RESTAURANT)
+    tenant_id = tenant_uuid(restaurant["id"])
     invoice = {
         "id": str(uuid.UUID(purchase["id"])),
-        "restaurant_id": DEMO_RESTAURANT_ID,
+        "restaurant_id": tenant_id,
         "supplier_name": purchase.get("supplier"),
         "raw_image_url": None,
         "status": "approved",
@@ -93,23 +102,23 @@ def build_mirror_payloads(purchase: dict) -> dict:
             if item.get("unit_price_idr"):
                 last_prices[key] = item["unit_price_idr"]
     inventory = [
-        {"restaurant_id": DEMO_RESTAURANT_ID, "item_name": name, "unit": unit,
+        {"restaurant_id": tenant_id, "item_name": name, "unit": unit,
          "_quantity": str(delta), "last_unit_price": last_prices.get((name, unit))}
         for (name, unit), delta in stock_deltas.items()
     ]
     return {
-        "restaurant": {"id": DEMO_RESTAURANT_ID, "name": RESTAURANT["name"], "phone_number": f"demo+{RESTAURANT['id']}"},
+        "restaurant": {"id": tenant_id, "name": restaurant["name"], "phone_number": f"demo+{restaurant['id']}"},
         "invoice": invoice,
         "items": items,
         "inventory": inventory,
     }
 
 
-def mirror_purchase(purchase: dict) -> dict:
+def mirror_purchase(purchase: dict, restaurant: dict | None = None) -> dict:
     """Best-effort cloud mirror of one recorded purchase. Never raises."""
     try:
         sb = get_supabase_client()
-        payloads = build_mirror_payloads(purchase)
+        payloads = build_mirror_payloads(purchase, restaurant)
         sb.table("restaurants").upsert(payloads["restaurant"]).execute()
         # Exactly-once stock effect: if the invoice was already mirrored, stop here.
         # Note: maybe_single().execute() returns None itself when zero rows match.

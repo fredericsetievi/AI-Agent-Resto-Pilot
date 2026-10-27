@@ -1,7 +1,10 @@
-"""Local demonstration API; demo identity is not authentication.
+"""Local demonstration API with session login and tenant isolation.
 
 Loopback-only by default. Pass public_demo=True for a hosted demo deployment
-(e.g. Vercel); the boundary relaxes, but the demo still has no authentication.
+(e.g. Vercel). Users log in as a resto owner (their own restaurant's
+dashboard) or platform admin (restaurant management, read-only dashboards).
+WhatsApp numbers are linked to exactly one restaurant; unregistered numbers
+are rejected before any processing.
 """
 
 from __future__ import annotations
@@ -14,9 +17,9 @@ from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, Header, Query, Request
+from fastapi import Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints
 from starlette.exceptions import HTTPException
@@ -71,14 +74,48 @@ from .whatsapp import (
 
 logger = logging.getLogger("restopilot.api")
 
+SESSION_COOKIE = "restopilot_session"
+
 
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
 Quantity = Annotated[str, StringConstraints(strip_whitespace=True, max_length=40)]
 Sender = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+Username = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=50)]
+Password = Annotated[str, StringConstraints(min_length=8, max_length=200)]
+PhoneNumber = Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"[1-9]\d{6,14}")]
 
 
 class Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class Login(Model):
+    username: Username
+    password: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
+class RestaurantCreate(Model):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    address: ShortText | None = None
+    owner_username: Username
+    owner_password: Password
+    whatsapp_number: PhoneNumber | None = None
+    number_label: ShortText | None = None
+
+
+class RestaurantUpdate(Model):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)] | None = None
+    address: ShortText | None = None
+
+
+class WhatsAppNumber(Model):
+    whatsapp_number: PhoneNumber
+    label: ShortText | None = None
+
+
+class OwnerPasswordReset(Model):
+    username: Username
+    new_password: Password
 
 
 class Intake(Model):

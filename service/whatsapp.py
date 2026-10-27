@@ -385,6 +385,12 @@ HELP_REPLY = (
     "Halo! 👋 Saya asisten pembelian RestoPilot. Kirim catatan belanja seperti "
     "'Beli bawang 2 kg 80 rb', foto nota, atau voice note — saya langsung buatkan drafnya."
 )
+# Sent to WhatsApp numbers the admin has not linked to any restaurant. Nothing
+# about the sender's message is processed, stored as a draft, or answered.
+UNREGISTERED_REPLY = (
+    "Maaf, nomor WhatsApp ini belum terdaftar di RestoPilot. "
+    "Minta admin untuk menghubungkan nomor Anda dengan resto terlebih dahulu."
+)
 _PAYMENT_PAID = re.compile(r"(?i)\b(?:lunas(?:\s+semua)?|paid|sudah\s+(?:bayar|dibayar)|udah\s+(?:bayar|lunas))\b")
 _PAYMENT_UNPAID = re.compile(r"(?i)\b(?:belum\s+(?:lunas|bayar|dibayar)|utang|hutang|kredit|credit)\b")
 _PAYMENT_SKIP = ("skip", "lewati")
@@ -398,8 +404,8 @@ def _idr(value):
     return f"{int(value):,}".replace(",", ".")
 
 
-def _item_line(item):
-    name = CATALOG_NAMES.get(item.get("ingredient_id"))
+def _item_line(item, catalog_names=None):
+    name = (catalog_names or CATALOG_NAMES).get(item.get("ingredient_id"))
     if not name:
         raw = str(item.get("raw_name") or "").strip()
         name = raw.capitalize() if raw else "Item"
@@ -438,8 +444,10 @@ def _draft_total(draft):
     return sum(parts) if parts else None
 
 
-def draft_reply(draft):
-    lines = [_item_line(item) for item in draft["items"]]
+def draft_reply(draft, catalog_names=None):
+    # Display names come from the caller's restaurant catalog when given, so
+    # custom bahan from other restaurants can never surface in a reply.
+    lines = [_item_line(item, catalog_names) for item in draft["items"]]
     unmapped = [
         str(item["raw_name"]).strip()
         for item in draft["items"]
@@ -456,7 +464,7 @@ def draft_reply(draft):
         typed = str(item.get("matched_from") or "").strip()
         if not typed:
             continue
-        name = CATALOG_NAMES.get(item.get("ingredient_id")) or str(item.get("raw_name") or "").strip()
+        name = (catalog_names or CATALOG_NAMES).get(item.get("ingredient_id")) or str(item.get("raw_name") or "").strip()
         fuzzy.append(f"'{typed}' saya baca sebagai {name}")
     if fuzzy:
         notes.append("Catatan: " + "; ".join(fuzzy) + " — tolong dicek dulu, benar kan? Balas YA jika sudah benar.")
