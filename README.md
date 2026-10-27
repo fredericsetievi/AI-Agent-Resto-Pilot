@@ -31,7 +31,7 @@ Use `--empty` with a new database path to omit sample purchases and stock. No re
 
 Automated fake-provider contract tests cover the Meta request, response, webhook and signature behavior. A real Meta development-mode end-to-end test passed on October 20, 2026: inbound purchase text created a draft, the draft reply reached `delivered`, `YA` recorded exactly one purchase and inventory movement, and the confirmation reply reached `delivered`.
 
-The live integration requires a WABA ID, Phone Number ID, access token, App Secret, verify token, public HTTPS origin and a subscribed `messages` webhook field. See [Meta WhatsApp setup and test guide](docs/META_WHATSAPP.md). The app binds to loopback; only the exact Meta webhook route is exposed to the configured public host. A quick-tunnel URL is temporary and must be replaced in both `.env` and Meta after it changes. The demo identity is not production authentication, and stock is an estimate.
+The live integration requires a WABA ID, Phone Number ID, access token, App Secret, verify token, public HTTPS origin and a subscribed `messages` webhook field. See [Meta WhatsApp setup and test guide](docs/META_WHATSAPP.md) and the [tunnel guide](docs/TUNNEL.md) for a stable webhook URL. The app binds to loopback; only the exact Meta webhook route is exposed to the configured public host. A quick-tunnel URL is temporary and must be replaced in both `.env` and Meta after it changes. The demo identity is not production authentication, and stock is an estimate.
 
 ## Rehearsal and project notes
 
