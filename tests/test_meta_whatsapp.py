@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from service.api import create_app
+from service.db import RESTAURANT
 from service.whatsapp import (
     LIVE,
     WEBHOOK_PATH,
@@ -126,6 +127,8 @@ def app(tmp_path, provider):
 @pytest.fixture
 def client(app):
     with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as value:
+        from conftest import login_owner
+        login_owner(value)
         yield value
 
 
@@ -306,6 +309,8 @@ def test_inbound_photo_is_read_by_vision_and_becomes_a_draft(tmp_path, provider)
     ])
     app = photo_app(tmp_path, provider, vision)
     with TestClient(app, base_url="http://127.0.0.1") as client:
+        from conftest import login_owner
+        login_owner(client)
         body = payload(event_id="wamid.photo", message_type="image")
         body["entry"][0]["changes"][0]["value"]["messages"][0]["image"]["link"] = "http://127.0.0.1/private-secret"
         assert webhook(client, body).status_code == 200
@@ -335,11 +340,13 @@ def test_inbound_photo_with_a_failed_read_falls_back_to_the_safe_reply(tmp_path,
     ])
     app = photo_app(tmp_path, provider, vision)
     with TestClient(app, base_url="http://127.0.0.1") as client:
-        before = app.state.store.overview()["drafts"]
+        from conftest import login_owner
+        login_owner(client)
+        before = app.state.store.overview(RESTAURANT["id"])["drafts"]
         assert webhook(client, payload(event_id="wamid.photo-fail", message_type="image")).status_code == 200
         replies = [call for call in provider.calls if call["method"] == "POST"]
         assert "Foto/audio belum diproses" in replies[0]["json"]["text"]["body"]
-        assert app.state.store.overview()["drafts"] == before
+        assert app.state.store.overview(RESTAURANT["id"])["drafts"] == before
 
 
 def test_send_failure_is_safe_and_retryable(client, provider):
@@ -432,6 +439,8 @@ def test_inbound_voice_note_is_transcribed_and_becomes_a_draft(tmp_path, provide
     ])
     app = voice_app(tmp_path, provider, vision)
     with TestClient(app, base_url="http://127.0.0.1") as client:
+        from conftest import login_owner
+        login_owner(client)
         assert webhook(client, payload(event_id="wamid.voice", message_type="audio")).status_code == 200
 
         assert provider.calls[0]["url"].startswith(f"https://graph.facebook.com/{GRAPH_VERSION}/provider-media-id")
@@ -466,6 +475,8 @@ def test_voice_retry_with_a_different_transcript_does_not_conflict(tmp_path, pro
     ])
     app = voice_app(tmp_path, provider, vision)
     with TestClient(app, base_url="http://127.0.0.1") as client:
+        from conftest import login_owner
+        login_owner(client)
         event_id = "wamid.voice-retry"
         first = webhook(client, payload(event_id=event_id, message_type="voice"))
         retry = webhook(client, payload(event_id=event_id, message_type="voice"))
@@ -487,7 +498,7 @@ def test_ingest_fingerprint_ignores_a_flapping_transcript(app):
     # the stored response, never raise event_conflict (500 -> retry loop).
     retry = store.whatsapp_ingest("key-two", {**base, "transcript": "A completely different ASR flap"}, transport=LIVE, channel=channel)
     assert retry == first
-    assert store.overview()["metrics"]["recorded_purchases"] == 2
+    assert store.overview(RESTAURANT["id"])["metrics"]["recorded_purchases"] == 2
 
 
 def test_voice_note_without_asr_gets_the_safe_reply(client, provider, app):
@@ -507,26 +518,32 @@ def test_voice_note_with_a_failed_transcription_falls_back_to_the_safe_reply(tmp
     ])
     app = voice_app(tmp_path, provider, vision)
     with TestClient(app, base_url="http://127.0.0.1") as client:
-        before = app.state.store.overview()["drafts"]
+        from conftest import login_owner
+        login_owner(client)
+        before = app.state.store.overview(RESTAURANT["id"])["drafts"]
         assert webhook(client, payload(event_id="wamid.voice-fail", message_type="audio")).status_code == 200
         replies = [call for call in provider.calls if call["method"] == "POST"]
         assert "Foto/audio belum diproses" in replies[0]["json"]["text"]["body"]
-        assert app.state.store.overview()["drafts"] == before
+        assert app.state.store.overview(RESTAURANT["id"])["drafts"] == before
 
 
 def test_ringkas_replies_with_the_zeroed_text_summary_without_tts(tmp_path, provider):
     app = summary_app(tmp_path, provider, seed=False)
     with TestClient(app, base_url="http://127.0.0.1") as client:
+        from conftest import login_owner
+        login_owner(client)
         assert webhook(client, payload("Ringkas", event_id="wamid.ringkas-empty")).status_code == 200
         assert provider.calls[0]["url"] == MESSAGES_URL
         assert provider.calls[0]["json"]["text"]["body"] == "Ringkasan 7 hari: 0 pembelian, total Rp0."
-        assert app.state.store.overview()["drafts"] == []
+        assert app.state.store.overview(RESTAURANT["id"])["drafts"] == []
 
 
 def test_ringkas_summarizes_purchases_and_the_biggest_price_spike(tmp_path, provider):
     app = summary_app(tmp_path, provider)
     with TestClient(app, base_url="http://127.0.0.1") as client:
-        draft = next(row for row in app.state.store.overview()["drafts"] if row["status"] == "pending_approval")
+        from conftest import login_owner
+        login_owner(client)
+        draft = next(row for row in app.state.store.overview(RESTAURANT["id"])["drafts"] if row["status"] == "pending_approval")
         approved = client.post(
             f"/v1/drafts/{draft['id']}/decision",
             headers={"Idempotency-Key": uuid4().hex},
@@ -542,6 +559,8 @@ def test_ringkas_summarizes_purchases_and_the_biggest_price_spike(tmp_path, prov
 def test_ringkas_leaves_an_active_draft_untouched(tmp_path, provider):
     app = summary_app(tmp_path, provider, seed=False)
     with TestClient(app, base_url="http://127.0.0.1") as client:
+        from conftest import login_owner
+        login_owner(client)
         assert webhook(client, payload("Cabai 3 kg 150rb", event_id="wamid.draft")).status_code == 200
         assert webhook(client, payload("ringkas", event_id="wamid.ringkas-draft")).status_code == 200
         assert provider.calls[1]["json"]["text"]["body"].startswith("Ringkasan 7 hari: 0 pembelian")
@@ -557,6 +576,8 @@ def test_ringkas_replies_with_a_voice_note_when_tts_and_upload_succeed(tmp_path,
     provider.responses.append(FakeResponse(body={"id": "synthetic-audio-media-id"}))
     app = summary_app(tmp_path, provider, vision=vision)
     with TestClient(app, base_url="http://127.0.0.1") as client:
+        from conftest import login_owner
+        login_owner(client)
         assert webhook(client, payload("ringkas", event_id="wamid.ringkas-voice")).status_code == 200
 
         tts = vision.calls[0]
@@ -585,6 +606,8 @@ def test_ringkas_falls_back_to_the_text_summary_when_tts_fails(tmp_path, provide
     vision.responses.append(FakeResponse(status_code=500, body={"error": {"message": "synthesis down"}}))
     app = summary_app(tmp_path, provider, vision=vision)
     with TestClient(app, base_url="http://127.0.0.1") as client:
+        from conftest import login_owner
+        login_owner(client)
         assert webhook(client, payload("Ringkas", event_id="wamid.ringkas-tts-fail")).status_code == 200
         assert [call["url"] for call in provider.calls] == [MESSAGES_URL]
         assert provider.calls[0]["json"]["text"]["body"].startswith("Ringkasan 7 hari: 2 pembelian")
@@ -597,6 +620,8 @@ def test_ringkas_falls_back_to_the_text_summary_when_upload_fails(tmp_path, prov
     provider.responses.append(FakeResponse(status_code=500, body={"error": {"message": "upload rejected"}}))
     app = summary_app(tmp_path, provider, vision=vision)
     with TestClient(app, base_url="http://127.0.0.1") as client:
+        from conftest import login_owner
+        login_owner(client)
         assert webhook(client, payload("Ringkas", event_id="wamid.ringkas-upload-fail")).status_code == 200
         assert [call["url"] for call in provider.calls] == [MEDIA_URL, MESSAGES_URL]
         assert provider.calls[1]["json"]["type"] == "text"

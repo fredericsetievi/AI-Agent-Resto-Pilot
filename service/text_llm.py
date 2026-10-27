@@ -55,6 +55,13 @@ use null. Never compute a price from a per-unit price, and never split one \
 stated total across items: when one total covers several items, use null.
 """ % MAX_ITEMS
 
+# Defense in depth for the tenant guard: every caller passes its restaurant
+# name so the prompt carries the rule. The store scopes data on its side too;
+# the model never sees another restaurant's content in the first place.
+TENANT_RULE = ("Tenant rule: this message belongs to the restaurant \"%s\". "
+               "Extract only purchases for that restaurant; never include, infer, "
+               "or reveal anything about any other restaurant or business.\n\n")
+
 
 class StepFunTextError(Exception):
     """Safe provider error that never includes the API key or response bodies."""
@@ -167,7 +174,7 @@ def clean_extraction(data):
     return {"items": items, "warnings": warnings}
 
 
-async def extract_message(text, *, api_key, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL, client=None):
+async def extract_message(text, *, api_key, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL, client=None, restaurant=None):
     """Send one free-form message to StepFun and return proposed draft items."""
     if not api_key or not api_key.strip():
         raise StepFunTextError("StepFun text rescue is not configured.", 503)
@@ -175,12 +182,13 @@ async def extract_message(text, *, api_key, model=DEFAULT_MODEL, base_url=DEFAUL
         raise StepFunTextError("The message text is empty.", 400)
     base_url = validate_base_url(base_url)
     model = validate_model(model)
+    prompt = PROMPT + (TENANT_RULE % restaurant.strip() if restaurant and restaurant.strip() else "")
     payload = {
         "model": model,
         "temperature": 0,
         "messages": [{
             "role": "user",
-            "content": PROMPT + "\nMessage to read:\n" + text.strip()[:MAX_MESSAGE_CHARS],
+            "content": prompt + "\nMessage to read:\n" + text.strip()[:MAX_MESSAGE_CHARS],
         }],
     }
     owns_client = client is None

@@ -67,6 +67,13 @@ Rules, in priority order:
    an item is kitchen-related, keep it in "items".
 """ % MAX_ITEMS
 
+# Defense in depth for the tenant guard: every caller passes its restaurant
+# name so the prompt carries the rule. The store scopes data on its side too;
+# the model never sees another restaurant's content in the first place.
+TENANT_RULE = ("Tenant rule: this invoice belongs to the restaurant \"%s\". "
+               "Read only what is on this photo; never include, infer, or reveal "
+               "anything about any other restaurant or business.\n\n")
+
 
 class StepFunVisionError(Exception):
     """Safe provider error that never includes the API key or response bodies."""
@@ -217,20 +224,21 @@ def clean_extraction(data):
     return {"supplier": supplier, "items": items, "warnings": warnings}
 
 
-async def extract_invoice(image, *, media_type="image/jpeg", api_key, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL, client=None):
+async def extract_invoice(image, *, media_type="image/jpeg", api_key, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL, client=None, restaurant=None):
     """Send one invoice photo to StepFun and return proposed draft items."""
     if not api_key or not api_key.strip():
         raise StepFunVisionError("StepFun vision is not configured.", 503)
     base_url = validate_base_url(base_url)
     model = validate_model(model)
     image = _check_image(image, media_type)
+    prompt = PROMPT + (TENANT_RULE % restaurant.strip() if restaurant and restaurant.strip() else "")
     payload = {
         "model": model,
         "temperature": 0,
         "messages": [{
             "role": "user",
             "content": [
-                {"type": "text", "text": PROMPT},
+                {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{base64.b64encode(image).decode('ascii')}"}},
             ],
         }],

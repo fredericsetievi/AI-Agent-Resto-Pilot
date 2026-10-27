@@ -81,8 +81,9 @@ def main():
     vision_api_key = setting("STEPFUN_API_KEY")
     text_llm_enabled = vision_api_key and (setting("LLM_TEXT_EXTRACTION") or "").strip().casefold() in {"1", "true", "yes", "on"}
     text_llm_model = setting("STEPFUN_TEXT_MODEL")
-    print("RestoPilot demo: manual intake, WhatsApp simulator, rules extraction, SQLite, local demo identity.")
+    print("RestoPilot demo: session login, resto owner and admin roles, rules extraction, SQLite.")
     print(f"Open http://127.0.0.1:{args.port} · Database: {args.db}")
+    print("Demo logins: admin / admin123 (platform admin) · owner / owner123 (Warung Bu Sari)")
     print("Meta WhatsApp Cloud API: configured" if meta_configured else "Meta WhatsApp Cloud API: disabled (see .env.example)")
     print("StepFun Vision: configured" if vision_api_key else "StepFun Vision: disabled (set STEPFUN_API_KEY)")
     if text_llm_enabled:

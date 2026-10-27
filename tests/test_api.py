@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import login_admin, login_owner
 from service.api import create_app
 
 
@@ -20,14 +21,19 @@ def app(tmp_path):
 @pytest.fixture
 def client(app):
     with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as value:
+        login_owner(value)
         yield value
 
 
-def headers(key=None, role=None):
-    value = {"Idempotency-Key": key or uuid4().hex}
-    if role:
-        value["X-Demo-Role"] = role
-    return value
+@pytest.fixture
+def admin_client(app):
+    with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as value:
+        login_admin(value)
+        yield value
+
+
+def headers(key=None):
+    return {"Idempotency-Key": key or uuid4().hex}
 
 
 def overview(client):
@@ -40,8 +46,8 @@ def pending(client):
     return next(draft for draft in overview(client)["drafts"] if draft["status"] == "pending_approval")
 
 
-def decision(client, draft, *, approve=True, received=True, key=None, role=None, version=None):
-    return client.post(f"/v1/drafts/{draft['id']}/decision", headers=headers(key, role), json={
+def decision(client, draft, *, approve=True, received=True, key=None, version=None):
+    return client.post(f"/v1/drafts/{draft['id']}/decision", headers=headers(key), json={
         "expected_version": version or draft["version"], "decision": "approve" if approve else "reject", "received": received,
     })
 
@@ -56,7 +62,7 @@ def edit_payload(draft, **changes):
 
 def test_seed_comparison_and_overview(client):
     state = overview(client)
-    assert state["mode"] == {"transport": "manual", "extraction": "rules", "storage": "sqlite", "identity": "demo"}
+    assert state["mode"] == {"transport": "manual", "extraction": "rules", "storage": "sqlite", "identity": "session"}
     assert state["metrics"] == {"purchases_today_idr": 0, "purchases_yesterday_idr": 0, "pending_approvals": 1, "low_stock_count": 8, "recorded_purchases": 2}
     draft = pending(client)
     comparison = draft["items"][0]["comparison"]
@@ -169,15 +175,21 @@ def test_stale_version_blocks_edit_and_approval(client):
     assert len(overview(client)["purchases"]) == 2
 
 
-def test_staff_cannot_edit_approve_or_reject(client):
-    draft = pending(client)
-    assert client.get("/v1/overview", headers={"X-Demo-Role": "staff"}).status_code == 200
-    assert client.post("/v1/intake", headers=headers(role="staff"), json={"text": "Cabai 2 kg 100rb"}).status_code == 201
-    assert client.patch(f"/v1/drafts/{draft['id']}", headers=headers(role="staff"), json=edit_payload(draft)).status_code == 403
-    assert decision(client, draft, role="staff").status_code == 403
-    assert decision(client, draft, role="staff", approve=False).status_code == 403
-    assert client.get("/v1/overview", headers={"X-Demo-Role": "admin"}).status_code == 403
-    assert len(overview(client)["purchases"]) == 2
+def test_admin_can_review_but_not_edit_or_decide_drafts(admin_client):
+    draft = pending(admin_client)
+    assert admin_client.post("/v1/intake", headers=headers(), json={"text": "Cabai 2 kg 100rb"}).status_code == 403
+    assert admin_client.patch(f"/v1/drafts/{draft['id']}", headers=headers(), json=edit_payload(draft)).status_code == 403
+    assert decision(admin_client, draft).status_code == 403
+    assert decision(admin_client, draft, approve=False).status_code == 403
+    # The read-only admin view still sees the untouched queue.
+    assert len(overview(admin_client)["drafts"]) == 1
+
+
+def test_unauthenticated_requests_are_rejected(app):
+    with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as anon:
+        assert anon.get("/v1/overview").status_code == 401
+        assert anon.post("/v1/intake", headers=headers(), json={"text": "Cabai 2 kg 100rb"}).status_code == 401
+        assert anon.post("/v1/whatsapp/simulate", headers=headers(), json={"text": "ya", "sender": "x"}).status_code == 401
 
 
 def test_idempotency_replays_exact_response_and_rejects_key_reuse(client):
@@ -240,10 +252,12 @@ def test_restart_preserves_approval_and_idempotency(tmp_path):
     path = tmp_path / "restart.sqlite3"
     app1 = create_app(path)
     with TestClient(app1, base_url="http://127.0.0.1") as client1:
+        login_owner(client1)
         draft, key = pending(client1), uuid4().hex
         response = decision(client1, draft, key=key)
         before = overview(client1)
     with TestClient(create_app(path), base_url="http://127.0.0.1") as client2:
+        login_owner(client2)
         assert overview(client2) == before
         assert decision(client2, draft, key=key).json() == response.json()
 
@@ -269,6 +283,7 @@ def test_error_envelope_validation_and_local_browser_boundary(client):
 def test_public_demo_mode_allows_hosted_boundary(tmp_path):
     app = create_app(tmp_path / "public.sqlite3", public_demo=True)
     with TestClient(app, base_url="https://restopilot.vercel.app", raise_server_exceptions=False) as client:
+        login_owner(client)
         assert client.get("/health/live").status_code == 200
         assert client.get("/v1/overview").status_code == 200
         assert client.get("/v1/overview", headers={"Origin": "https://restopilot.vercel.app"}).status_code == 200

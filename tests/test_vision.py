@@ -158,6 +158,8 @@ def provider():
 def client(provider, tmp_path):
     app = create_app(tmp_path / "vision.sqlite3", vision_api_key="synthetic-stepfun-key", vision_http_client=provider)
     with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as value:
+        from conftest import login_owner
+        login_owner(value)
         yield value
 
 
@@ -168,6 +170,8 @@ def headers():
 def test_image_intake_is_disabled_without_a_key(tmp_path):
     app = create_app(tmp_path / "demo.sqlite3")
     with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as value:
+        from conftest import login_owner
+        login_owner(value)
         response = value.post("/v1/intake/image", headers=headers(), json=image_body())
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "vision_not_configured"

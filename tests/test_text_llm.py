@@ -59,7 +59,10 @@ def rescue_app(tmp_path, fake_client, **kwargs):
         text_llm_http_client=fake_client,
         **kwargs,
     )
-    return TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    client = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    from conftest import login_owner
+    login_owner(client)
+    return client
 
 
 def intake(client, text):
@@ -206,6 +209,8 @@ def test_intake_without_the_flag_never_calls_the_model(tmp_path):
     fake = FakeTextClient()
     app = create_app(tmp_path / "demo.sqlite3", vision_api_key="synthetic-stepfun-key")
     client = TestClient(app, base_url="http://127.0.0.1")
+    from conftest import login_owner
+    login_owner(client)
 
     draft = intake(client, FLEXIBLE).json()["data"]
     assert draft["status"] == "needs_clarification"
@@ -221,7 +226,7 @@ def test_simulate_rescues_free_form_text_but_not_commands(tmp_path):
         return client.post(
             "/v1/whatsapp/simulate",
             headers={"Idempotency-Key": uuid4().hex},
-            json={"sender": "demo-owner", "text": text},
+            json={"sender": "628123456789", "text": text},
         ).json()["data"]
 
     result = simulate("tadi saya beli bawang 2 kilo harganya 80 ribu ya")

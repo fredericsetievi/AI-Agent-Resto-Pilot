@@ -35,7 +35,7 @@ from .audio import (
     validate_asr_model,
     validate_tts_model,
 )
-from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, Store, SUMMARY_COMMANDS
+from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
 from .extraction import extract_purchase
 from .text_llm import StepFunTextError, extract_message
 from .vision import (
@@ -192,20 +192,21 @@ def create_app(
     text_llm_model=None,
     text_llm_http_client=None,
 ):
-    app = FastAPI(title="RestoPilot local demo", version="0.1.0", description="Manual intake, rules extraction and SQLite. Synthetic demo identity; not production authentication.")
+    app = FastAPI(title="RestoPilot local demo", version="0.2.0", description="Session login with resto owner and platform admin roles, per-restaurant tenant isolation, WhatsApp allowlist, rules extraction and SQLite.")
     store = Store(db_path, seed=seed)
 
     # Text words that mean "operate on the previous draft" never reach the
     # model: a bare "ya" must stay a zero-cost command.
     _text_command_words = APPROVE_COMMANDS | REJECT_COMMANDS | set(SUMMARY_COMMANDS) | {"skip", "lewati"}
 
-    async def extract_text(text):
+    async def extract_text(text, restaurant_name=None):
         """Rules first; the model only rescues lines the parser could not read.
 
         With LLM_TEXT_EXTRACTION enabled, a rules result that carries warnings
         (missing fields, ambiguous clauses) gets one model attempt; a model
         error or an empty model answer keeps the rules result, so behavior
-        with the feature off is unchanged.
+        with the feature off is unchanged. The restaurant name rides along so
+        the model prompt carries the tenant rule as defense in depth.
         """
         extracted = extract_purchase(text)
         if not text_llm_enabled or not vision_api_key or not extracted["warnings"]:
@@ -215,6 +216,7 @@ def create_app(
         try:
             rescued = await extract_message(
                 text,
+                restaurant=restaurant_name,
                 api_key=vision_api_key,
                 model=text_llm_model,
                 base_url=vision_base_url,
@@ -281,20 +283,51 @@ def create_app(
     async def unexpected_error(request, exc):
         return error("internal_error", "The operation could not be completed. Refresh and retry using the same idempotency key.", 500)
 
-    def identity(x_demo_role: str | None = Header(default=None)):
-        if x_demo_role not in (None, "owner", "staff"):
-            raise DomainError("invalid_demo_role", "Demo role must be owner or staff.", 403)
-        return {"id": "demo-owner" if x_demo_role != "staff" else "demo-staff", "role": x_demo_role or "owner", "restaurant_id": "demo-resto"}
+    def current_user(request: Request):
+        """Session-cookie authentication; replaces the old demo identity header."""
+        token = request.cookies.get(SESSION_COOKIE)
+        user = store.session_user(token) if token else None
+        if not user:
+            raise DomainError("unauthorized", "Log in to continue.", 401)
+        return user
 
-    def owner(actor=Depends(identity)):
+    def owner_actor(actor=Depends(current_user)):
         if actor["role"] != "owner":
-            raise DomainError("owner_required", "Only the demo owner may edit or decide purchase drafts.", 403)
+            raise DomainError("owner_required", "Only a restaurant owner may edit or decide purchase drafts.", 403)
+        return actor
+
+    def admin_actor(actor=Depends(current_user)):
+        if actor["role"] != "admin":
+            raise DomainError("admin_required", "Only the platform admin may manage restaurants.", 403)
         return actor
 
     def key(idempotency_key: str | None = Header(default=None)):
         if not idempotency_key or len(idempotency_key) > 200 or not idempotency_key.strip() or any(ord(char) < 33 or ord(char) > 126 for char in idempotency_key):
             raise DomainError("idempotency_key_required", "Provide a printable Idempotency-Key header (1–200 characters).", 400)
         return idempotency_key
+
+    @app.post("/v1/auth/login")
+    def login(body: Login, response: Response):
+        user = store.verify_login(body.username, body.password)
+        token = store.create_session(user["id"])
+        response.set_cookie(
+            SESSION_COOKIE, token,
+            max_age=int(SESSION_TTL.total_seconds()),
+            httponly=True, samesite="lax", path="/",
+        )
+        return {"data": user}
+
+    @app.post("/v1/auth/logout")
+    def logout(request: Request, response: Response):
+        token = request.cookies.get(SESSION_COOKIE)
+        if token:
+            store.delete_session(token)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return {"data": {"ok": True}}
+
+    @app.get("/v1/auth/me")
+    def me(actor=Depends(current_user)):
+        return {"data": actor}
 
     @app.get("/health/live")
     def live():
@@ -307,20 +340,20 @@ def create_app(
         return {"data": {"status": "ready", "storage": "sqlite"}}
 
     @app.get("/v1/overview")
-    def overview(actor=Depends(identity)):
-        return {"data": store.overview()}
+    def overview(actor=Depends(current_user)):
+        return {"data": store.overview(actor["restaurant_id"])}
 
     @app.get("/v1/drafts/{draft_id}")
-    def draft(draft_id: str, actor=Depends(identity)):
-        return {"data": store.get_draft(draft_id)}
+    def draft(draft_id: str, actor=Depends(current_user)):
+        return {"data": store.get_draft(draft_id, actor["restaurant_id"])}
 
     @app.post("/v1/intake", status_code=201)
-    async def intake(body: Intake, idempotency_key=Depends(key), actor=Depends(identity)):
-        extracted = await extract_text(body.text)
-        return {"data": await run_in_threadpool(store.intake, idempotency_key, body.model_dump(), extracted)}
+    async def intake(body: Intake, idempotency_key=Depends(key), actor=Depends(owner_actor)):
+        extracted = await extract_text(body.text, actor["restaurant_name"])
+        return {"data": await run_in_threadpool(store.intake, idempotency_key, body.model_dump(), extracted, actor["restaurant_id"])}
 
     @app.post("/v1/intake/image", status_code=201)
-    async def intake_image(body: ImageIntake, idempotency_key=Depends(key), actor=Depends(identity)):
+    async def intake_image(body: ImageIntake, idempotency_key=Depends(key), actor=Depends(owner_actor)):
         if not vision_api_key:
             raise DomainError("vision_not_configured", "Set STEPFUN_API_KEY before reading invoice photos.", 503)
         try:
@@ -328,6 +361,7 @@ def create_app(
             extracted = await extract_invoice(
                 photo,
                 media_type=body.media_type,
+                restaurant=actor["restaurant_name"],
                 api_key=vision_api_key,
                 model=vision_model,
                 base_url=vision_base_url,
@@ -345,26 +379,31 @@ def create_app(
             body.supplier or extracted["supplier"],
             extracted["items"],
             extracted["warnings"],
+            actor["restaurant_id"],
         )}
 
     @app.patch("/v1/drafts/{draft_id}")
-    def edit(draft_id: str, body: Edit, actor=Depends(owner), idempotency_key=Depends(key)):
-        return {"data": store.edit(draft_id, idempotency_key, body.model_dump())}
+    def edit(draft_id: str, body: Edit, actor=Depends(owner_actor), idempotency_key=Depends(key)):
+        return {"data": store.edit(draft_id, idempotency_key, body.model_dump(), actor["restaurant_id"])}
 
     @app.post("/v1/drafts/{draft_id}/decision")
-    def decide(draft_id: str, body: Decision, actor=Depends(owner), idempotency_key=Depends(key)):
-        return {"data": store.decision(draft_id, idempotency_key, body.model_dump())}
+    def decide(draft_id: str, body: Decision, actor=Depends(owner_actor), idempotency_key=Depends(key)):
+        return {"data": store.decision(draft_id, idempotency_key, body.model_dump(), actor["restaurant_id"])}
 
     @app.get("/v1/whatsapp/messages")
-    def whatsapp_messages(sender: Annotated[str, Query(min_length=1, max_length=200)] = "demo", actor=Depends(owner)):
-        return {"data": store.whatsapp_messages(sender)}
+    def whatsapp_messages(sender: Annotated[str, Query(min_length=1, max_length=200)] = "demo", actor=Depends(owner_actor)):
+        return {"data": store.whatsapp_messages(sender, actor["restaurant_id"])}
 
     @app.post("/v1/whatsapp/simulate")
-    async def simulate_whatsapp(body: SimulatedMessage, actor=Depends(owner), idempotency_key=Depends(key)):
+    async def simulate_whatsapp(body: SimulatedMessage, actor=Depends(owner_actor), idempotency_key=Depends(key)):
+        # The simulator may only speak as one of this restaurant's linked numbers.
+        sender_restaurant = store.restaurant_for_sender(body.sender)
+        if not sender_restaurant or sender_restaurant["id"] != actor["restaurant_id"]:
+            raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
         payload = body.model_dump()
         if payload["text"].strip():
-            payload["extracted_text"] = await extract_text(payload["text"])
-        return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload)}
+            payload["extracted_text"] = await extract_text(payload["text"], actor["restaurant_name"])
+        return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"])}
 
     def csv_attachment(rows, filename):
         buffer = io.StringIO()
@@ -376,8 +415,8 @@ def create_app(
         )
 
     @app.get("/v1/export/purchases.csv")
-    def export_purchases_csv(actor=Depends(identity)):
-        rows = store.export_purchases()
+    def export_purchases_csv(actor=Depends(owner_actor)):
+        rows = store.export_purchases(actor["restaurant_id"])
         return csv_attachment(
             [["id", "created_at", "supplier", "item_count", "total_idr", "status"]] + [
                 [row["id"], row["created_at"], row["supplier"], row["item_count"], row["total_idr"], row["status"]]
@@ -387,8 +426,8 @@ def create_app(
         )
 
     @app.get("/v1/export/stock.csv")
-    def export_stock_csv(actor=Depends(identity)):
-        rows = store.export_stock()
+    def export_stock_csv(actor=Depends(owner_actor)):
+        rows = store.export_stock(actor["restaurant_id"])
         return csv_attachment(
             [["item", "unit", "current_stock", "last_unit_price"]] + [
                 [row["item"], row["unit"], row["current_stock"], row["last_unit_price"]]
@@ -396,6 +435,40 @@ def create_app(
             ],
             "stock.csv",
         )
+
+    # ---- Admin console: restaurants, their logins and WhatsApp numbers ----
+
+    @app.get("/v1/admin/restaurants")
+    def admin_restaurants(actor=Depends(admin_actor)):
+        return {"data": {"restaurants": store.list_restaurants(), "rejected_attempts": store.recent_rejections()}}
+
+    @app.post("/v1/admin/restaurants", status_code=201)
+    def admin_create_restaurant(body: RestaurantCreate, actor=Depends(admin_actor), idempotency_key=Depends(key)):
+        return {"data": store.create_restaurant(idempotency_key, body.model_dump())}
+
+    @app.get("/v1/admin/restaurants/{restaurant_id}")
+    def admin_restaurant_detail(restaurant_id: str, actor=Depends(admin_actor)):
+        return {"data": store.restaurant_detail(restaurant_id)}
+
+    @app.patch("/v1/admin/restaurants/{restaurant_id}")
+    def admin_update_restaurant(restaurant_id: str, body: RestaurantUpdate, actor=Depends(admin_actor), idempotency_key=Depends(key)):
+        return {"data": store.update_restaurant(restaurant_id, idempotency_key, body.model_dump())}
+
+    @app.get("/v1/admin/restaurants/{restaurant_id}/overview")
+    def admin_restaurant_overview(restaurant_id: str, actor=Depends(admin_actor)):
+        return {"data": store.overview(restaurant_id)}
+
+    @app.post("/v1/admin/restaurants/{restaurant_id}/numbers")
+    def admin_add_number(restaurant_id: str, body: WhatsAppNumber, actor=Depends(admin_actor), idempotency_key=Depends(key)):
+        return {"data": store.add_whatsapp_number(restaurant_id, idempotency_key, body.model_dump())}
+
+    @app.delete("/v1/admin/restaurants/{restaurant_id}/numbers/{phone}")
+    def admin_remove_number(restaurant_id: str, phone: str, actor=Depends(admin_actor), idempotency_key=Depends(key)):
+        return {"data": store.remove_whatsapp_number(restaurant_id, phone, idempotency_key)}
+
+    @app.post("/v1/admin/restaurants/{restaurant_id}/reset-owner-password")
+    def admin_reset_owner_password(restaurant_id: str, body: OwnerPasswordReset, actor=Depends(admin_actor), idempotency_key=Depends(key)):
+        return {"data": store.reset_owner_password(restaurant_id, idempotency_key, body.model_dump())}
 
     @app.get(WEBHOOK_PATH)
     async def verify_meta_whatsapp(request: Request):
@@ -463,7 +536,11 @@ def create_app(
         for message in messages:
             event_id = message["event_id"]
             payload = {key: message[key] for key in ("sender", "text", "event_id", "num_media")}
-            if message.get("media_kind") == "image" and vision_api_key:
+            # The allowlist is checked before any media download or model call:
+            # unregistered numbers cost nothing to process and learn nothing.
+            sender_restaurant = await run_in_threadpool(store.restaurant_for_sender, message["sender"])
+            restaurant_id = sender_restaurant["id"] if sender_restaurant else None
+            if message.get("media_kind") == "image" and vision_api_key and sender_restaurant:
                 # A photo is read before the draft is created so the owner gets
                 # the same review-and-confirm flow as typed text.
                 try:
@@ -476,6 +553,7 @@ def create_app(
                     payload["extracted"] = await extract_invoice(
                         photo,
                         media_type=media_type,
+                        restaurant=sender_restaurant["name"],
                         api_key=vision_api_key,
                         model=vision_model,
                         base_url=vision_base_url,
@@ -485,7 +563,7 @@ def create_app(
                 except (MetaWhatsAppError, StepFunVisionError) as exc:
                     # A failed read falls back to the safe media reply; no draft.
                     logger.warning("WhatsApp photo intake failed: %s", exc)
-            elif message.get("media_kind") == "audio" and vision_api_key:
+            elif message.get("media_kind") == "audio" and vision_api_key and sender_restaurant:
                 # A voice note is transcribed and then parsed like typed text;
                 # a failed read falls back to the safe media reply; no draft.
                 try:
@@ -504,13 +582,13 @@ def create_app(
                         client=vision_http_client,
                     )
                     if payload["transcript"].strip():
-                        payload["extracted_text"] = await extract_text(payload["transcript"])
+                        payload["extracted_text"] = await extract_text(payload["transcript"], sender_restaurant["name"])
                 except (MetaWhatsAppError, StepFunAudioError) as exc:
                     logger.warning("WhatsApp voice intake failed: %s", exc)
-            elif not message.get("media_kind") and payload["text"].strip():
+            elif not message.get("media_kind") and payload["text"].strip() and sender_restaurant:
                 # Plain text gets the same rules-then-model rescue so free-form
                 # sentences reach the draft flow; commands skip the model.
-                payload["extracted_text"] = await extract_text(payload["text"])
+                payload["extracted_text"] = await extract_text(payload["text"], sender_restaurant["name"])
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),
@@ -518,6 +596,7 @@ def create_app(
                 transport=LIVE,
                 channel=LIVE + ":" + meta_phone_number_id,
                 outbound_status=OUTBOUND_PENDING,
+                restaurant_id=restaurant_id,
             )
             outbound = result["messages"][-1]
             claimed = await run_in_threadpool(
