@@ -123,6 +123,15 @@ def test_clean_extraction_keeps_unstated_values_empty():
     assert len(result["warnings"]) == 3
 
 
+def test_clean_extraction_keeps_new_ingredients_approvable():
+    # Like the rules parser: an unknown name is not a warning. The draft line
+    # shows the raw name and approval adds it to the catalog.
+    result = clean_extraction({"items": [{"raw_name": "terasi", "quantity": "1", "unit": "kg", "line_total_idr": 49000}]})
+    item = result["items"][0]
+    assert item["ingredient_id"] is None and item["raw_name"] == "terasi"
+    assert result["warnings"] == []
+
+
 def test_clean_extraction_passes_an_unknown_unit_through_untouched():
     # Like the vision path: an unsupported package is kept as written so the
     # owner picks a catalog pack; the module never invents a conversion.
@@ -223,3 +232,28 @@ def test_simulate_rescues_free_form_text_but_not_commands(tmp_path):
     command = simulate("ya")
     assert command["result"]["action"] == "approved"
     assert len(fake.calls) == 1
+
+
+def test_rescued_new_ingredient_approves_and_creates_catalog_entry(tmp_path):
+    fake = FakeTextClient()
+    fake.responses.append(completion({"items": [{"raw_name": "terasi", "quantity": "1", "unit": "kg", "line_total_idr": 49000}]}))
+    client = rescue_app(tmp_path, fake)
+
+    draft = intake(client, FLEXIBLE).json()["data"]
+    assert draft["status"] == "pending_approval"
+    assert draft["items"][0]["ingredient_id"] is None
+    assert draft["items"][0]["raw_name"] == "terasi"
+    assert draft["warnings"] == []
+
+    decision = client.post(
+        f"/v1/drafts/{draft['id']}/decision",
+        headers={"Idempotency-Key": uuid4().hex},
+        json={"expected_version": draft["version"], "decision": "approve", "received": True},
+    )
+    assert decision.status_code == 200, decision.text
+    data = decision.json()["data"]
+    assert data["status"] == "recorded"
+    assert data["new_ingredients"] == ["Terasi"]
+
+    inventory = client.get("/v1/overview").json()["data"]["inventory"]
+    assert any(row["ingredient_id"] == "terasi" and str(row["quantity"]) == "1" for row in inventory)

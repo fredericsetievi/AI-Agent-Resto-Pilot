@@ -151,8 +151,10 @@ def clean_extraction(data):
             warnings.append(f"{label}: unit is missing or unsupported.")
         if total is None:
             warnings.append(f"{label}: line total is missing or unclear; type it in.")
-        if ingredient_id is None:
-            warnings.append(f"{label}: unknown ingredient '{raw_name}'; select a catalog item manually.")
+        # An unknown ingredient is not a warning, matching the rules parser:
+        # the raw name stays on the draft line, the owner sees exactly what
+        # will be recorded, and approval adds it to the catalog
+        # (service.db._resolve_new_ingredients) with a "bahan baru" audit note.
         items.append({
             "ingredient_id": ingredient_id,
             "raw_name": raw_name,

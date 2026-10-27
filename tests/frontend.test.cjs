@@ -135,3 +135,33 @@ test('review warnings are deduplicated and capped at four visible details',()=>{
   assert.ok(!html.includes('Fifth warning'));
   assert.ok(html.includes('Review the fields above for the remaining details.'));
 });
+
+test('ingredient combo resolves catalog matches and keeps typed new names',()=>{
+  const h=harness();
+  h.run(`state.data={ingredients:[{id:'cabai',name:'Cabai merah'},{ingredient_id:'kecap_manis',name:'Kecap manis'}]};`);
+  const matched=h.run(`resolveIngredient('cabai merah','old')`);
+  assert.equal(matched.ingredient_id,'cabai');
+  assert.equal(matched.raw_name,'Cabai merah');
+  const custom=h.run(`resolveIngredient('KECAP manis','old')`);
+  assert.equal(custom.ingredient_id,'kecap_manis');
+  assert.equal(custom.raw_name,'Kecap manis');
+  const created=h.run(`resolveIngredient('  Terasi  ','old')`);
+  assert.equal(created.ingredient_id,null);
+  assert.equal(created.raw_name,'Terasi');
+  const empty=h.run(`resolveIngredient('','original raw')`);
+  assert.equal(empty.ingredient_id,null);
+  assert.equal(empty.raw_name,'original raw');
+});
+
+test('review editor prefills mapped names and leaves new rows blank',()=>{
+  const h=harness();
+  h.run(`state.data={ingredients:[{id:'cabai',name:'Cabai merah'}]};state.draft={version:1,status:'needs_clarification',items:[{ingredient_id:'cabai',raw_name:'cabai',quantity:'3',unit:'kg',line_total_idr:150000},{ingredient_id:null,raw_name:'terasi',quantity:'1',unit:'kg',line_total_idr:49000},{ingredient_id:null,raw_name:'',quantity:null,unit:null,line_total_idr:null}],supplier:null,source_text:'demo',warnings:[]};renderReview()`);
+  const html=h.element('#review-content').innerHTML;
+  assert.ok(html.includes('value="Cabai merah"'));
+  assert.ok(html.includes('value="terasi"'));
+  assert.ok(html.includes('name="ingredient_query"'));
+  assert.ok(html.includes('list="ingredient-options"'));
+  assert.ok(html.includes('datalist id="ingredient-options"'));
+  assert.ok(!html.includes('<select'));
+  assert.ok(!html.includes('value="Unmatched item"'));
+});
