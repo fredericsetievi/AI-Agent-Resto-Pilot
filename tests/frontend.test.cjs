@@ -13,7 +13,8 @@ function harness({fetchImpl=()=>new Promise(()=>{}),hash='#overview'}={}) {
   }
   const context=vm.createContext({console,Intl,Date,Number,String,Object,AbortController,TypeError,Map,Promise,crypto,setTimeout,clearTimeout,setInterval:()=>{},location:{hash},window:{addEventListener(){}},document:{hidden:false,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement:()=>element('new-element')},fetch:fetchImpl});
   // Omit boot calls; no network request or timer is required by these tests.
-  const source=fs.readFileSync('frontend/app.js','utf8').replace('navigate();refresh();','');
+  // Omit boot: the real app boots via boot() (auth check) which no test needs implicitly.
+  const source=fs.readFileSync('frontend/app.js','utf8').replace('boot();','');
   vm.runInContext(source,context);
   return {context,element,run:code=>vm.runInContext(code,context)};
 }
@@ -105,6 +106,7 @@ test('simulator POST uses the requested body and reuses event id and idempotency
     return {ok:true,json:async()=>({data:{messages:[],draft:null,result:{action:'no_active_draft'}}})};
   };
   const h=harness({fetchImpl});
+  h.run(`WHATSAPP_SENDER='628123456789'`);
   await h.run(`sendWhatsAppMessage('beli cabai 3 kg 150rb')`);
   await h.run(`sendWhatsAppMessage('beli cabai 3 kg 150rb')`);
   assert.equal(requests.length,2);
@@ -114,16 +116,43 @@ test('simulator POST uses the requested body and reuses event id and idempotency
   const first=JSON.parse(requests[0].options.body), second=JSON.parse(requests[1].options.body);
   assert.deepEqual(first,second);
   assert.equal(first.text,'beli cabai 3 kg 150rb');
-  assert.equal(first.sender,'demo-owner');
+  assert.equal(first.sender,'628123456789');
   assert.match(first.event_id,/^[0-9a-f-]{36}$/i);
 });
 
-test('message history GET uses the fixed demo sender',async()=>{
+test('message history GET uses the restaurant-linked sender number',async()=>{
   let request;
-  const h=harness({fetchImpl:async(path,options)=>{request={path,options};return {ok:true,json:async()=>({data:{thread:{sender:'demo-owner'},messages:[]}})}}});
-  h.run(`state.data={restaurant:{name:'Demo kitchen'},drafts:[],metrics:{purchases_today_idr:0,low_stock_count:0,recorded_purchases:0},purchases:[],inventory:[],activity:[],ingredients:[]};location.hash='#whatsapp';navigate()`);
+  const h=harness({fetchImpl:async(path,options)=>{request={path,options};return {ok:true,json:async()=>({data:{thread:{sender:'628123456789'},messages:[]}})}}});
+  h.run(`WHATSAPP_SENDER='628123456789';state.user={display_name:'Bu Sari',role:'owner'};state.data={restaurant:{name:'Demo kitchen'},drafts:[],whatsapp_numbers:[{phone:'628123456789',label:'Bu Sari'}],metrics:{purchases_today_idr:0,low_stock_count:0,recorded_purchases:0},purchases:[],inventory:[],activity:[],ingredients:[]};location.hash='#whatsapp';navigate()`);
   await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(request.path,'/v1/whatsapp/messages?sender=demo-owner');
+  assert.equal(request.path,'/v1/whatsapp/messages?sender=628123456789');
+});
+
+test('unauthenticated boot shows the login page and hides the shell',async()=>{
+  let requested;
+  const h=harness({fetchImpl:async(path,options)=>{requested=path;return {ok:false,json:async()=>({error:{code:'unauthorized',message:'Log in to continue.'}})}}});
+  await h.run('boot()');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(requested,'/v1/auth/me');
+  assert.equal(h.element('#login-page').hidden,false);
+  assert.equal(h.element('#sidebar').hidden,true);
+  assert.equal(h.element('#shell').hidden,true);
+});
+
+test('admin login navigates to the restaurants console and hides owner nav',async()=>{
+  const requests=[];
+  const h=harness({fetchImpl:async(path,options)=>{
+    requests.push(path);
+    return {ok:true,json:async()=>({data:{id:'u1',username:'admin',display_name:'Platform admin',role:'admin',restaurant_id:null,restaurant_name:null}})};
+  }});
+  await h.run(`login({preventDefault(){},target:{reset(){}}})`);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(requests[0],'/v1/auth/login');
+  assert.equal(h.element('#nav-admin').hidden,false);
+  assert.equal(h.element('#nav-approvals').hidden,true);
+  assert.equal(h.element('#nav-whatsapp').hidden,true);
+  assert.equal(h.element('#sidebar').hidden,false);
+  assert.match(h.element('#page-title').textContent,/Restaurants/);
 });
 
 test('review warnings are deduplicated and capped at four visible details',()=>{

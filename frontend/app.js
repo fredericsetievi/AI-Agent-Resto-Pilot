@@ -8,8 +8,8 @@ const number = value => value == null ? '—' : new Intl.NumberFormat('id-ID', {
 const date = value => value ? new Intl.DateTimeFormat('en-GB', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jakarta'}).format(new Date(value)) + ' WIB' : '';
 const icons = {cabai:'🌶',telur:'🥚',beras:'🌾',minyak:'🫙',bawang:'🧅'};
 const titles = {overview:['Your kitchen, in view.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for.','Approved purchases and their source records. Payment status is separate.'],inventory:['Know what came in.','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],activity:['The story behind each record.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['A WhatsApp flow you can rehearse.','A persistent local conversation, from purchase note to owner decision.']};
-const WHATSAPP_SENDER = 'demo-owner';
-const state = {data:null, draft:null, page:'overview', dirty:false, busy:false, online:false, intakeKey:null, decisions:new Map(), mutationKeys:new Map(), refreshId:0, inlineDecisions:new Set(), whatsappMessages:[], whatsappDraft:null, whatsappResult:null, whatsappLoading:false, whatsappError:'', whatsappLoaded:false, whatsappPending:null, whatsappSending:false};
+let WHATSAPP_SENDER = '';
+const state = {user:null, data:null, adminList:null, adminSelected:null, adminRejected:[], adminForms:{}, draft:null, page:'overview', dirty:false, busy:false, online:false, intakeKey:null, decisions:new Map(), mutationKeys:new Map(), refreshId:0, inlineDecisions:new Set(), whatsappMessages:[], whatsappDraft:null, whatsappResult:null, whatsappLoading:false, whatsappError:'', whatsappLoaded:false, whatsappPending:null, whatsappSending:false, whatsappNumber:''};
 
 async function api(path, {method='GET', body, key, timeout=15000} = {}) {
   const controller = new AbortController();
@@ -17,13 +17,152 @@ async function api(path, {method='GET', body, key, timeout=15000} = {}) {
   try {
     const response = await fetch(path, {method, signal:controller.signal, headers:{Accept:'application/json', ...(body ? {'Content-Type':'application/json'} : {}), ...(key ? {'Idempotency-Key':key} : {})}, ...(body ? {body:JSON.stringify(body)} : {})});
     const payload = await response.json();
-    if (!response.ok) { const error = new Error(payload.error?.message || 'The request could not be completed.'); error.status=response.status; throw error; }
+    if (!response.ok) {
+      const error = new Error(payload.error?.message || 'The request could not be completed.'); error.status=response.status; throw error;
+      }
     return payload.data;
   } catch (error) {
     if (error.name === 'AbortError') throw new Error('The request timed out. Retry the same action to check its result safely.');
     if (error instanceof TypeError) throw new Error('Cannot reach the local server. Check it is running, then retry.');
     throw error;
   } finally { clearTimeout(timer); }
+}
+document.addEventListener('change',event => {
+  if(event.target.id==='whatsapp-sender'){WHATSAPP_SENDER=event.target.value;state.whatsappNumber=event.target.value;state.whatsappLoaded=false;state.whatsappMessages=[];state.whatsappDraft=null;state.whatsappResult=null;loadWhatsAppMessages();}
+});
+
+// ---- Admin console (role: admin) ----
+const ADMIN_TITLES = {admin:['Restaurants you manage.','Every restaurant, its owner login, and its linked WhatsApp numbers.'],'admin-detail':['Restaurant detail.','Information, WhatsApp numbers, and the read-only owner dashboard.']};
+async function loadAdminList() {
+  const payload=await api('/v1/admin/restaurants');
+  state.adminList=payload.restaurants || [];
+  state.adminRejected=payload.rejected_attempts || [];
+  if(!state.adminSelected && state.adminList.length)state.adminSelected=state.adminList[0].id;
+  renderAdmin();
+}
+function renderAdmin() {
+  const page=state.page, [title,subtitle]=ADMIN_TITLES[page] || ADMIN_TITLES.admin;
+  $('#page-title').textContent=title; $('#page-subtitle').textContent=subtitle; $('#breadcrumb').textContent=page==='admin'?'Restaurants':'Restaurant detail';
+  const navCount=$('#nav-count');if(navCount)navCount.textContent='—';
+  if(!state.adminList && !state.adminLoading){state.adminLoading=true;loadAdminList().finally(() => state.adminLoading=false);$('#content').innerHTML='<div class="loading-state"><span class="spinner"></span> Loading restaurants…</div>';return;}
+  if(page==='admin')renderAdminList(); else renderAdminDetail();
+}
+function renderAdminList() {
+  const rows=(state.adminList || []).map(resto => `<div class="admin-row ${resto.id===state.adminSelected?'selected':''}" data-open-resto="${e(resto.id)}" role="button" tabindex="0"><div><strong>${e(resto.name)}</strong><small>${resto.recorded_purchases} pembelian · ${resto.pending_drafts} draf menunggu · ${resto.whatsapp_numbers.length} nomor WA</small></div><span class="spacer"></span><span class="badge ${resto.pending_drafts?'amber':'green'}">${resto.pending_drafts?`${resto.pending_drafts} review`:'clear'}</span></div>`).join('');
+  const rejected=state.adminRejected.length?`<section class="panel" style="margin-top:18px"><div class="panel-heading"><div><h2>Percobaan nomor tak terdaftar</h2><p>Pesan WhatsApp dari nomor yang belum di-link — ditolak otomatis.</p></div></div><div class="admin-list">${state.adminRejected.map(row => `<div class="number-row"><code>${e((row.message || '').match(/sender (\d+)/)?.[1] || '?')}</code><span>${e(row.message || '')}</span><span class="spacer"></span><small>${e(date(row.created_at))}</small></div>`).join('')}</div></section>`:'';
+  $('#content').innerHTML=`<div class="admin-grid"><section class="panel"><div class="panel-heading"><div><h2>Daftar resto</h2></div><button class="button mini primary" data-admin-action="new-resto">+ Resto baru</button></div><div class="admin-list">${rows || '<div class="empty">Belum ada resto.</div>'}</div></section>${rejected}</div><dialog id="admin-dialog" class="review-dialog"><div id="admin-dialog-content"></div></dialog>`;
+}
+function renderAdminDetail() {
+  const resto=(state.adminList || []).find(item => item.id===state.adminSelected);
+  if(!resto){location.hash='#admin';return;}
+  const numbers=resto.whatsapp_numbers.map(number => `<div class="number-row"><code>${e(number.phone)}</code><span>${e(number.label || '')}</span><span class="spacer"></span><button class="text-button danger" data-admin-action="remove-number" data-phone="${e(number.phone)}">Hapus</button></div>`).join('');
+  const owners=resto.users.map(user => `<div class="number-row"><code>${e(user.username)}</code><span>${e(user.display_name)} · owner</span></div>`).join('');
+  $('#content').innerHTML=`<button class="text-button" data-back-to="admin">← Semua resto</button><div class="admin-grid"><div class="column"><section class="panel"><div class="panel-heading"><div><h2>${e(resto.name)}</h2><p>${e(resto.address || 'Alamat belum diisi')}</p></div><button class="button mini" data-admin-action="edit-resto">Ubah info</button></div><div class="admin-list kv-list"><div><span>ID</span><span class="inline-id">${e(resto.id)}</span></div><div><span>Dibuat</span><span>${e(date(resto.created_at))}</span></div><div><span>Pembelian tercatat</span><span>${resto.recorded_purchases}</span></div><div><span>Draf menunggu</span><span>${resto.pending_drafts}</span></div></div></section><section class="panel"><div class="panel-heading"><div><h2>Nomor WhatsApp terhubung</h2><p>Hanya nomor di sini yang dapat mengirim pesan dan diproses sistem.</p></div><button class="button mini primary" data-admin-action="add-number">+ Nomor</button></div><div class="admin-list">${numbers || '<div class="empty">Belum ada nomor terhubung.</div>'}</div></section><section class="panel"><div class="panel-heading"><div><h2>Login pemilik</h2></div><button class="button mini" data-admin-action="reset-password">Reset password</button></div><div class="admin-list">${owners}</div></section></div><div class="column"><div class="readonly-note"><span aria-hidden="true">👁</span> Dashboard di bawah hanya-baca. Persetujuan pembelian tetap keputusan pemilik resto.</div><section class="panel" id="admin-overview-panel"><div class="loading-state"><span class="spinner"></span> Loading dashboard…</div></section></div></div><dialog id="admin-dialog" class="review-dialog"><div id="admin-dialog-content"></div></dialog>`;
+  refreshAdminOverview();
+}
+let adminOverviewTicket=0;
+async function refreshAdminOverview() {
+  const panel=$('#admin-overview-panel');if(!panel)return;
+  const ticket=++adminOverviewTicket;
+  try {
+    const data=await api(`/v1/admin/restaurants/${encodeURIComponent(state.adminSelected)}/overview`);
+    if(ticket!==adminOverviewTicket || !$('#admin-overview-panel'))return;
+    const drafts=data.drafts || [];
+    panel.innerHTML=`<div class="panel-heading"><div><h2>Ringkasan ${e(data.restaurant.name)}</h2><p>Read-only view of the owner dashboard.</p></div></div><div class="draft-list" style="padding-top:6px">${drafts.filter(draft => ['pending_approval','needs_clarification'].includes(draft.status)).map(draftCardReadOnly).join('') || '<div class="empty"><strong>Tidak ada draf menunggu.</strong></div>'}</div><div class="panel-note">${data.metrics.recorded_purchases} pembelian tercatat · stok rendah: ${data.metrics.low_stock_count} · pembelian hari ini ${rupiah(data.metrics.purchases_today_idr)}</div>${inventoryRows((data.inventory || []).slice(0,5))}`;
+  } catch(error) { if($('#admin-overview-panel'))$('#admin-overview-panel').innerHTML=`<div class="empty">${e(error.message)}</div>`; }
+}
+function draftCardReadOnly(draft) {
+  const item=draft.items?.[0] || {};
+  return `<article class="draft-card"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">▤</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || 'Supplier unspecified')} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} items`)}</p></div><div class="price money">${rupiah(draft.total_idr)}</div></div><div class="draft-bottom">${badge(draft.status)}</div></article>`;
+}
+function adminDialogForm(title, fields, action) {
+  const dialog=$('#admin-dialog');if(!dialog)return;
+  $('#admin-dialog-content').innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">ADMIN</p><h2 id="admin-dialog-title">${e(title)}</h2></div><button class="icon-button" data-close="admin-dialog" aria-label="Tutup">×</button></div><form id="admin-form" data-admin-submit="${e(action)}">${fields}<div id="admin-form-error" class="notice error" role="alert" hidden></div><div class="dialog-footer"><span class="muted">Perubahan tercatat di activity resto.</span><button class="button primary" type="submit">Simpan</button></div></form>`;
+  if(!dialog.open)dialog.showModal();
+}
+async function adminAction(action, button) {
+  button = button || (event && event.target && event.target.closest('button'));
+  const resto=state.adminList && state.adminList.find(item => item.id===state.adminSelected);
+  try {
+    if(action==='new-resto')return adminDialogForm('Resto baru', `<label for="f-name">Nama resto</label><input id="f-name" maxlength="200" required><label for="f-address">Alamat <span class="muted">(opsional)</span></label><input id="f-address" maxlength="200"><div class="form-grid"><div><label for="f-user">Username owner</label><input id="f-user" maxlength="50" required></div><div><label for="f-pass">Password owner</label><input id="f-pass" type="password" maxlength="200" required></div><div><label for="f-phone">Nomor WhatsApp pertama</label><input id="f-phone" placeholder="6281234567890"></div><div><label for="f-label">Label nomor</label><input id="f-label" maxlength="100"></div></div>`, 'create-resto');
+    if(action==='edit-resto')return adminDialogForm('Ubah info resto', `<label for="f-name">Nama resto</label><input id="f-name" value="${e(resto.name)}" maxlength="200" required><label for="f-address">Alamat</label><input id="f-address" value="${e(resto.address || '')}" maxlength="200">`, 'update-resto');
+    if(action==='add-number')return adminDialogForm('Tambah nomor WhatsApp', `<label for="f-phone">Nomor (digit, kode negara di depan)</label><input id="f-phone" placeholder="6281234567890" required><label for="f-label">Label <span class="muted">(opsional)</span></label><input id="f-label" maxlength="100">`, 'add-number');
+    if(action==='remove-number'){
+      const response=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers/${encodeURIComponent(button.dataset.phone)}`,{method:'DELETE',key:crypto.randomUUID()});
+      replaceRestoInList(response);renderAdmin();toast('Nomor dihapus. Pesan dari nomor itu tidak lagi diproses.');return;
+    }
+    if(action==='reset-password')return adminDialogForm('Reset password owner', `<label for="f-user">Username owner</label><input id="f-user" value="${e(resto && resto.users[0] ? resto.users[0].username : '')}" maxlength="50" required><label for="f-pass">Password baru</label><input id="f-pass" type="password" maxlength="200" required>`, 'reset-password');
+  } catch(error) { toast(error.message); }
+}
+function replaceRestoInList(detail) {
+  state.adminList=(state.adminList || []).filter(item => item.id!==detail.id);
+  state.adminList.push(detail);
+}
+document.addEventListener('submit',async event => {
+  if(event.target.id!=='admin-form')return;
+  event.preventDefault();
+  const action=event.target.dataset.adminSubmit, value=name => { const el=$(`#f-${name}`); return el ? el.value.trim() : null; };
+  try {
+    let detail;
+    if(action==='create-resto')detail=await api('/v1/admin/restaurants',{method:'POST',body:{name:value('name'),address:value('address'),owner_username:value('user'),owner_password:value('pass'),whatsapp_number:value('phone'),number_label:value('label')}});
+    else if(action==='update-resto')detail=await api(`/v1/admin/restaurants/${state.adminSelected}`,{method:'PATCH',body:{name:value('name'),address:value('address')}});
+    else if(action==='add-number')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers`,{method:'POST',body:{whatsapp_number:value('phone'),label:value('label')}});
+    else if(action==='reset-password')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/reset-owner-password`,{method:'POST',body:{username:value('user'),new_password:value('pass')}});
+    else return;
+    replaceRestoInList(detail);
+    $('#admin-dialog').close();renderAdmin();toast('Tersimpan.');
+  } catch(error) { showError('admin-form-error', error.message); }
+});
+
+async function boot() {
+  try {
+    state.user = await api('/v1/auth/me');
+    showApp(true);
+    navigate();refresh();
+    setInterval(() => {if(!document.hidden && !state.busy)refresh();},5000);
+  } catch(error) { showLogin(); }
+}
+function showLogin() {
+  showApp(false);
+  $('#login-page').hidden = false;
+  $('#login-error').hidden = true;
+  $('#login-username')?.focus?.();
+}
+function showApp(visible) {
+  $('#login-page').hidden = true;
+  $('#sidebar').hidden = !visible;
+  $('#shell').hidden = !visible;
+}
+async function login(event) {
+  event.preventDefault();
+  const button = (event.target.querySelector && event.target.querySelector('button[type="submit"]')) || null;
+  if(button)button.disabled = true; showError('login-error','');
+  try {
+    state.user = await api('/v1/auth/login', {method:'POST', body:{username:$('#login-username').value.trim(), password:$('#login-password').value}});
+    event.target.reset();
+    showApp(true);
+    state.page = state.user.role==='admin' ? 'admin' : 'overview';
+    if(location.hash.slice(1)!==state.page)location.hash='#'+state.page; // hashchange fires navigate()
+    navigate(); refresh();
+    setInterval(() => {if(!document.hidden && !state.busy)refresh();},5000);
+  } catch(error) { showError('login-error', error.message); }
+  finally { if(button)button.disabled = false; }
+}
+async function logout() {
+  try { await api('/v1/auth/logout', {method:'POST'}); } catch(error) { /* the session is gone either way */ }
+  state.user = null; state.data = null; state.adminList = null; state.adminSelected = null;
+  showLogin();
+}
+function renderIdentity() {
+  const user = state.user; if(!user)return;
+  $('#profile-name').textContent = user.display_name;
+  $('#profile-role').textContent = user.role==='admin' ? 'Admin platform' : (user.restaurant_name || 'Pemilik resto');
+  $('#profile-initials').textContent = user.display_name.split(/\s+/).map(part => part[0]).join('').slice(0,2).toUpperCase();
+  const isAdmin = user.role==='admin';
+  $('#nav-admin').hidden = !isAdmin;
+  $('#nav-approvals').hidden = isAdmin;
+  $('#nav-whatsapp').hidden = isAdmin;
+  $('#workspace-sub').textContent = isAdmin ? 'Semua resto' : 'Restaurant workspace';
 }
 function toast(message) { $('#toast').textContent=message; $('#toast').hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(() => $('#toast').hidden=true, 5500); }
 function showError(id, message) { const element=$(`#${id}`); element.textContent=message; element.hidden=!message; }
@@ -71,7 +210,8 @@ function activityRows(activity) {
   return `<div class="activity-list">${activity.map(item => `<div class="activity-row"><span class="activity-dot"></span><div><p>${e(item.message || item.event)}</p><small>${e(date(item.created_at))}</small></div></div>`).join('')}</div>`;
 }
 function whatsappPage() {
-  return `<div class="whatsapp-layout"><section class="panel whatsapp-panel"><div class="whatsapp-topline"><div><p class="eyebrow">SIMULATED · META CLOUD API FLOW</p><h2>Demo owner</h2><p class="muted">${e(WHATSAPP_SENDER)} · local conversation</p></div><span class="simulated-badge">SIMULATED</span></div><div class="chat-shell"><div class="chat-date">TODAY · LOCAL DEMO</div><div id="whatsapp-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions text">${whatsappMessageHTML()}</div></div><div id="whatsapp-error" class="notice error" role="alert" ${state.whatsappError?'':'hidden'}>${e(state.whatsappError)}</div><form id="whatsapp-form" class="whatsapp-composer"><label class="sr-only" for="whatsapp-text">Message to the simulated RestoPilot assistant</label><textarea id="whatsapp-text" rows="2" maxlength="4000" required placeholder="Type a purchase message…" ${state.whatsappSending?'disabled':''}></textarea><button class="button primary" type="submit" ${state.whatsappSending?'disabled':''}>${state.whatsappSending?'Sending…':'Send message'} <span aria-hidden="true">→</span></button></form><div class="whatsapp-examples" aria-label="Quick message examples"><span>Try a message:</span>${['beli cabai 3 kg 150rb','ya','batal','beli beras'].map(value=>`<button type="button" data-whatsapp-example="${e(value)}">${e(value)}</button>`).join('')}</div><p class="simulator-note">This rehearsal stores messages in the local demo database. It does not connect to WhatsApp or send a live message.</p></section><aside class="panel whatsapp-guide"><p class="eyebrow">THE REHEARSAL</p><h2>From a note to a record.</h2><ol><li><span>1</span><div><strong>Send a purchase note</strong><small>Try “beli cabai 3 kg 150rb”.</small></div></li><li><span>2</span><div><strong>Review the structured draft</strong><small>Correct the details in the dashboard.</small></div></li><li><span>3</span><div><strong>Reply ya or batal</strong><small>Only an owner decision records or rejects it.</small></div></li></ol><a class="text-button" href="#approvals">Open the review queue <span aria-hidden="true">→</span></a></aside></div>`;
+  const numbers=state.data?.whatsapp_numbers || [];
+  return `<div class="whatsapp-layout"><section class="panel whatsapp-panel"><div class="whatsapp-topline"><div><p class="eyebrow">SIMULATED · META CLOUD API FLOW</p><h2>${e(state.user?.display_name || 'Pemilik')}</h2><p class="muted"><select id="whatsapp-sender" aria-label="Nomor WhatsApp pengirim">${numbers.map(number => `<option value="${e(number.phone)}"${number.phone===WHATSAPP_SENDER?' selected':''}>${e(number.phone)}${number.label?` · ${e(number.label)}`:''}</option>`).join('')}</select> · percakapan lokal</p></div><span class="simulated-badge">SIMULATED</span></div><div class="chat-shell"><div class="chat-date">TODAY · LOCAL DEMO</div><div id="whatsapp-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions text">${whatsappMessageHTML()}</div></div><div id="whatsapp-error" class="notice error" role="alert" ${state.whatsappError?'':'hidden'}>${e(state.whatsappError)}</div><form id="whatsapp-form" class="whatsapp-composer"><label class="sr-only" for="whatsapp-text">Message to the simulated RestoPilot assistant</label><textarea id="whatsapp-text" rows="2" maxlength="4000" required placeholder="Type a purchase message…" ${state.whatsappSending?'disabled':''}></textarea><button class="button primary" type="submit" ${state.whatsappSending?'disabled':''}>${state.whatsappSending?'Sending…':'Send message'} <span aria-hidden="true">→</span></button></form><div class="whatsapp-examples" aria-label="Quick message examples"><span>Try a message:</span>${['beli cabai 3 kg 150rb','ya','batal','beli beras'].map(value=>`<button type="button" data-whatsapp-example="${e(value)}">${e(value)}</button>`).join('')}</div><p class="simulator-note">This rehearsal stores messages in the local demo database. It does not connect to WhatsApp or send a live message.</p></section><aside class="panel whatsapp-guide"><p class="eyebrow">THE REHEARSAL</p><h2>From a note to a record.</h2><ol><li><span>1</span><div><strong>Send a purchase note</strong><small>Try “beli cabai 3 kg 150rb”.</small></div></li><li><span>2</span><div><strong>Review the structured draft</strong><small>Correct the details in the dashboard.</small></div></li><li><span>3</span><div><strong>Reply ya or batal</strong><small>Only an owner decision records or rejects it.</small></div></li></ol><a class="text-button" href="#approvals">Open the review queue <span aria-hidden="true">→</span></a></aside></div>`;
 }
 function whatsappMessageHTML() {
   if(state.whatsappLoading && !state.whatsappMessages.length)return '<div class="chat-empty">Loading saved conversation…</div>';
@@ -136,11 +276,14 @@ function overview() {
   return `<div class="metrics">${hero}${metric('Waiting for you',number(drafts.length),'Drafts to review or complete','☑',true)}${metric('Low stock',number(metrics.low_stock_count),'Based on estimated inventory','▦')}${metric('Recorded purchases',number(metrics.recorded_purchases),'Saved in your local database','▤')}</div><div class="main-grid"><div class="column"><section class="panel">${panelHeading(`Needs your attention <span class="count-pill">${drafts.length}</span>`,'A quick check today, fewer surprises tomorrow.', '<a class="text-button" href="#approvals">View all →</a>')}<div class="draft-list">${drafts.slice(0,3).map(draftCard).join('') || '<div class="empty"><strong>You’re all caught up.</strong>New purchase drafts will appear here.</div>'}</div></section><section class="panel">${panelHeading('Recent purchases','Confirmed, recorded, and easy to find.','<a class="text-button" href="#purchases">All purchases →</a>')}${purchaseTable(purchases.slice(0,5))}</section></div><div class="column"><section class="panel quick-panel"><div class="quick-icon" aria-hidden="true">✳</div><h2>A purchase. A simple message.</h2><p>Keep your kitchen moving. Turn a quick note into a purchase ready for your review.</p><div class="quick-sample">beli cabai 3 kg 150rb</div><button class="button" data-action="new-purchase">Try a quick log <span aria-hidden="true">→</span></button></section><section class="panel">${panelHeading('Kitchen stock','','<a class="text-button" href="#inventory">View all →</a>')}${inventoryRows(inventory.slice(0,3))}<div class="panel-note">Estimated from approved receipts. Physical counts and kitchen usage may differ.</div></section><section class="panel">${panelHeading('Latest activity')}${activityRows(activity.slice(0,3))}</section></div></div>`;
 }
 function render() {
+  renderIdentity();
+  if(state.user?.role==='admin')return renderAdmin();
   const page=state.page, [title,subtitle]=titles[page];
   $('#page-title').textContent=title; $('#page-subtitle').textContent=subtitle; $('#breadcrumb').textContent=page[0].toUpperCase()+page.slice(1);
   document.querySelectorAll('[data-page]').forEach(link => { link.classList.toggle('active',link.dataset.page===page); if(link.dataset.page===page)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current'); });
   if (!state.data) return;
   $('#restaurant-name').textContent=state.data.restaurant.name;
+  $('#workspace-sub').textContent=state.data.restaurant.name===state.user?.restaurant_name?'Restaurant workspace':'Restaurant workspace';
   $('#nav-count').textContent=pendingDrafts().length;
   let html='';
   if (page==='overview') html=overview();
@@ -158,6 +301,7 @@ async function refresh() {
     const data=await api('/v1/overview');
     if(id!==state.refreshId)return;
     state.data=data;state.online=true;
+    if(!WHATSAPP_SENDER && data.whatsapp_numbers?.length)WHATSAPP_SENDER=state.whatsappNumber||data.whatsapp_numbers[0].phone;
     $('#sync-status').textContent=`Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
     showError('connection-error','');render();
     if(state.draft && $('#review-dialog').open && !state.busy) updateApprovalButton();
@@ -298,11 +442,21 @@ document.addEventListener('click',event => {
   if(button.dataset.example){$('#purchase-text').value=button.dataset.example;$('#purchase-text').focus();}
   if(button.dataset.whatsappExample){$('#whatsapp-text').value=button.dataset.whatsappExample;$('#whatsapp-text').focus();}
   if(button.dataset.whatsappReview){location.hash='#approvals';openReview(button.dataset.whatsappReview);}
+  if(button.dataset.openResto){state.adminSelected=button.dataset.openResto;location.hash='#admin-detail';window.scrollTo(0,0);}
+  if(button.dataset.backTo){location.hash='#'+button.dataset.backTo;}
+  if(button.dataset.adminAction)adminAction(button.dataset.adminAction,button);
 });
 document.addEventListener('submit',event=>{if(event.target.id==='whatsapp-form'){event.preventDefault();sendWhatsAppMessage($('#whatsapp-text').value);}});
 $('#review-dialog').addEventListener('cancel',event => {if(state.busy)event.preventDefault();});
 $('#refresh').addEventListener('click',refresh);
-function navigate() {state.page=Object.hasOwn(titles,location.hash.slice(1))?location.hash.slice(1):'overview';render();}
+function navigate() {
+  const hash=location.hash.slice(1);
+  const known=Object.hasOwn(state.user?.role==='admin'?{...titles,admin:'','admin-detail':''}:titles,hash);
+  state.page=known?hash:(state.user?.role==='admin'?'admin':'overview');
+  render();
+}
 window.addEventListener('hashchange',navigate);
-navigate();refresh();
-setInterval(() => {if(!document.hidden && !state.busy)refresh();},5000);
+document.addEventListener('submit',event => {if(event.target.id==='login-form')login(event);});
+$('#login-form').addEventListener('submit',login);
+$('#logout').addEventListener('click',logout);
+boot();
