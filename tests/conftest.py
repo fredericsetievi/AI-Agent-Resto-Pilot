@@ -1,5 +1,6 @@
 """Shared fixtures: keep the suite hermetic against a developer's local .env."""
 import pytest
+from fastapi.testclient import TestClient
 
 from service import supabase_db
 from service.db import DEMO_NUMBERS, DEMO_USERS
@@ -31,6 +32,13 @@ def login(client, username, password):
     response = client.post("/v1/auth/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
     return client
+
+
+def owner_client(app):
+    """A fresh TestClient logged in as the seeded demo owner (own cookie jar)."""
+    value = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    login(value, OWNER["username"], OWNER["password"])
+    return value
 
 
 def login_owner(client):
