@@ -23,7 +23,7 @@ Use `--empty` with a new database path to omit sample purchases and stock. No re
 ## Current capabilities
 
 - Indonesian purchase text parsing, editable drafts, owner approval/rejection and stock posting.
-- Flexible ingredient catalog: the review dialog's ingredient field is searchable and accepts any typed name; unknown ingredients are added to the catalog when the purchase is approved, on the dashboard and over WhatsApp.
+- Flexible ingredient catalog: the review dialog's ingredient field is searchable and accepts any typed name; unknown ingredients are added to the catalog when the purchase is approved, on the dashboard and over WhatsApp. Spelling slips close to a catalog name ("bwang putih") are recovered automatically and confirmed back in the draft reply before approval; names with no similar entry become new ingredients.
 - Optional StepFun text rescue (`LLM_TEXT_EXTRACTION=1` with `STEPFUN_API_KEY`): free-form sentences, reordered clauses and voice-note transcripts that the rules parser cannot read get one model pass. Rules always run first; command words never reach the model, and any model error keeps the rules result.
 - SQLite persistence, idempotency, version checks and activity records.
 - WhatsApp simulator and Meta WhatsApp Cloud API webhook/send integration.

@@ -451,6 +451,15 @@ def draft_reply(draft):
             "Catatan: " + ", ".join(unmapped)
             + " belum ada di daftar bahan — akan ditambahkan otomatis saat kamu balas YA."
         )
+    fuzzy = []
+    for item in draft.get("items", []):
+        typed = str(item.get("matched_from") or "").strip()
+        if not typed:
+            continue
+        name = CATALOG_NAMES.get(item.get("ingredient_id")) or str(item.get("raw_name") or "").strip()
+        fuzzy.append(f"'{typed}' saya baca sebagai {name}")
+    if fuzzy:
+        notes.append("Catatan: " + "; ".join(fuzzy) + " — tolong dicek dulu, benar kan? Balas YA jika sudah benar.")
     if any(_UNMAPPED_WARNING.search(str(warning)) is None for warning in draft.get("warnings", [])):
         notes.append("Catatan: ada baris yang perlu dicek di dashboard (harga, satuan, atau keterbacaan foto).")
     supplier = str(draft.get("supplier") or "").strip()

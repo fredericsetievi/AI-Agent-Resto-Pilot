@@ -336,3 +336,18 @@ def test_greeting_text_gets_help_instead_of_an_empty_draft(client):
     created = data(simulate(client, "Beli bawang 2 kg 80 rb"))
     assert created["result"]["action"] == "draft_created"
     assert created["draft"]["items"][0]["raw_name"] == "bawang"
+
+
+def test_simulator_confirms_a_spelling_recovery_before_approval(client):
+    first = data(simulate(client, "beli bwang putih 2 kg 30rb"))
+    assert first["draft"]["status"] == "pending_approval"
+    assert first["draft"]["items"][0]["ingredient_id"] == "bawang_putih"
+    assert first["draft"]["items"][0]["matched_from"] == "bwang putih"
+    reply = first["messages"][-1]["body"]
+    assert "'bwang putih' saya baca sebagai Bawang putih" in reply
+    assert "Balas YA jika sudah benar" in reply
+    approved = data(simulate(client, "ya"))
+    assert approved["result"]["action"] == "approved"
+    # A recovered typo maps to the existing catalog entry; nothing new is created.
+    assert not approved["draft"].get("new_ingredients")
+    assert any(row["ingredient_id"] == "bawang_putih" for row in overview(client)["inventory"])

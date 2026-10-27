@@ -257,3 +257,11 @@ def test_rescued_new_ingredient_approves_and_creates_catalog_entry(tmp_path):
 
     inventory = client.get("/v1/overview").json()["data"]["inventory"]
     assert any(row["ingredient_id"] == "terasi" and str(row["quantity"]) == "1" for row in inventory)
+
+
+def test_clean_extraction_marks_spelling_recoveries_for_confirmation():
+    result = clean_extraction({"items": [{"raw_name": "bwang putih", "quantity": "2", "unit": "kg", "line_total_idr": 30000}]})
+    item = result["items"][0]
+    assert item["ingredient_id"] == "bawang_putih"
+    assert item["matched_from"] == "bwang putih"
+    assert result["warnings"] == []

@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .extraction import canonical_unit_name, match_catalog_name
+from .extraction import canonical_unit_name, match_catalog_detail
 
 
 DEFAULT_BASE_URL = "https://api.stepfun.com/v1"
@@ -189,7 +189,7 @@ def clean_extraction(data):
         if not name:
             warnings.append(f"{label}: no item name was read from the photo.")
             continue
-        raw_name, ingredient_id = match_catalog_name(name)
+        raw_name, ingredient_id, fuzzy = match_catalog_detail(name)
         quantity = _quantity_text(raw.get("quantity"))
         unit = canonical_unit_name(raw.get("unit"))
         total = _idr_amount(raw.get("line_total_idr"))
@@ -209,6 +209,7 @@ def clean_extraction(data):
             "quantity": quantity,
             "unit": unit,
             "line_total_idr": total,
+            **({"matched_from": raw_name} if fuzzy and ingredient_id else {}),
         })
     for note in data.get("unreadable") or []:
         if isinstance(note, str) and note.strip():

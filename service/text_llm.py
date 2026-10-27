@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .extraction import canonical_unit_name, match_catalog_name
+from .extraction import canonical_unit_name, match_catalog_detail
 from .vision import validate_base_url
 
 
@@ -141,7 +141,7 @@ def clean_extraction(data):
         if not name:
             warnings.append(f"{label}: no item name was understood.")
             continue
-        raw_name, ingredient_id = match_catalog_name(name)
+        raw_name, ingredient_id, fuzzy = match_catalog_detail(name)
         quantity = _quantity_text(raw.get("quantity"))
         unit = canonical_unit_name(raw.get("unit"))
         total = _idr_amount(raw.get("line_total_idr"))
@@ -155,12 +155,14 @@ def clean_extraction(data):
         # the raw name stays on the draft line, the owner sees exactly what
         # will be recorded, and approval adds it to the catalog
         # (service.db._resolve_new_ingredients) with a "bahan baru" audit note.
+        # A fuzzy recovery is marked so the confirmation reply shows the guess.
         items.append({
             "ingredient_id": ingredient_id,
             "raw_name": raw_name,
             "quantity": quantity,
             "unit": unit,
             "line_total_idr": total,
+            **({"matched_from": raw_name} if fuzzy and ingredient_id else {}),
         })
     return {"items": items, "warnings": warnings}
 
