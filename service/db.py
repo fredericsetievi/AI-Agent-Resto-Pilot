@@ -292,8 +292,11 @@ class Store:
             conn.execute("INSERT INTO idempotency VALUES (?, ?, ?)", (key, fingerprint, encode(result)))
             return result
 
-    def intake(self, key, payload):
-        extracted = extract_purchase(payload["text"])
+    def intake(self, key, payload, extracted=None):
+        # The API layer may pass a pre-extracted result (rules or rules-then-
+        # model rescue); the shape is identical to extract_purchase output.
+        if extracted is None or not isinstance(extracted.get("items"), list):
+            extracted = extract_purchase(payload["text"])
         def action(conn):
             return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier"), extracted["items"], extracted["warnings"]))
         return self._idempotent(key, "intake", payload, action)
@@ -463,6 +466,12 @@ class Store:
         # dedupe fingerprints below; the Meta event itself is the replay guard.
         transcript = payload.get("transcript")
         transcript = transcript.strip()[:MAX_TRANSCRIPT_CHARS] if isinstance(transcript, str) else ""
+        # A rules-or-model extraction made by the API layer for this text or
+        # transcript; it is not part of the dedupe fingerprint for the same
+        # non-determinism reason as the transcript itself.
+        extracted_text = payload.get("extracted_text")
+        if not isinstance(extracted_text, dict) or not isinstance(extracted_text.get("items"), list) or not isinstance(extracted_text.get("warnings"), list):
+            extracted_text = None
         payload = {"sender": payload["sender"], "text": payload["text"], "event_id": payload.get("event_id"), "num_media": payload.get("num_media", 0)}
         event_id = payload["event_id"] or "sim:" + key
         fingerprint = hashlib.sha256(encode({"sender": payload["sender"], "text": payload["text"], "num_media": payload["num_media"]}).encode()).hexdigest()
@@ -500,7 +509,7 @@ class Store:
                     reply = "Pesan suara diterima. Masih ada draf yang menunggu konfirmasimu dulu, jadi pesan ini belum dicatat:\n" + draft_reply(draft)
                     result["action"] = "active_draft_exists"
                 else:
-                    extracted = extract_purchase(transcript)
+                    extracted = extracted_text if extracted_text is not None else extract_purchase(transcript)
                     draft = self._new_draft(conn, transcript, None, extracted["items"], extracted["warnings"])
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = draft_reply(draft)
@@ -561,7 +570,7 @@ class Store:
                 reply = draft_reply(draft)
                 result["action"] = "active_draft_exists"
             else:
-                extracted = extract_purchase(payload["text"])
+                extracted = extracted_text if extracted_text is not None else extract_purchase(payload["text"])
                 # Plain text with no purchase signal (a greeting, chat noise) is
                 # an intent miss: every parsed line is a bare word with no
                 # catalog match, quantity, or price. Answer with help instead of

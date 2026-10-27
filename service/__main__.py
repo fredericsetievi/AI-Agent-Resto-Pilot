@@ -28,6 +28,8 @@ SUPPORTED_ENV_KEYS = {
     "STEPFUN_TTS_MODEL",
     "STEPFUN_TTS_VOICE",
     "STEPFUN_BASE_URL",
+    "STEPFUN_TEXT_MODEL",
+    "LLM_TEXT_EXTRACTION",
 }
 
 
@@ -77,10 +79,16 @@ def main():
     }
     meta_configured = public_base_url and all(meta_settings.values())
     vision_api_key = setting("STEPFUN_API_KEY")
+    text_llm_enabled = vision_api_key and (setting("LLM_TEXT_EXTRACTION") or "").strip().casefold() in {"1", "true", "yes", "on"}
+    text_llm_model = setting("STEPFUN_TEXT_MODEL")
     print("RestoPilot demo: manual intake, WhatsApp simulator, rules extraction, SQLite, local demo identity.")
     print(f"Open http://127.0.0.1:{args.port} · Database: {args.db}")
     print("Meta WhatsApp Cloud API: configured" if meta_configured else "Meta WhatsApp Cloud API: disabled (see .env.example)")
     print("StepFun Vision: configured" if vision_api_key else "StepFun Vision: disabled (set STEPFUN_API_KEY)")
+    if text_llm_enabled:
+        print(f"StepFun text rescue: enabled (model {text_llm_model or 'default'}; rules stay first)")
+    else:
+        print("StepFun text rescue: disabled (set STEPFUN_API_KEY and LLM_TEXT_EXTRACTION=1)")
     uvicorn.run(
         create_app(
             str(args.db),
@@ -92,6 +100,8 @@ def main():
             asr_model=setting("STEPFUN_ASR_MODEL"),
             tts_model=setting("STEPFUN_TTS_MODEL"),
             tts_voice=setting("STEPFUN_TTS_VOICE"),
+            text_llm_enabled=bool(text_llm_enabled),
+            text_llm_model=text_llm_model,
             **meta_settings,
         ),
         host="127.0.0.1",

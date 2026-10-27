@@ -23,6 +23,7 @@ Use `--empty` with a new database path to omit sample purchases and stock. No re
 ## Current capabilities
 
 - Indonesian purchase text parsing, editable drafts, owner approval/rejection and stock posting.
+- Optional StepFun text rescue (`LLM_TEXT_EXTRACTION=1` with `STEPFUN_API_KEY`): free-form sentences, reordered clauses and voice-note transcripts that the rules parser cannot read get one model pass. Rules always run first; command words never reach the model, and any model error keeps the rules result.
 - SQLite persistence, idempotency, version checks and activity records.
 - WhatsApp simulator and Meta WhatsApp Cloud API webhook/send integration.
 - Meta webhook verification, signature checks, account/phone-number validation and message deduplication.

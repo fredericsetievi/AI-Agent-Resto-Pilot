@@ -32,7 +32,9 @@ from .audio import (
     validate_asr_model,
     validate_tts_model,
 )
-from .db import DomainError, Store
+from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, Store, SUMMARY_COMMANDS
+from .extraction import extract_purchase
+from .text_llm import StepFunTextError, extract_message
 from .vision import (
     DEFAULT_BASE_URL as VISION_DEFAULT_BASE_URL,
     DEFAULT_MODEL as VISION_DEFAULT_MODEL,
@@ -54,6 +56,7 @@ from .whatsapp import (
     matches_public_host,
     matches_verify_token,
     meta_event_key,
+    parse_payment_followup,
     parse_webhook,
     public_origin,
     send_audio_message,
@@ -148,9 +151,42 @@ def create_app(
     asr_model=None,
     tts_model=None,
     tts_voice=None,
+    text_llm_enabled=False,
+    text_llm_model=None,
+    text_llm_http_client=None,
 ):
     app = FastAPI(title="RestoPilot local demo", version="0.1.0", description="Manual intake, rules extraction and SQLite. Synthetic demo identity; not production authentication.")
     store = Store(db_path, seed=seed)
+
+    # Text words that mean "operate on the previous draft" never reach the
+    # model: a bare "ya" must stay a zero-cost command.
+    _text_command_words = APPROVE_COMMANDS | REJECT_COMMANDS | set(SUMMARY_COMMANDS) | {"skip", "lewati"}
+
+    async def extract_text(text):
+        """Rules first; the model only rescues lines the parser could not read.
+
+        With LLM_TEXT_EXTRACTION enabled, a rules result that carries warnings
+        (missing fields, ambiguous clauses) gets one model attempt; a model
+        error or an empty model answer keeps the rules result, so behavior
+        with the feature off is unchanged.
+        """
+        extracted = extract_purchase(text)
+        if not text_llm_enabled or not vision_api_key or not extracted["warnings"]:
+            return extracted
+        if text.strip().casefold() in _text_command_words or parse_payment_followup(text):
+            return extracted
+        try:
+            rescued = await extract_message(
+                text,
+                api_key=vision_api_key,
+                model=text_llm_model,
+                base_url=vision_base_url,
+                client=text_llm_http_client,
+            )
+        except (StepFunTextError, ValueError) as exc:
+            logger.warning("StepFun text rescue failed; keeping the rules result: %s", exc)
+            return extracted
+        return rescued if rescued["items"] else extracted
     app.state.store = store
     configured_origin = public_origin(public_base_url)
     meta_waba_id = validate_meta_id(meta_waba_id, "META_WABA_ID") if meta_waba_id else None
@@ -242,8 +278,9 @@ def create_app(
         return {"data": store.get_draft(draft_id)}
 
     @app.post("/v1/intake", status_code=201)
-    def intake(body: Intake, idempotency_key=Depends(key), actor=Depends(identity)):
-        return {"data": store.intake(idempotency_key, body.model_dump())}
+    async def intake(body: Intake, idempotency_key=Depends(key), actor=Depends(identity)):
+        extracted = await extract_text(body.text)
+        return {"data": await run_in_threadpool(store.intake, idempotency_key, body.model_dump(), extracted)}
 
     @app.post("/v1/intake/image", status_code=201)
     async def intake_image(body: ImageIntake, idempotency_key=Depends(key), actor=Depends(identity)):
@@ -286,8 +323,11 @@ def create_app(
         return {"data": store.whatsapp_messages(sender)}
 
     @app.post("/v1/whatsapp/simulate")
-    def simulate_whatsapp(body: SimulatedMessage, actor=Depends(owner), idempotency_key=Depends(key)):
-        return {"data": store.whatsapp_ingest(idempotency_key, body.model_dump())}
+    async def simulate_whatsapp(body: SimulatedMessage, actor=Depends(owner), idempotency_key=Depends(key)):
+        payload = body.model_dump()
+        if payload["text"].strip():
+            payload["extracted_text"] = await extract_text(payload["text"])
+        return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload)}
 
     def csv_attachment(rows, filename):
         buffer = io.StringIO()
@@ -426,8 +466,14 @@ def create_app(
                         base_url=vision_base_url,
                         client=vision_http_client,
                     )
+                    if payload["transcript"].strip():
+                        payload["extracted_text"] = await extract_text(payload["transcript"])
                 except (MetaWhatsAppError, StepFunAudioError) as exc:
                     logger.warning("WhatsApp voice intake failed: %s", exc)
+            elif not message.get("media_kind") and payload["text"].strip():
+                # Plain text gets the same rules-then-model rescue so free-form
+                # sentences reach the draft flow; commands skip the model.
+                payload["extracted_text"] = await extract_text(payload["text"])
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),
