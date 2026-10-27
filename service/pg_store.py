@@ -53,6 +53,11 @@ class PostgresStore:
     # ---- connection helpers -------------------------------------------------
 
     @staticmethod
+    def transaction():
+        """Public multi-statement transaction, same contract as Store.transaction."""
+        return pg_transaction()
+
+    @staticmethod
     def _rows(cur):
         columns = [desc[0] for desc in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
