@@ -393,6 +393,28 @@ _SUPPLIER_TAIL = re.compile(r"(?i)\bdari\s+(.{1,100})")
 _SUPPLIER_DI_TAIL = re.compile(r"(?i)\bdi\s+(.{1,100})")
 
 
+# A stock question reads the ledger; a purchase instruction records new
+# stock. The keyword plus the purchase-verb guard keep the two intents apart.
+_STOCK_QUESTION = re.compile(r"(?i)\b(?:berapa|sisa|tersisa|sisanya|stok|stock|tinggal)\b")
+_PURCHASE_INTENT = re.compile(r"(?i)\b(?:beli|belikan|beliin|catat|pesankan|pesan|order)\b")
+
+
+def is_stock_question(text):
+    """True when a plain text message asks about current stock levels.
+
+    Deterministic and conservative: a stock keyword must be present and no
+    purchase verb may appear, so greetings and purchase notes never land
+    here. Command words and payment follow-ups are decided earlier in the
+    ingest branch order and never reach this check.
+    """
+    if not isinstance(text, str):
+        return False
+    candidate = text.strip()
+    if not candidate or _PURCHASE_INTENT.search(candidate):
+        return False
+    return bool(_STOCK_QUESTION.search(candidate))
+
+
 def _idr(value):
     """Format an integer rupiah amount with Indonesian thousands separators."""
     return f"{int(value):,}".replace(",", ".")
@@ -416,6 +438,21 @@ def _item_line(item):
         if unit_price is not None and unit_price > 0 and unit_price == unit_price.to_integral_value():
             return f"• {head} × Rp{_idr(unit_price)} = Rp{_idr(total)}"
     return f"• {head} = Rp{_idr(total)}"
+
+
+def stock_reply(facts):
+    """Format inventory facts as a short Indonesian WhatsApp reply.
+
+    Facts are read from the inventory table by the caller; this builder only
+    prints them, so every number in the reply is a database number.
+    """
+    lines = ["Stok saat ini:"]
+    for fact in facts:
+        line = f"• {fact['name']} — {fact['quantity']} {fact['unit']}"
+        if fact.get("low_stock"):
+            line += f" (di bawah ambang pesan ulang {fact['reorder_threshold']} {fact['unit']})"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 # Raw extraction warnings are admin-facing English; the owner-facing reply

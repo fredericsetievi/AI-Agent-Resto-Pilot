@@ -35,6 +35,7 @@ from .audio import (
 from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, Store, SUMMARY_COMMANDS
 from .extraction import extract_purchase
 from .text_llm import StepFunTextError, extract_message
+from .stock_llm import phrase_stock_answer
 from .vision import (
     DEFAULT_BASE_URL as VISION_DEFAULT_BASE_URL,
     DEFAULT_MODEL as VISION_DEFAULT_MODEL,
@@ -58,6 +59,7 @@ from .whatsapp import (
     meta_event_key,
     parse_payment_followup,
     parse_webhook,
+    stock_reply,
     public_origin,
     send_audio_message,
     send_text,
@@ -165,6 +167,8 @@ def create_app(
     text_llm_enabled=False,
     text_llm_model=None,
     text_llm_http_client=None,
+    stock_llm_enabled=False,
+    stock_llm_http_client=None,
 ):
     app = FastAPI(title="RestoPilot local demo", version="0.1.0", description="Manual intake, rules extraction and SQLite. Synthetic demo identity; not production authentication.")
     store = Store(db_path, seed=seed)
@@ -198,6 +202,32 @@ def create_app(
             logger.warning("StepFun text rescue failed; keeping the rules result: %s", exc)
             return extracted
         return rescued if rescued["items"] else extracted
+
+    async def build_stock_answer(text):
+        """Answer a stock question from the inventory ledger, never the model.
+
+        The deterministic reply is built first; with the stock flag on, the
+        model only rephrases the same facts and any configuration, transport,
+        or validation problem keeps the deterministic text. Returns None when
+        the message is not a stock question, leaving the purchase flow alone.
+        """
+        facts = store.stock_facts(text)
+        if facts is None:
+            return None
+        reply = stock_reply(facts["facts"])
+        if stock_llm_enabled and vision_api_key:
+            try:
+                reply = await phrase_stock_answer(
+                    facts["question"],
+                    facts["facts"],
+                    api_key=vision_api_key,
+                    model=text_llm_model,
+                    base_url=vision_base_url,
+                    client=stock_llm_http_client,
+                )
+            except (StepFunTextError, ValueError) as exc:
+                logger.warning("StepFun stock phrasing failed; keeping the deterministic reply: %s", exc)
+        return {"body": reply}
     app.state.store = store
     configured_origin = public_origin(public_base_url)
     meta_waba_id = validate_meta_id(meta_waba_id, "META_WABA_ID") if meta_waba_id else None
@@ -340,7 +370,11 @@ def create_app(
     async def simulate_whatsapp(body: SimulatedMessage, actor=Depends(owner), idempotency_key=Depends(key)):
         payload = body.model_dump()
         if payload["text"].strip():
-            payload["extracted_text"] = await extract_text(payload["text"])
+            # A stock question is answered read-only from inventory; the
+            # purchase extraction is skipped entirely for it.
+            payload["stock_answer"] = await build_stock_answer(payload["text"])
+            if payload["stock_answer"] is None:
+                payload["extracted_text"] = await extract_text(payload["text"])
         return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload)}
 
     def csv_attachment(rows, filename):
@@ -486,8 +520,11 @@ def create_app(
                     logger.warning("WhatsApp voice intake failed: %s", exc)
             elif not message.get("media_kind") and payload["text"].strip():
                 # Plain text gets the same rules-then-model rescue so free-form
-                # sentences reach the draft flow; commands skip the model.
-                payload["extracted_text"] = await extract_text(payload["text"])
+                # sentences reach the draft flow; commands skip the model. A
+                # stock question is answered read-only before any of that.
+                payload["stock_answer"] = await build_stock_answer(payload["text"])
+                if payload["stock_answer"] is None:
+                    payload["extracted_text"] = await extract_text(payload["text"])
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),

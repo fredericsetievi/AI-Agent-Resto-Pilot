@@ -33,6 +33,7 @@ SUPPORTED_ENV_KEYS = {
     "AUDIO_ASR_BASE_URL",
     "AUDIO_ASR_API_KEY",
     "AUDIO_ASR_MODEL",
+    "LLM_STOCK_ANSWER",
 }
 
 
@@ -89,6 +90,7 @@ def main():
     asr_model_override = setting("AUDIO_ASR_MODEL")
     custom_asr = bool(asr_api_key and asr_base_url)
     asr_model_setting = (asr_model_override if custom_asr else None) or setting("STEPFUN_ASR_MODEL")
+    stock_llm_enabled = vision_api_key and (setting("LLM_STOCK_ANSWER") or "").strip().casefold() in {"1", "true", "yes", "on"}
     print("RestoPilot demo: manual intake, WhatsApp simulator, rules extraction, SQLite, local demo identity.")
     print(f"Open http://127.0.0.1:{args.port} · Database: {args.db}")
     print("Meta WhatsApp Cloud API: configured" if meta_configured else "Meta WhatsApp Cloud API: disabled (see .env.example)")
@@ -101,6 +103,10 @@ def main():
         print(f"Voice note ASR: custom provider {asr_base_url} (model {asr_model_override or 'default'})")
     else:
         print("Voice note ASR: StepFun (set AUDIO_ASR_BASE_URL/AUDIO_ASR_API_KEY/AUDIO_ASR_MODEL to override)")
+    if stock_llm_enabled:
+        print(f"StepFun stock phrasing: enabled (model {text_llm_model or 'default'}; numbers stay from SQLite)")
+    else:
+        print("StepFun stock phrasing: disabled (set STEPFUN_API_KEY and LLM_STOCK_ANSWER=1; deterministic replies stay on)")
     uvicorn.run(
         create_app(
             str(args.db),
@@ -116,6 +122,7 @@ def main():
             tts_voice=setting("STEPFUN_TTS_VOICE"),
             text_llm_enabled=bool(text_llm_enabled),
             text_llm_model=text_llm_model,
+            stock_llm_enabled=bool(stock_llm_enabled),
             **meta_settings,
         ),
         host="127.0.0.1",

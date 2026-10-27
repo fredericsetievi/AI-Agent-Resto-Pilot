@@ -216,6 +216,11 @@ def match_catalog_detail(name: str) -> tuple[str, str | None, bool]:
     return _match_name(name)
 
 
+def catalog_aliases() -> tuple[tuple[str, str], ...]:
+    """Public alias list so the stock-question matcher reuses the same catalog mapping."""
+    return _ALIASES
+
+
 def canonical_unit_name(unit: str | None) -> str | None:
     """Public unit alias lookup so non-text extractors reuse the same unit vocabulary."""
     if not isinstance(unit, str) or not unit.strip():
