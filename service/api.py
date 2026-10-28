@@ -339,7 +339,11 @@ def create_app(
         except (StepFunTextError, ValueError) as exc:
             logger.warning("StepFun text rescue failed; keeping the rules result: %s", exc)
             return extracted
-        return rescued if rescued["items"] else extracted
+        if rescued["items"]:
+            if extracted.get("supplier") and not rescued.get("supplier"):
+                rescued["supplier"] = extracted["supplier"]
+            return rescued
+        return extracted
 
     async def filter_kitchen_items(extracted, restaurant_id):
         """Mark non-kitchen goods (odol, sikat gigi, sabun, ...) in an extraction.

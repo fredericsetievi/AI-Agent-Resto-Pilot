@@ -91,6 +91,13 @@ def test_simulator_deduplicates_keys_and_events(client):
     assert len(data(client.get("/v1/whatsapp/messages", params={"sender": SENDER}))["messages"]) == 4
 
 
+def test_order_with_dari_supplier_prefills_draft_supplier(client):
+    created = data(simulate(client, "Beli cabai 3 kg 150rb dari Bu Sari"))
+    assert created["draft"]["supplier"] == "Bu Sari"
+    assert created["draft"]["items"][0]["raw_name"] == "cabai"
+    assert data(simulate(client, "batal"))["draft"]["status"] == "rejected"
+
+
 def test_active_draft_cannot_be_replaced_and_wrong_sender_cannot_approve(client):
     first = data(simulate(client, "Cabai 3 kg 150rb"))
     collision = data(simulate(client, "Beras 10 kg 200rb"))

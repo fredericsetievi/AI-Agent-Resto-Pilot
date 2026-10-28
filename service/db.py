@@ -442,7 +442,7 @@ class Store(InventoryMixin):
         if extracted is None or not isinstance(extracted.get("items"), list):
             extracted = extract_purchase(payload["text"])
         def action(conn):
-            return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=restaurant_id), restaurant_id)
+            return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier") or extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=restaurant_id), restaurant_id)
         return self._idempotent(key, "intake", payload, action)
 
     def intake_image(self, key, image_sha256, source_label, supplier, items, warnings, restaurant_id=None):
@@ -769,7 +769,7 @@ class Store(InventoryMixin):
                     result["action"] = "active_draft_exists"
                 else:
                     extracted = extracted_text if extracted_text is not None else extract_purchase(transcript)
-                    draft = self._new_draft(conn, transcript, None, extracted["items"], extracted["warnings"], restaurant_id=tenant)
+                    draft = self._new_draft(conn, transcript, extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=tenant)
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
@@ -897,7 +897,7 @@ class Store(InventoryMixin):
                     reply = HELP_REPLY
                     result["action"] = "help_reply"
                 else:
-                    draft = self._new_draft(conn, payload["text"], None, extracted["items"], extracted["warnings"], restaurant_id=tenant)
+                    draft = self._new_draft(conn, payload["text"], extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=tenant)
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
