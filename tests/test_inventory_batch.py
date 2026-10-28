@@ -64,7 +64,9 @@ def test_preview_is_read_only_deterministic_and_does_not_create_missing_stock(st
         conn.set_authorizer(authorize)
         first = store._preview_inventory_batch_conn(conn, [payload], TENANT)
         assert store._preview_inventory_batch_conn(conn, [payload], TENANT) == first
-        conn.set_authorizer(None)
+        # Python 3.10 cannot disable this callback with None. Restore a
+        # permissive callback for the remaining reads/transaction cleanup.
+        conn.set_authorizer(lambda *args: sqlite3.SQLITE_OK)
         assert not denied
         assert "id" not in first[0] and "created_at" not in first[0]
         assert conn.execute("SELECT count(*) FROM inventory WHERE restaurant_id=? AND ingredient_id='cabai'", (TENANT,)).fetchone()[0] == 0
