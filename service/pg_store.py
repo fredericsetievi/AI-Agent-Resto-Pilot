@@ -26,6 +26,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 
+from .inventory import InventoryMixin
 from .db import (
     APPROVE_COMMANDS, CATALOG, CATALOG_BY_ID, DEMO_NUMBERS, DEMO_USERS,
     DomainError, RESTAURANT, RESTAURANT_TIMEZONE, REJECT_COMMANDS,
@@ -45,8 +46,10 @@ from .whatsapp import (
 )
 
 
-class PostgresStore:
+class PostgresStore(InventoryMixin):
     """The RestoPilot authority in Supabase Postgres. Same contract as Store."""
+
+    inventory_postgres = True
 
     # Tables/columns the application reads and writes (supabase/migrations/0003).
     REQUIRED_SCHEMA = {
@@ -362,6 +365,8 @@ class PostgresStore:
     def _idempotent(self, key, operation, payload, action):
         fingerprint = hashlib.sha256(encode({"operation": operation, "payload": payload}).encode()).hexdigest()
         with pg_transaction() as conn:
+            # Serialize the same request key before its first mutation.
+            self._execute(conn, "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
             cur = self._execute(conn, "SELECT fingerprint, response FROM idempotency WHERE key=%s", (key,))
             existing = cur.fetchone()
             if existing:
@@ -428,8 +433,9 @@ class PostgresStore:
         for item in draft["items"]:
             ingredient = item["ingredient_id"]
             deltas[ingredient] = deltas.get(ingredient, Decimal(0)) + Decimal(item["canonical_quantity"])
-        for ingredient, quantity in deltas.items():
-            cur = self._execute(conn, "SELECT quantity FROM stock WHERE slug=%s AND ingredient_id=%s", (restaurant_id, ingredient))
+        for ingredient, quantity in sorted(deltas.items()):
+            self._execute(conn, "INSERT INTO stock (slug,ingredient_id,quantity) VALUES (%s,%s,'0') ON CONFLICT DO NOTHING", (restaurant_id, ingredient))
+            cur = self._execute(conn, "SELECT quantity FROM stock WHERE slug=%s AND ingredient_id=%s FOR UPDATE", (restaurant_id, ingredient))
             row = cur.fetchone()
             stock = Decimal(row[0]) if row else Decimal(0)
             if row:
