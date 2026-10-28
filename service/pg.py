@@ -61,16 +61,17 @@ def db_config():
 
 
 def reset_pool():
-    """Drop cached config and pool (used after a failed hosted bootstrap and by tests)."""
-    global _pool
+    """Drop this thread's ambient connection and cached config (used after a
+    failed hosted bootstrap and by tests). The ambient design has no global
+    pool: each worker thread owns one long-lived connection."""
     db_config.cache_clear()
-    with _pool_lock:
-        if _pool is not None:
-            try:
-                _pool.closeall()
-            except Exception:
-                pass
-        _pool = None
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    _local.conn = None
 
 
 # The session pooler is far from this machine (Tokyo), and on a mobile
@@ -111,10 +112,28 @@ def _ambient():
     raise last_error
 
 
+class _AmbientPool:
+    """Pool-like adapter over the per-thread ambient connection, so every
+    borrower (and hosted-mode tests) goes through one uniform entry point."""
+
+    def getconn(self):
+        return _ambient()
+
+    def putconn(self, conn, close=False):
+        pass  # ambient connections stay bound to their thread
+
+
+_AMBIENT_POOL = _AmbientPool()
+
+
+def _get_pool():
+    return _AMBIENT_POOL
+
+
 @contextmanager
 def pg_connection():
     """One live connection; callers commit or roll back explicitly."""
-    conn = _ambient()
+    conn = _get_pool().getconn()
     try:
         conn.autocommit = False
         yield conn
