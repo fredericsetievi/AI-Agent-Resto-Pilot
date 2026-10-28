@@ -214,7 +214,9 @@ def test_unreachable_database_fails_closed(hosted_env, tmp_path):
 # ---- hosted HTTP behaviour on an isolated SQLite store ----------------------------
 
 @pytest.fixture
-def hosted(tmp_path):
+def hosted(tmp_path, monkeypatch):
+    # A deployment may have the opt-in enabled; default-policy tests control it.
+    monkeypatch.delenv("ALLOW_DEMO_OWNER_LOGIN", raising=False)
     store = Store(tmp_path / "hosted.sqlite3", seed=True)
     app = create_app(tmp_path / "unused.sqlite3", hosted=True, public_demo=True, store_factory=lambda: store)
     return app, store
