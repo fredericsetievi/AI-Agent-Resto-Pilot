@@ -61,7 +61,11 @@ INVOICE = {"supplier": "Toko Campur",
 @pytest.fixture
 def client(tmp_path):
     fake_vision = FakeVision(INVOICE)
-    fake_filter = FakeFilter({"kitchen": [0], "non_kitchen": [1]})
+    # The filter payload holds only the catalog-unknown names re-indexed from
+    # 0 (telur is catalog-mapped and skips the model), so the model answers in
+    # that 0-based payload space: pepsodent is payload item 0. classify_items
+    # maps the verdict back to the global draft indices.
+    fake_filter = FakeFilter({"kitchen": [], "non_kitchen": [0]})
     app = create_app(tmp_path / "ocr.sqlite3", vision_api_key="synthetic-key",
                      vision_http_client=fake_vision, stock_llm_http_client=fake_filter,
                      kitchen_filter_enabled=True)
