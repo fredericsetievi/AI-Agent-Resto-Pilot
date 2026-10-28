@@ -220,6 +220,7 @@ def create_app(
     hosted=False,
     secure_cookies=None,
     store_factory=None,
+    whatsapp_open_onboarding=False,
 ):
     """Build the app.
 
@@ -570,17 +571,17 @@ def create_app(
     async def simulate_whatsapp(body: SimulatedMessage, actor=Depends(owner_actor), idempotency_key=Depends(key)):
         # The simulator may only speak as one of this restaurant's linked numbers.
         sender_restaurant = store.restaurant_for_sender(body.sender)
-        if not sender_restaurant or sender_restaurant["id"] != actor["restaurant_id"]:
+        if (sender_restaurant and sender_restaurant["id"] != actor["restaurant_id"]) or (not sender_restaurant and not whatsapp_open_onboarding):
             raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
         payload = body.model_dump()
-        if payload["text"].strip():
+        if sender_restaurant and payload["text"].strip():
             # A stock question is answered read-only from the restaurant's own
             # inventory; the purchase extraction is skipped entirely for it.
             payload["stock_answer"] = await build_stock_answer(payload["text"], actor["restaurant_id"])
             if payload["stock_answer"] is None:
                 payload["extracted_text"] = await filter_kitchen_items(
                     await extract_text(payload["text"], actor["restaurant_name"]), actor["restaurant_id"])
-        return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"])}
+        return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"], open_onboarding=whatsapp_open_onboarding)}
 
     def csv_attachment(rows, filename):
         buffer = io.StringIO()
@@ -780,6 +781,7 @@ def create_app(
                 channel=LIVE + ":" + meta_phone_number_id,
                 outbound_status=OUTBOUND_PENDING,
                 restaurant_id=restaurant_id,
+                open_onboarding=whatsapp_open_onboarding,
             )
             outbound = result["messages"][-1]
             claimed = await run_in_threadpool(

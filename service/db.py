@@ -20,6 +20,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .extraction import catalog_aliases, extract_purchase, normalize_item
+from .onboarding import restaurant_selection
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup, parse_remove_item, stock_reply, weekly_summary_reply
 
 
@@ -671,7 +672,7 @@ class Store:
             row = conn.execute("SELECT name FROM restaurants WHERE id=?", (restaurant_id,)).fetchone()
         return row[0] if row else None
 
-    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None):
+    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, open_onboarding=False):
         """Persist inbound, decision/ledger, outbound and dedupe in one commit.
 
         The WhatsApp allowlist is the tenant gate: a sender's phone number must
@@ -709,8 +710,19 @@ class Store:
                 return json.loads(prior["response"])
             link = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=?", (payload["sender"],)).fetchone()
             linked = link["restaurant_id"] if link else None
-            if restaurant_id is not None and linked != restaurant_id:
-                # Simulator callers may only speak as one of their own numbers.
+            onboarding_reply = None
+            if linked is None and open_onboarding:
+                rows = [dict(row) for row in conn.execute("SELECT id, name FROM restaurants ORDER BY name, id")]
+                choices = [row for row in rows if restaurant_id is None or row["id"] == restaurant_id]
+                selected, onboarding_reply = restaurant_selection(choices, payload["text"])
+                if selected:
+                    phone = validate_phone_number(payload["sender"])
+                    conn.execute("INSERT OR IGNORE INTO whatsapp_links (id, restaurant_id, phone, label, created_at) VALUES (?, ?, ?, ?, ?)",
+                                 (uuid.uuid4().hex, selected["id"], phone, "WhatsApp self-registration", now()))
+                    linked = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=?", (phone,)).fetchone()[0]
+                    if linked != selected["id"]:
+                        raise DomainError("sender_link_changed", "This number was linked elsewhere. Please send your message again.", 409)
+            if restaurant_id is not None and linked != restaurant_id and not (linked is None and open_onboarding):
                 raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
             tenant = linked
             thread = self._whatsapp_thread(conn, payload["sender"], channel, transport, restaurant_id=tenant, create=True)
@@ -725,7 +737,10 @@ class Store:
             thread["pending_followup"] = None
             command = payload["text"].strip().casefold()
             result = {}
-            if tenant is None:
+            if onboarding_reply is not None:
+                reply = onboarding_reply
+                result["action"] = "restaurant_selected" if tenant else "restaurant_selection_required"
+            elif tenant is None:
                 # Unregistered sender: a read-only rejection. No draft, no
                 # ledger, no model call happened upstream; the admin sees the
                 # attempt in the console and can register the number.

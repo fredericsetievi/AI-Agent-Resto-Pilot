@@ -37,6 +37,7 @@ from .db import (
 )
 from .extraction import extract_purchase
 from .pg import pg_connection, pg_transaction
+from .onboarding import restaurant_selection
 from .whatsapp import (
     FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR,
     UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup,
@@ -653,7 +654,7 @@ class PostgresStore:
             row = cur.fetchone()
         return row[0] if row else None
 
-    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None):
+    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, open_onboarding=False):
         channel = channel or transport
         extracted_photo = payload.get("extracted")
         source_label = payload.get("source_label") or "Foto nota WhatsApp"
@@ -682,7 +683,21 @@ class PostgresStore:
             cur = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s", (payload["sender"],))
             link = cur.fetchone()
             linked = link[0] if link else None
-            if restaurant_id is not None and linked != restaurant_id:
+            onboarding_reply = None
+            if linked is None and open_onboarding:
+                rows = self._rows(self._execute(conn,
+                    "SELECT t.slug AS id, r.name FROM tenants t JOIN restaurants r ON r.id=t.restaurant_id ORDER BY r.name, t.slug"))
+                choices = [row for row in rows if restaurant_id is None or row["id"] == restaurant_id]
+                selected, onboarding_reply = restaurant_selection(choices, payload["text"])
+                if selected:
+                    phone = validate_phone_number(payload["sender"])
+                    self._execute(conn,
+                        "INSERT INTO whatsapp_links (id, slug, phone, label) VALUES (%s, %s, %s, %s) ON CONFLICT (phone) DO NOTHING",
+                        (uuid.uuid4().hex, selected["id"], phone, "WhatsApp self-registration"))
+                    linked = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s", (phone,)).fetchone()[0]
+                    if linked != selected["id"]:
+                        raise DomainError("sender_link_changed", "This number was linked elsewhere. Please send your message again.", 409)
+            if restaurant_id is not None and linked != restaurant_id and not (linked is None and open_onboarding):
                 raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
             tenant = linked
             thread = self._whatsapp_thread(conn, payload["sender"], channel, transport, restaurant_id=tenant, create=True)
@@ -695,7 +710,10 @@ class PostgresStore:
             thread["pending_followup"] = None
             command = payload["text"].strip().casefold()
             result = {}
-            if tenant is None:
+            if onboarding_reply is not None:
+                reply = onboarding_reply
+                result["action"] = "restaurant_selected" if tenant else "restaurant_selection_required"
+            elif tenant is None:
                 reply = UNREGISTERED_REPLY
                 result["action"] = "unregistered_sender"
             elif extracted_photo:

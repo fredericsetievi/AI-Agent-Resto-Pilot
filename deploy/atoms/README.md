@@ -8,7 +8,7 @@ This directory preserves the exported Atoms frontend, native backend, Lambda
 handler, platform plugins (including Atoms branding), and managed startup script.
 The hosted application changes are applied to the repository's `service/` and
 `frontend/`, on top of the newer integration commits including the kitchen filter.
-This GitHub sync does not republish the live site or merge into `main`.
+This deployment is being consolidated into `main`, preserving the existing integration history.
 
 ## Sources and build
 
@@ -50,6 +50,7 @@ Enter values through Atoms' private server keys, never frontend `VITE_*` values:
 | `SUPABASE_DB_HOST` | Optional session-pooler host for IPv4-only runtimes |
 | `SUPABASE_DB_USER` | Pooler user `postgres.<project-ref>` |
 | `SUPABASE_DB_PORT` | Session pooler port, normally `5432` |
+| `WHATSAPP_OPEN_ONBOARDING` | Default `1`: new WhatsApp senders select a restaurant, then the number is linked; `0` restores administrator-only linking |
 | `ALLOW_DEMO_OWNER_LOGIN` | Exact value `1` opts the existing `owner` account into normal password verification |
 
 The deployment currently has the owner opt-in enabled with the user's approval.
@@ -62,8 +63,11 @@ unreachable Postgres, or schema mismatch returns `storage_unavailable`; it never
 creates a SQLite substitute. Database connections require TLS.
 
 Optional Meta and StepFun keys follow the root `.env.example`; the adapter only
-uses explicitly configured server values. This sync does not configure or alter
-any live WhatsApp webhook. The root CLI remains the separate local demo launcher.
+uses explicitly configured server values. The user approved moving the existing Meta test account’s callback to
+`https://restopilot-dashboard.pub.atoms.world/api/v1/restopilot/webhooks/meta/whatsapp`.
+Set the private server `PUBLIC_BASE_URL` to the Atoms HTTPS origin (no path).
+This keeps the same test account and does not initiate business verification.
+Meta’s test-recipient limitations still apply independently of app enrollment. The root CLI remains the separate local demo launcher.
 
 ## Routing and verification
 
