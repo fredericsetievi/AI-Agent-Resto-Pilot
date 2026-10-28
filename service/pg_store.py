@@ -27,6 +27,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 
 from .inventory import InventoryMixin
+from .operations import OperationsMixin
+from .purchase_sources import PurchaseSourcesMixin
 from .db import (
     APPROVE_COMMANDS, CATALOG, CATALOG_BY_ID, DEMO_NUMBERS, DEMO_USERS,
     DomainError, RESTAURANT, RESTAURANT_TIMEZONE, REJECT_COMMANDS,
@@ -46,7 +48,7 @@ from .whatsapp import (
 )
 
 
-class PostgresStore(InventoryMixin):
+class PostgresStore(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
     """The RestoPilot authority in Supabase Postgres. Same contract as Store."""
 
     inventory_postgres = True
@@ -524,7 +526,20 @@ class PostgresStore(InventoryMixin):
     # ---- WhatsApp -----------------------------------------------------------
 
     def _whatsapp_thread(self, conn, sender, channel, transport, restaurant_id=None, create=False):
-        cur = self._execute(conn, "SELECT * FROM whatsapp_threads WHERE channel=%s AND sender=%s", (channel, sender))
+        # A whole conversation is serialized, including distinct Meta event IDs.
+        # Creating the deterministic row first also covers simultaneous first
+        # messages without relying on a request-key lock shared by those IDs.
+        if create:
+            self._execute(
+                conn,
+                "INSERT INTO whatsapp_threads (id, slug, channel, sender, transport) VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT (channel, sender) DO NOTHING",
+                (hashlib.sha256((channel + "\0" + sender).encode()).hexdigest()[:32], restaurant_id, channel, sender, transport),
+            )
+        cur = self._execute(
+            conn, "SELECT * FROM whatsapp_threads WHERE channel=%s AND sender=%s" + (" FOR UPDATE" if create else ""),
+            (channel, sender),
+        )
         columns = [desc[0] for desc in cur.description]
         row = cur.fetchone()
         if row:
@@ -533,16 +548,9 @@ class PostgresStore(InventoryMixin):
                 thread["slug"] = restaurant_id
                 self._execute(conn, "UPDATE whatsapp_threads SET slug=%s WHERE id=%s", (restaurant_id, thread["id"]))
             return thread
-        thread = {"id": hashlib.sha256((channel + "\0" + sender).encode()).hexdigest()[:32], "channel": channel,
-                  "sender": sender, "transport": transport, "active_draft_id": None, "active_version": None,
-                  "pending_followup": None, "slug": restaurant_id}
-        if create:
-            self._execute(
-                conn,
-                "INSERT INTO whatsapp_threads (id, slug, channel, sender, transport) VALUES (%s, %s, %s, %s, %s)",
-                (thread["id"], restaurant_id, channel, sender, transport),
-            )
-        return thread
+        return {"id": hashlib.sha256((channel + "\0" + sender).encode()).hexdigest()[:32], "channel": channel,
+                "sender": sender, "transport": transport, "active_draft_id": None, "active_version": None,
+                "pending_followup": None, "slug": restaurant_id}
 
     def _whatsapp_snapshot(self, conn, thread, draft=None, result=None):
         tenant = thread.get("slug")
@@ -662,6 +670,8 @@ class PostgresStore(InventoryMixin):
 
     def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, open_onboarding=False):
         channel = channel or transport
+        operation_candidate = payload.get("operation_candidate")
+        operation_source = payload.get("operation_source")
         extracted_photo = payload.get("extracted")
         source_label = payload.get("source_label") or "Foto nota WhatsApp"
         transcript = payload.get("transcript")
@@ -676,14 +686,34 @@ class PostgresStore(InventoryMixin):
         if not isinstance(stock_answer, dict) or not isinstance(stock_answer.get("body"), str) or not stock_answer["body"].strip():
             stock_answer = None
         payload = {"sender": payload["sender"], "text": payload["text"], "event_id": payload.get("event_id"), "num_media": payload.get("num_media", 0)}
+        # Provenance bytes/media identity are stable across provider retries;
+        # model-derived candidates and transcripts deliberately are not.
+        fingerprint_source = {}
+        if isinstance(operation_source, dict):
+            identity_fields = ("media_id", "media_kind", "caption") if operation_source.get("media_id") else ("digest", "media_kind", "caption")
+            identity = {name: operation_source[name] for name in identity_fields if operation_source.get(name) is not None}
+            if identity:
+                fingerprint_source = identity
         event_id = payload["event_id"] or "sim:" + key
-        fingerprint = hashlib.sha256(encode({"sender": payload["sender"], "text": payload["text"], "num_media": payload["num_media"]}).encode()).hexdigest()
+        request_identity = dict(payload)
+        if fingerprint_source.get("media_kind") == "image" and fingerprint_source.get("media_id"):
+            # Older normalizers omitted image captions. Keep their request-key
+            # identity while retaining the caption in the stronger event hash.
+            request_identity["text"] = ""
+            fingerprint_source.setdefault("caption", payload["text"])
+        fingerprint_body = {"sender": request_identity["sender"], "text": request_identity["text"], "num_media": request_identity["num_media"]}
+        # Preserve request-key compatibility with already stored WhatsApp
+        # callbacks; media identity tightens the provider-event comparison.
+        legacy_fingerprint = hashlib.sha256(encode(fingerprint_body).encode()).hexdigest()
+        if fingerprint_source:
+            fingerprint_body["operation_source"] = fingerprint_source
+        fingerprint = hashlib.sha256(encode(fingerprint_body).encode()).hexdigest()
 
         def action(conn):
             cur = self._execute(conn, "SELECT fingerprint, response FROM whatsapp_events WHERE channel=%s AND event_id=%s", (channel, event_id))
             prior = cur.fetchone()
             if prior:
-                if prior[0] != fingerprint:
+                if prior[0] not in (fingerprint, legacy_fingerprint):
                     raise DomainError("event_conflict", "This message event was already used for different content or sender.")
                 return prior[1]
             cur = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s", (payload["sender"],))
@@ -707,13 +737,29 @@ class PostgresStore(InventoryMixin):
                 raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
             tenant = linked
             thread = self._whatsapp_thread(conn, payload["sender"], channel, transport, restaurant_id=tenant, create=True)
+            # Another key may have replayed this same provider event while we
+            # waited on the thread lock. Re-read before touching any draft.
+            prior = self._execute(conn, "SELECT fingerprint, response FROM whatsapp_events WHERE channel=%s AND event_id=%s", (channel, event_id)).fetchone()
+            if prior:
+                if prior[0] not in (fingerprint, legacy_fingerprint):
+                    raise DomainError("event_conflict", "This message event was already used for different content or sender.")
+                return prior[1]
             names = self.catalog_names(tenant) if tenant else None
             draft = self._load_draft(conn, thread["active_draft_id"], tenant) if thread["active_draft_id"] and tenant else None
             if draft and draft["status"] not in ("pending_approval", "needs_clarification"):
                 draft = None
                 thread.update(active_draft_id=None, active_version=None)
             pending_purchase = thread.get("pending_followup")
-            thread["pending_followup"] = None
+            operation_result = None
+            if tenant and onboarding_reply is None:
+                operation_result = self._operation_handle(
+                    conn, thread, tenant, transcript or payload["text"],
+                    candidate=operation_candidate, source=operation_source,
+                    purchase_draft=draft,
+                )
+            # Inventory conversations must not consume purchase payment state.
+            if operation_result is None:
+                thread["pending_followup"] = None
             command = payload["text"].strip().casefold()
             result = {}
             if onboarding_reply is not None:
@@ -722,12 +768,20 @@ class PostgresStore(InventoryMixin):
             elif tenant is None:
                 reply = UNREGISTERED_REPLY
                 result["action"] = "unregistered_sender"
+            elif operation_result is not None:
+                reply = operation_result["reply"]
+                result = operation_result["result"]
             elif extracted_photo:
-                if draft:
+                source_digest, source_result = self._purchase_source_guard(conn, tenant, operation_source)
+                if source_result is not None:
+                    reply, result = source_result["reply"], source_result["result"]
+                    thread["pending_followup"] = pending_purchase
+                elif draft:
                     reply = "Foto diterima. Masih ada draf yang menunggu konfirmasimu dulu, jadi foto ini belum dicatat:\n" + draft_reply(draft, names)
                     result["action"] = "active_draft_exists"
                 else:
                     draft = self._new_draft(conn, source_label, extracted_photo.get("supplier"), extracted_photo.get("items") or [], extracted_photo.get("warnings") or [], restaurant_id=tenant)
+                    self._purchase_source_register(conn, tenant, source_digest, draft["id"])
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = "Nota diterima. Cek draf pembelian ini:\n" + draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
@@ -876,7 +930,7 @@ class PostgresStore(InventoryMixin):
             )
             return response
 
-        return self._idempotent(key, "whatsapp:" + channel, payload, action)
+        return self._idempotent(key, "whatsapp:" + channel, request_identity, action)
 
     # ---- reports and exports ------------------------------------------------
 

@@ -1,5 +1,11 @@
 # Stock usage, sales, and order planning
 
+Deployment status, 2026-10-29: the dashboard inventory feature is published as
+Atoms V7 on the existing RestoPilot domain. Live migration0004 was already
+present and was verified rather than rerun. The new [WhatsApp extension](WHATSAPP_INVENTORY.md)
+is implemented and tested locally; the owner has approved its migration0005
+and publication. Verify the deployed version before treating it as live.
+
 The Inventory page closes the receipt-to-stock loop. Purchases received and approved through WhatsApp or the dashboard add stock as before. These new owner tools record what happens afterwards; the server stores them in the same restaurant ledger.
 
 ## Daily workflow

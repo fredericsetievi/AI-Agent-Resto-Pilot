@@ -239,3 +239,86 @@ def test_missing_movement_column_reports_migration_required(pg_inventory):
     finally:
         with store.transaction() as conn, conn.cursor() as cur:
             cur.execute((Path(__file__).parents[1] / "supabase/migrations/0004_inventory_operations.sql").read_text())
+
+
+def post_batch(store, payloads):
+    with store.transaction() as conn:
+        return store._post_inventory_batch_conn(conn, payloads, "alpha")
+
+
+def test_batch_preview_runs_in_read_only_transaction_without_creating_stock(pg_inventory):
+    store = pg_inventory
+    payload = usage("3", ingredient="cabai", kind="count")
+    payload["items"][0]["expected_quantity"] = "0"
+    payload["confirmed"] = False
+    with store.transaction() as conn:
+        store._execute(conn, "SET TRANSACTION READ ONLY")
+        preview = store._preview_inventory_batch_conn(conn, [payload], "alpha")
+        assert preview[0]["items"][0]["after"] == "3"
+    assert query(store, "SELECT count(*) FROM stock WHERE slug='alpha' AND ingredient_id='cabai'") == [(0,)]
+
+
+def test_batch_combined_shortage_posts_no_partial_recipe_events(pg_inventory):
+    store = pg_inventory
+    recipe = store.save_inventory_recipe("rice_recipe", {"name": "Rice", "items": [{"ingredient_id": "beras", "quantity": "3"}]}, "alpha")
+    sale = {"kind": "sale", "confirmed": True, "note": "Daily sales", "recipe_id": recipe["id"], "expected_recipe_version": recipe["version"], "portions": "2"}
+    with pytest.raises(DomainError) as error:
+        post_batch(store, [sale, usage("5")])
+    assert error.value.code == "insufficient_stock"
+    assert balance(store) == 10
+    assert query(store, "SELECT count(*) FROM inventory_events") == [(0,)]
+    assert query(store, "SELECT count(*) FROM movements") == [(0,)]
+
+
+def test_batch_counts_apply_last_and_rollback_with_caller(pg_inventory):
+    store = pg_inventory
+    count = usage("7", kind="count")
+    count["items"][0]["expected_quantity"] = "10"
+    with pytest.raises(RuntimeError):
+        with store.transaction() as conn:
+            events = store._post_inventory_batch_conn(conn, [count, usage("2")], "alpha")
+            assert events[0]["items"][0]["before"] == "8"
+            raise RuntimeError("approval persistence failed")
+    assert balance(store) == 10
+    assert query(store, "SELECT count(*) FROM inventory_events") == [(0,)]
+    post_batch(store, [count, usage("2")])
+    assert balance(store) == 7
+
+
+def test_concurrent_batches_and_receipt_share_sorted_stock_locks(pg_inventory):
+    store = pg_inventory
+    draft = store.intake("batch_receipt", {"text": "rice", "supplier": "Test"}, extracted={"items": [{"ingredient_id": "beras", "raw_name": "Beras", "quantity": "2", "unit": "kg", "line_total_idr": 20000}], "warnings": []}, restaurant_id="alpha")
+    parallel([
+        lambda: post_batch(store, [usage("1", "telur"), usage("1", "beras")]),
+        lambda: post_batch(store, [usage("1", "beras"), usage("1", "telur")]),
+        lambda: store.decision(draft["id"], "approve", {"expected_version": draft["version"], "decision": "approve", "received": True}, "alpha"),
+    ])
+    assert balance(store) == 10 and balance(store, ingredient="telur") == 8
+    assert query(store, "SELECT count(*) FROM inventory_events") == [(4,)]
+    assert query(store, "SELECT count(*) FROM movements") == [(5,)]
+
+
+def test_batch_approval_key_serializes_concurrent_callers(pg_inventory):
+    store = pg_inventory
+
+    def approve():
+        return store._idempotent("operation:alpha:draft1:v1", "operation_approval", {"draft": "draft1", "version": 1}, lambda conn: store._post_inventory_batch_conn(conn, [usage("1"), usage("1", "telur")], "alpha"))
+
+    results = parallel([approve for _ in range(5)])
+    assert all(result == results[0] for result in results)
+    assert balance(store) == 9 and balance(store, ingredient="telur") == 9
+    assert query(store, "SELECT count(*) FROM inventory_events") == [(2,)]
+
+
+def test_batch_holds_recipe_version_lock_until_approval_transaction_commits(pg_inventory):
+    store = pg_inventory
+    psycopg2 = pytest.importorskip("psycopg2")
+    recipe = store.save_inventory_recipe("locked_recipe", {"name": "Rice", "items": [{"ingredient_id": "beras", "quantity": "1"}]}, "alpha")
+    payload = {"kind": "sale", "confirmed": True, "note": "Recipe snapshot", "recipe_id": recipe["id"], "expected_recipe_version": recipe["version"], "portions": "2"}
+    with store.transaction() as conn:
+        store._post_inventory_batch_conn(conn, [payload], "alpha")
+        with pytest.raises(psycopg2.errors.LockNotAvailable):
+            with store.transaction() as editing:
+                store._execute(editing, "SET LOCAL lock_timeout = '100ms'")
+                store._execute(editing, "UPDATE inventory_recipes SET body=body WHERE restaurant_id=%s AND id=%s", ("alpha", recipe["id"]))
+    assert balance(store) == 8

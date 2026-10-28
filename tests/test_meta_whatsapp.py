@@ -217,7 +217,7 @@ def test_media_is_not_fetched_and_gets_safe_text_reply(client, provider, app):
     body = payload(event_id="wamid.media", message_type="image")
     body["entry"][0]["changes"][0]["value"]["messages"][0]["image"]["link"] = "http://127.0.0.1/private-secret"
     assert webhook(client, body).status_code == 200
-    assert "Foto/audio" in provider.calls[0]["json"]["text"]["body"]
+    assert "Belum dicatat" in provider.calls[0]["json"]["text"]["body"]
     with app.state.store.transaction() as conn:
         bodies = " ".join(row[0] for row in conn.execute("SELECT body FROM whatsapp_messages"))
     assert "private-secret" not in bodies
@@ -299,6 +299,9 @@ def photo_app(tmp_path, provider, vision):
 def test_inbound_photo_is_read_by_vision_and_becomes_a_draft(tmp_path, provider):
     vision = FakeVisionClient()
     vision.responses.append(vision_completion({
+        "document_type": "purchase_invoice", "lines": [], "unresolved": [],
+    }))
+    vision.responses.append(vision_completion({
         "supplier": "Petik Segar",
         "items": [{"raw_name": "Cabai merah", "quantity": "3", "unit": "kg", "line_total_idr": 150000, "confidence": "high"}],
         "unreadable": [],
@@ -345,8 +348,10 @@ def test_inbound_photo_with_a_failed_read_falls_back_to_the_safe_reply(tmp_path,
         before = app.state.store.overview(RESTAURANT["id"])["drafts"]
         assert webhook(client, payload(event_id="wamid.photo-fail", message_type="image")).status_code == 200
         replies = [call for call in provider.calls if call["method"] == "POST"]
-        assert "Foto/audio belum diproses" in replies[0]["json"]["text"]["body"]
+        assert "Belum dicatat" in replies[0]["json"]["text"]["body"]
         assert app.state.store.overview(RESTAURANT["id"])["drafts"] == before
+        with app.state.store.transaction() as conn:
+            assert conn.execute("SELECT count(*) FROM inventory_events").fetchone()[0] == 0
 
 
 def test_send_failure_is_safe_and_retryable(client, provider):

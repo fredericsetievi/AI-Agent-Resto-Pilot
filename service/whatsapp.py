@@ -176,7 +176,10 @@ def _normalize_message(message):
         media_id = image.get("id") if isinstance(image, dict) else None
         if not isinstance(media_id, str) or not _MEDIA_ID.fullmatch(media_id):
             raise MetaWhatsAppError("Invalid Meta WhatsApp image message.", 400)
-        text, num_media, media_kind = "", 1, "image"
+        caption = image.get("caption", "")
+        if not isinstance(caption, str) or len(caption) > 10_000:
+            raise MetaWhatsAppError("Invalid Meta WhatsApp image caption.", 400)
+        text, num_media, media_kind = caption.strip(), 1, "image"
     elif message.get("type") in ("audio", "voice"):
         audio = message.get(message["type"])
         media_id = audio.get("id") if isinstance(audio, dict) else None
