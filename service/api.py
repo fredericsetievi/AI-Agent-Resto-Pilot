@@ -39,6 +39,7 @@ from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, SESSION_TTL, Sto
 from .pg_store import PostgresStore
 from .extraction import extract_purchase
 from .text_llm import StepFunTextError, extract_message
+from .stock_llm import phrase_stock_answer
 from .vision import (
     DEFAULT_BASE_URL as VISION_DEFAULT_BASE_URL,
     DEFAULT_MODEL as VISION_DEFAULT_MODEL,
@@ -62,6 +63,7 @@ from .whatsapp import (
     meta_event_key,
     parse_payment_followup,
     parse_webhook,
+    stock_reply,
     public_origin,
     send_audio_message,
     send_text,
@@ -82,6 +84,15 @@ def _test_sqlite_fallback():
     """Tests force the SQLite path by importing service.api under FORCE_SQLITE=1."""
     import os
     return os.environ.get("FORCE_SQLITE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def effective_asr_config(asr_api_key, asr_base_url, vision_api_key, vision_base_url):
+    """Resolve the voice-note ASR provider: an explicit AUDIO_ASR_* override
+    (e.g. a multilingual speech service) wins; otherwise ASR shares the StepFun
+    account and base URL with vision, exactly as before."""
+    key = (asr_api_key or "").strip() or vision_api_key
+    base = validate_vision_base_url(asr_base_url) if asr_base_url else vision_base_url
+    return key, base
 
 
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, max_length=200)]
@@ -193,11 +204,15 @@ def create_app(
     vision_base_url=None,
     vision_http_client=None,
     asr_model=None,
+    asr_api_key=None,
+    asr_base_url=None,
     tts_model=None,
     tts_voice=None,
     text_llm_enabled=False,
     text_llm_model=None,
     text_llm_http_client=None,
+    stock_llm_enabled=False,
+    stock_llm_http_client=None,
 ):
     app = FastAPI(title="RestoPilot local demo", version="0.2.0", description="Session login with resto owner and platform admin roles, per-restaurant tenant isolation, WhatsApp allowlist, rules extraction and SQLite.")
     # The authority is Supabase Postgres when configured; the local SQLite
@@ -244,6 +259,34 @@ def create_app(
             logger.warning("StepFun text rescue failed; keeping the rules result: %s", exc)
             return extracted
         return rescued if rescued["items"] else extracted
+
+    async def build_stock_answer(text, restaurant_id):
+        """Answer a stock question from the inventory ledger, never the model.
+
+        Facts are scoped to the asking restaurant before anything reaches the
+        model; with the stock flag on, the model only rephrases those facts
+        and any configuration, transport, or validation problem keeps the
+        deterministic text. Returns None when the message is not a stock
+        question, leaving the purchase flow alone.
+        """
+        facts = store.stock_facts(text, restaurant_id)
+        if facts is None:
+            return None
+        reply = stock_reply(facts["facts"])
+        if stock_llm_enabled and vision_api_key:
+            try:
+                reply = await phrase_stock_answer(
+                    facts["question"],
+                    facts["facts"],
+                    restaurant=facts.get("restaurant_name"),
+                    api_key=vision_api_key,
+                    model=text_llm_model,
+                    base_url=vision_base_url,
+                    client=stock_llm_http_client,
+                )
+            except (StepFunTextError, ValueError) as exc:
+                logger.warning("StepFun stock phrasing failed; keeping the deterministic reply: %s", exc)
+        return {"body": reply}
     app.state.store = store
     configured_origin = public_origin(public_base_url)
     meta_waba_id = validate_meta_id(meta_waba_id, "META_WABA_ID") if meta_waba_id else None
@@ -252,8 +295,11 @@ def create_app(
     meta_graph_api_version = validate_graph_version(meta_graph_api_version)
     vision_model = validate_vision_model(vision_model) if vision_model else VISION_DEFAULT_MODEL
     vision_base_url = validate_vision_base_url(vision_base_url) if vision_base_url else VISION_DEFAULT_BASE_URL
-    # ASR/TTS share the StepFun account: the vision key and base URL serve audio too.
+    # ASR may run on its own provider (AUDIO_ASR_*); without an override it
+    # shares the StepFun account and base URL with vision. TTS always stays on
+    # the StepFun account.
     asr_model = validate_asr_model(asr_model) if asr_model else DEFAULT_ASR_MODEL
+    asr_api_key, asr_base_url = effective_asr_config(asr_api_key, asr_base_url, vision_api_key, vision_base_url)
     tts_model = validate_tts_model(tts_model) if tts_model else DEFAULT_TTS_MODEL
     tts_voice = (tts_voice or DEFAULT_TTS_VOICE).strip() or DEFAULT_TTS_VOICE
 
@@ -425,7 +471,11 @@ def create_app(
             raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
         payload = body.model_dump()
         if payload["text"].strip():
-            payload["extracted_text"] = await extract_text(payload["text"], actor["restaurant_name"])
+            # A stock question is answered read-only from the restaurant's own
+            # inventory; the purchase extraction is skipped entirely for it.
+            payload["stock_answer"] = await build_stock_answer(payload["text"], actor["restaurant_id"])
+            if payload["stock_answer"] is None:
+                payload["extracted_text"] = await extract_text(payload["text"], actor["restaurant_name"])
         return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"])}
 
     def csv_attachment(rows, filename):
@@ -599,9 +649,9 @@ def create_app(
                     payload["transcript"] = await transcribe_audio(
                         audio,
                         mime,
-                        api_key=vision_api_key,
+                        api_key=asr_api_key,
                         model=asr_model,
-                        base_url=vision_base_url,
+                        base_url=asr_base_url,
                         client=vision_http_client,
                     )
                     if payload["transcript"].strip():
@@ -610,8 +660,12 @@ def create_app(
                     logger.warning("WhatsApp voice intake failed: %s", exc)
             elif not message.get("media_kind") and payload["text"].strip() and sender_restaurant:
                 # Plain text gets the same rules-then-model rescue so free-form
-                # sentences reach the draft flow; commands skip the model.
-                payload["extracted_text"] = await extract_text(payload["text"], sender_restaurant["name"])
+                # sentences reach the draft flow; commands skip the model. A
+                # stock question is answered read-only from the sender's own
+                # restaurant inventory before any of that.
+                payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
+                if payload["stock_answer"] is None:
+                    payload["extracted_text"] = await extract_text(payload["text"], sender_restaurant["name"])
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),

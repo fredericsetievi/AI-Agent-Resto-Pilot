@@ -18,3 +18,36 @@ INFO:     127.0.0.1:59676 - "GET /assets/app.js HTTP/1.1" 200 OK
 INFO:     127.0.0.1:59676 - "GET /v1/auth/me HTTP/1.1" 401 Unauthorized
 INFO:     127.0.0.1:59676 - "GET / HTTP/1.1" 200 OK
 INFO:     127.0.0.1:59676 - "GET /landing-assets/styles.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53557 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53557 - "GET /landing-assets/styles.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64693 - "GET /app HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64693 - "GET /assets/styles.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62597 - "GET /assets/app.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62597 - "GET /v1/auth/me HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:61123 - "POST /v1/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50325 - "POST /v1/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52122 - "POST /v1/auth/logout HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57611 - "POST /v1/auth/logout HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58242 - "GET /v1/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57611 - "GET /v1/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:57611 - "GET /v1/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:57611 - "GET /v1/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:52122 - "POST /v1/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58242 - "POST /v1/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57611 - "GET /v1/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:57611 - "GET /v1/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:57611 - "GET /v1/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:57611 - "GET /v1/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:57611 - "GET /v1/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:57611 - "GET /v1/overview HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52122 - "GET /v1/admin/restaurants HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57852 - "GET /v1/overview HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53015 - "GET /v1/overview HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:58508 - "GET /v1/overview HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52544 - "GET /v1/overview HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53015 - "GET /v1/admin/restaurants/demo-resto/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64966 - "GET /v1/overview HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53166 - "GET /v1/overview HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64164 - "GET /v1/overview HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53166 - "GET /v1/overview HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:62946 - "GET /v1/overview HTTP/1.1" 404 Not Found

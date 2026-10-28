@@ -30,14 +30,16 @@ from .db import (
     DomainError, RESTAURANT, RESTAURANT_TIMEZONE, REJECT_COMMANDS,
     SCHEMA_VERSION, SESSION_TTL, SUMMARY_COMMANDS, SUMMARY_WINDOW_DAYS,
     MAX_TRANSCRIPT_CHARS,
-    decimal_string, draft_total, encode, hash_password, normalize_items_for_catalog,
-    now, validate_password, validate_phone_number, validate_username, verify_password,
+    catalog_aliases, decimal_string, draft_total, encode, hash_password,
+    normalize_items_for_catalog, now, validate_password, validate_phone_number,
+    validate_username, verify_password,
 )
 from .extraction import extract_purchase
 from .pg import pg_connection, pg_transaction
 from .whatsapp import (
     FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR,
-    UNREGISTERED_REPLY, draft_reply, parse_payment_followup, weekly_summary_reply,
+    UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup,
+    stock_reply, weekly_summary_reply,
 )
 
 
@@ -512,6 +514,73 @@ class PostgresStore:
             if cur.rowcount != 1:
                 raise DomainError("whatsapp_message_not_found", "Outbound WhatsApp message was not found.", 404)
 
+    def _stock_ingredient_ids(self, text, restaurant_id):
+        """Catalog ids whose names appear in the message, longest name first.
+
+        Same alias mapping as purchase extraction, extended with this
+        restaurant's runtime ingredients, so a custom bahan is askable - and
+        only by the restaurant that created it.
+        """
+        lowered = " " + re.sub(r"\s+", " ", str(text).strip().casefold()) + " "
+        aliases = list(catalog_aliases())
+        covered = {ingredient_id for _alias, ingredient_id in aliases}
+        for ingredient in self._catalog_for(restaurant_id)["list"]:
+            if ingredient["id"] in covered:
+                continue
+            for surface in (str(ingredient["id"]).replace("_", " "), str(ingredient["name"]).casefold()):
+                surface = surface.strip()
+                if surface:
+                    aliases.append((surface, ingredient["id"]))
+        found, seen = [], set()
+        claimed = []
+        for alias, ingredient_id in sorted(aliases, key=lambda pair: len(pair[0]), reverse=True):
+            if ingredient_id in seen:
+                continue
+            for match in re.finditer(r"(?<![a-z0-9_])" + re.escape(alias) + r"(?![a-z0-9_])", lowered):
+                # Longest aliases claim their span first, so "bawang putih"
+                # matches only bawang_putih and never also bawang.
+                if any(match.start() < end and start < match.end() for start, end in claimed):
+                    continue
+                claimed.append((match.start(), match.end()))
+                found.append(ingredient_id)
+                seen.add(ingredient_id)
+                break
+        return found
+
+    def stock_facts(self, text, restaurant_id=None):
+        """Read-only inventory lookup behind stock questions like 'berapa stok cabai?'.
+
+        Facts come only from the asking restaurant's stock table and catalog -
+        that scoping is the tenant guard for the whole answer, including the
+        optional model rephrase. Returns {"question", "facts"} when the
+        message is a stock question, else None. Read-only: no draft, no ledger.
+        """
+        if not is_stock_question(text) or not restaurant_id:
+            return None
+        catalog = self._catalog_for(restaurant_id)
+        with pg_transaction() as conn:
+            named = self._stock_ingredient_ids(text, restaurant_id)
+            ingredients = [catalog["by_id"][i] for i in named if i in catalog["by_id"]] if named else catalog["list"]
+            facts = []
+            for ingredient in ingredients:
+                cur = self._execute(conn, "SELECT quantity FROM stock WHERE slug=%s AND ingredient_id=%s", (restaurant_id, ingredient["id"]))
+                row = cur.fetchone()
+                quantity = row[0] if row else "0"
+                facts.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
+                              "unit": ingredient["unit"], "reorder_threshold": ingredient["reorder_threshold"],
+                              "low_stock": Decimal(quantity) < Decimal(ingredient["reorder_threshold"])})
+        return {"question": str(text).strip(), "facts": facts, "restaurant_name": self.restaurant_name(restaurant_id)}
+
+    def restaurant_name(self, restaurant_id):
+        with pg_connection() as conn:
+            cur = self._execute(
+                conn,
+                "SELECT r.name FROM restaurants r JOIN tenants t ON t.restaurant_id=r.id WHERE t.slug=%s",
+                (restaurant_id,),
+            )
+            row = cur.fetchone()
+        return row[0] if row else None
+
     def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None):
         channel = channel or transport
         extracted_photo = payload.get("extracted")
@@ -521,6 +590,12 @@ class PostgresStore:
         extracted_text = payload.get("extracted_text")
         if not isinstance(extracted_text, dict) or not isinstance(extracted_text.get("items"), list) or not isinstance(extracted_text.get("warnings"), list):
             extracted_text = None
+        # A read-only stock answer the API layer built from this restaurant's
+        # inventory facts; like extracted_text it stays out of the dedupe
+        # fingerprint (the deterministic reply is identical, a rephrase is not).
+        stock_answer = payload.get("stock_answer")
+        if not isinstance(stock_answer, dict) or not isinstance(stock_answer.get("body"), str) or not stock_answer["body"].strip():
+            stock_answer = None
         payload = {"sender": payload["sender"], "text": payload["text"], "event_id": payload.get("event_id"), "num_media": payload.get("num_media", 0)}
         event_id = payload["event_id"] or "sim:" + key
         fingerprint = hashlib.sha256(encode({"sender": payload["sender"], "text": payload["text"], "num_media": payload["num_media"]}).encode()).hexdigest()
@@ -620,6 +695,12 @@ class PostgresStore:
                 reply = weekly_summary_reply(summary, SUMMARY_WINDOW_DAYS)
                 result["action"] = "weekly_summary"
                 result["summary"] = summary
+            elif stock_answer:
+                # A stock question answered from inventory facts before the
+                # ingest; read-only like the summary, so an active draft stays
+                # untouched and no purchase line is filed.
+                reply = stock_answer["body"]
+                result["action"] = "stock_answer"
             elif draft:
                 reply = draft_reply(draft, names)
                 result["action"] = "active_draft_exists"
