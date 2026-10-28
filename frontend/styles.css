@@ -87,3 +87,24 @@
 @media(max-width:620px){.form-grid{grid-template-columns:1fr}}
 
 body.is-admin .page-heading > .button{display:none}
+
+/* Stock operations and transparent planning estimates. */
+.inventory-toolbar{display:flex;flex-wrap:wrap;gap:9px;margin-bottom:20px}
+.stock-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;padding:0 22px 22px}
+.stock-card{border:1px solid var(--line);border-radius:12px;padding:18px;background:#fcfdf9}
+.stock-card-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;font-size:13px}
+.stock-card-quantity{font-size:30px;font-weight:600;margin:17px 0 10px;color:var(--green-dark)}
+.stock-card-quantity small{font-size:15px;font-weight:400}
+.stock-card p{font-size:12px;line-height:1.6;margin:8px 0}
+.stock-card>small{font-size:11px;color:var(--muted);line-height:1.5}
+.inventory-history{margin-top:22px}.inventory-events{padding:0 22px 18px}
+.inventory-event{display:flex;justify-content:space-between;gap:20px;border-bottom:1px solid var(--line);padding:15px 0;font-size:12px}
+.inventory-event p{margin:6px 0;overflow-wrap:anywhere}.inventory-event small{color:var(--muted);line-height:1.5}
+.inventory-preview{background:#f1f6ec;border:1px solid #dbe6d1;border-radius:9px;padding:15px;margin-top:18px;font-size:13px}
+.inventory-preview p{margin:7px 0}.inventory-preview small{color:var(--muted)}
+#inventory-form select{width:100%;border:1px solid var(--line);border-radius:7px;padding:11px;background:white;color:var(--ink);font:inherit;margin-top:7px}
+#inventory-form label{display:block}#inventory-form .receipt-check{display:flex}
+.recipe-line{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto;gap:10px;align-items:end;padding-bottom:12px}
+.recipe-line label{min-width:0}.recipe-line input{width:100%}
+@media(max-width:620px){.stock-card-grid{grid-template-columns:1fr;padding:0 14px 14px}.inventory-event{flex-direction:column;gap:5px}.recipe-line{grid-template-columns:1fr 1fr}.recipe-line button{justify-self:start}.inventory-toolbar .button{flex:1 1 44%;font-size:12px}}
+.forecast-history{border:1px solid var(--line);border-radius:8px;padding:14px;margin:20px 0}.forecast-history legend{font-size:13px;padding:0 7px;color:var(--green-dark)}

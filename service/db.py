@@ -19,6 +19,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from .inventory import InventoryMixin, SQLITE_SCHEMA
 from .extraction import catalog_aliases, extract_purchase, normalize_item
 from .onboarding import restaurant_selection
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup, parse_remove_request, stock_reply, weekly_summary_reply
@@ -172,7 +173,7 @@ def normalize_items_for_catalog(items, catalog):
     return normalized, list(dict.fromkeys(warnings))
 
 
-class Store:
+class Store(InventoryMixin):
     def __init__(self, path, seed=True):
         self.path = str(path)
         # Each restaurant owns a catalog: the shared base plus the ingredients
@@ -248,6 +249,11 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS custom_ingredients (id TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL, reorder_threshold TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
             ):
                 conn.execute(statement)
+            for statement in SQLITE_SCHEMA:
+                conn.execute(statement)
+            movement_columns = {row[1] for row in conn.execute("PRAGMA table_info(movements)")}
+            if "inventory_event_id" not in movement_columns:
+                conn.execute("ALTER TABLE movements ADD COLUMN inventory_event_id TEXT")
             # Databases created before the follow-up state existed keep their
             # whatsapp_threads table; add the column in place.
             columns = {row[1] for row in conn.execute("PRAGMA table_info(whatsapp_threads)")}

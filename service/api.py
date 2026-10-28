@@ -164,6 +164,44 @@ class Decision(Model):
     received: StrictBool
 
 
+class InventoryLine(Model):
+    ingredient_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    quantity: Quantity
+    pack_size: Quantity = "1"
+    expected_quantity: Quantity | None = None
+
+
+class InventoryEvent(Model):
+    kind: Literal["usage", "waste", "count", "sale"]
+    note: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+    items: Annotated[list[InventoryLine], Field(max_length=50)] = Field(default_factory=list)
+    recipe_id: ShortText | None = None
+    expected_recipe_version: Annotated[StrictInt, Field(gt=0)] | None = None
+    portions: Quantity | None = None
+    revenue_idr: Annotated[StrictInt, Field(ge=0, le=1_000_000_000_000)] | None = None
+    confirmed: StrictBool
+
+
+class RecipeLine(Model):
+    ingredient_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    quantity: Quantity
+
+
+class InventoryRecipe(Model):
+    id: ShortText | None = None
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+    items: Annotated[list[RecipeLine], Field(min_length=1, max_length=50)]
+
+
+class InventorySettings(Model):
+    lead_days: Annotated[StrictInt, Field(ge=0, le=365)] = 2
+    safety_days: Annotated[StrictInt, Field(ge=0, le=365)] = 1
+    daily_usage: dict[ShortText, Quantity] = Field(default_factory=dict)
+    history_start: Annotated[str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}$")] | None = None
+    history_end: Annotated[str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}$")] | None = None
+    history_complete: StrictBool = False
+
+
 class SimulatedMessage(Model):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10000)]
     sender: Sender = "demo"
@@ -456,7 +494,7 @@ def create_app(
 
     def owner_actor(actor=Depends(current_user)):
         if actor["role"] != "owner":
-            raise DomainError("owner_required", "Only a restaurant owner may edit or decide purchase drafts.", 403)
+            raise DomainError("owner_required", "Only a restaurant owner may change operational records.", 403)
         return actor
 
     def admin_actor(actor=Depends(current_user)):
@@ -514,6 +552,22 @@ def create_app(
     @app.get("/v1/overview")
     def overview(actor=Depends(current_user)):
         return {"data": store.overview(actor["restaurant_id"])}
+
+    @app.get("/v1/inventory/workspace")
+    def inventory_workspace(actor=Depends(owner_actor)):
+        return {"data": store.inventory_workspace(actor["restaurant_id"])}
+
+    @app.post("/v1/inventory/events", status_code=201)
+    def inventory_event(body: InventoryEvent, idempotency_key=Depends(key), actor=Depends(owner_actor)):
+        return {"data": store.record_inventory_event(idempotency_key, body.model_dump(exclude_none=True), actor["restaurant_id"])}
+
+    @app.post("/v1/inventory/recipes")
+    def inventory_recipe(body: InventoryRecipe, idempotency_key=Depends(key), actor=Depends(owner_actor)):
+        return {"data": store.save_inventory_recipe(idempotency_key, body.model_dump(exclude_none=True), actor["restaurant_id"])}
+
+    @app.post("/v1/inventory/settings")
+    def inventory_settings(body: InventorySettings, idempotency_key=Depends(key), actor=Depends(owner_actor)):
+        return {"data": store.save_inventory_settings(idempotency_key, body.model_dump(exclude_none=True), actor["restaurant_id"])}
 
     @app.get("/v1/drafts/{draft_id}")
     def draft(draft_id: str, actor=Depends(current_user)):
