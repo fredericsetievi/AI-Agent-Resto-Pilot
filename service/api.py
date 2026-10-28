@@ -38,6 +38,7 @@ from .audio import (
 from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
 from .pg_store import PostgresStore
 from .extraction import extract_purchase
+from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .text_llm import StepFunTextError, extract_message
 from .stock_llm import phrase_stock_answer
 from .vision import (
@@ -147,6 +148,8 @@ class Item(Model):
     quantity: Quantity | None
     unit: ShortText | None
     line_total_idr: StrictInt | None
+    # Server-side kitchen-filter annotation the dashboard echoes back on edit.
+    non_kitchen: StrictBool | None = None
 
 
 class Edit(Model):
@@ -213,6 +216,7 @@ def create_app(
     text_llm_http_client=None,
     stock_llm_enabled=False,
     stock_llm_http_client=None,
+    kitchen_filter_enabled=True,
 ):
     app = FastAPI(title="RestoPilot local demo", version="0.2.0", description="Session login with resto owner and platform admin roles, per-restaurant tenant isolation, WhatsApp allowlist, rules extraction and SQLite.")
     # The authority is Supabase Postgres when configured; the local SQLite
@@ -259,6 +263,53 @@ def create_app(
             logger.warning("StepFun text rescue failed; keeping the rules result: %s", exc)
             return extracted
         return rescued if rescued["items"] else extracted
+
+    async def filter_kitchen_items(extracted, restaurant_id):
+        """Mark non-kitchen goods (odol, sikat gigi, sabun, ...) in an extraction.
+
+        One LLM call classifies the unmapped item names; catalog-mapped items
+        are kitchen items by definition and skip the model. Flagged items stay
+        on the draft with a warning so the owner decides — the filter never
+        deletes a line by itself. Any provider problem leaves the extraction
+        untouched.
+        """
+        items = extracted.get("items") or []
+        if not items or not kitchen_filter_enabled or not vision_api_key:
+            return extracted
+        unmapped = [(index, item) for index, item in enumerate(items)
+                    if not item.get("ingredient_id") and str(item.get("raw_name") or "").strip()]
+        if not unmapped:
+            return extracted
+        # Items already matched to this restaurant's catalog are cooking
+        # supplies; they are pre-classified as kitchen so the model only sees
+        # unknown raw names. The model works in global item indices.
+        catalog_ids = {ingredient["id"] for ingredient in store.catalog_list(restaurant_id)}
+        pre_kitchen = [index for index, item in unmapped
+                       if store.slugify_name(item["raw_name"]) in catalog_ids]
+        unknown = [(index, item) for index, item in unmapped
+                   if store.slugify_name(item["raw_name"]) not in catalog_ids]
+        if not unknown:
+            return extracted
+        try:
+            verdict = await classify_items(
+                [(index, item["raw_name"]) for index, item in unknown],
+                api_key=vision_api_key,
+                model=text_llm_model,
+                base_url=vision_base_url,
+                client=stock_llm_http_client,
+            )
+        except (StepFunTextError, ValueError) as exc:
+            logger.warning("Kitchen filter failed; keeping all items: %s", exc)
+            return extracted
+        warnings = list(extracted.get("warnings") or [])
+        non_kitchen_positions = {position for position, (index, _item) in enumerate(unknown)
+                                 if index in set(verdict["non_kitchen"])}
+        for position, (index, item) in enumerate(unknown):
+            if position in non_kitchen_positions:
+                warnings.append(NON_KITCHEN_WARNING.format(index=index + 1, name=item["raw_name"]))
+                item["non_kitchen"] = True
+        extracted["warnings"] = list(dict.fromkeys(warnings))
+        return extracted
 
     async def build_stock_answer(text, restaurant_id):
         """Answer a stock question from the inventory ledger, never the model.
@@ -419,6 +470,7 @@ def create_app(
     @app.post("/v1/intake", status_code=201)
     async def intake(body: Intake, idempotency_key=Depends(key), actor=Depends(owner_actor)):
         extracted = await extract_text(body.text, actor["restaurant_name"])
+        extracted = await filter_kitchen_items(extracted, actor["restaurant_id"])
         return {"data": await run_in_threadpool(store.intake, idempotency_key, body.model_dump(), extracted, actor["restaurant_id"])}
 
     @app.post("/v1/intake/image", status_code=201)
@@ -439,6 +491,7 @@ def create_app(
         except StepFunVisionError as exc:
             logger.warning("StepFun vision intake failed: %s", exc)
             raise DomainError("vision_failed", str(exc), exc.status)
+        extracted = await filter_kitchen_items(extracted, actor["restaurant_id"])
         # Only the photo digest enters the idempotency record, never the image.
         return {"data": await run_in_threadpool(
             store.intake_image,
@@ -475,7 +528,8 @@ def create_app(
             # inventory; the purchase extraction is skipped entirely for it.
             payload["stock_answer"] = await build_stock_answer(payload["text"], actor["restaurant_id"])
             if payload["stock_answer"] is None:
-                payload["extracted_text"] = await extract_text(payload["text"], actor["restaurant_name"])
+                payload["extracted_text"] = await filter_kitchen_items(
+                    await extract_text(payload["text"], actor["restaurant_name"]), actor["restaurant_id"])
         return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"])}
 
     def csv_attachment(rows, filename):
@@ -655,7 +709,8 @@ def create_app(
                         client=vision_http_client,
                     )
                     if payload["transcript"].strip():
-                        payload["extracted_text"] = await extract_text(payload["transcript"], sender_restaurant["name"])
+                        payload["extracted_text"] = await filter_kitchen_items(
+                            await extract_text(payload["transcript"], sender_restaurant["name"]), restaurant_id)
                 except (MetaWhatsAppError, StepFunAudioError) as exc:
                     logger.warning("WhatsApp voice intake failed: %s", exc)
             elif not message.get("media_kind") and payload["text"].strip() and sender_restaurant:
@@ -665,7 +720,8 @@ def create_app(
                 # restaurant inventory before any of that.
                 payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
                 if payload["stock_answer"] is None:
-                    payload["extracted_text"] = await extract_text(payload["text"], sender_restaurant["name"])
+                    payload["extracted_text"] = await filter_kitchen_items(
+                        await extract_text(payload["text"], sender_restaurant["name"]), restaurant_id)
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),

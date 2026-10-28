@@ -485,6 +485,10 @@ def draft_reply(draft, catalog_names=None):
     # Display names come from the caller's restaurant catalog when given, so
     # custom bahan from other restaurants can never surface in a reply.
     lines = [_item_line(item, catalog_names) for item in draft["items"]]
+    flagged = [str(index + 1) for index, item in enumerate(draft["items"]) if item.get("non_kitchen")]
+    if flagged:
+        lines.append("⚠ Baris " + ", ".join(flagged) + " bukan bahan masak — balas 'hapus "
+                     + flagged[0] + "' untuk membuangnya, atau perbaiki di dashboard.")
     unmapped = [
         str(item["raw_name"]).strip()
         for item in draft["items"]
@@ -529,6 +533,21 @@ def draft_reply(draft, catalog_names=None):
     parts += notes
     parts.append("Balas YA jika semua barang sudah diterima, BATAL untuk batal.")
     return "\n".join(parts)
+
+
+_REMOVE_ITEM = re.compile(r"(?i)^\s*(?:hapus|remove)\s+(?:item\s+)?(\d{1,2})\s*$")
+
+
+def parse_remove_item(text):
+    """Parse 'hapus 2' / 'hapus item 2' into a 1-based draft item index.
+
+    Returns None for anything else, so ordinary messages keep flowing to
+    purchase parsing. Removal only ever touches items flagged non-kitchen.
+    """
+    if not isinstance(text, str):
+        return None
+    match = _REMOVE_ITEM.fullmatch(text.strip())
+    return int(match.group(1)) if match else None
 
 
 def parse_payment_followup(text):
