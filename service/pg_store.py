@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -49,6 +50,10 @@ class PostgresStore:
     def __init__(self, path=None, seed=True):
         # `path` is accepted and ignored so call sites stay identical.
         self._catalogs = {}
+        # Short-TTL overview cache: each Supabase round trip costs 0.1-0.9s,
+        # and the dashboard polls every 5s — serve repeats from memory.
+        self._overview_cache = {}
+        self._overview_cache_ttl = 3.0
         self.initialize(seed)
         self._load_custom_ingredients()
 
@@ -196,18 +201,25 @@ class PostgresStore:
     def _normalize(self, items, catalog):
         return normalize_items_for_catalog(items, catalog)
 
-    def _comparison(self, conn, item, supplier, restaurant_id):
+    def _comparison(self, conn, item, supplier, restaurant_id, preloaded=None):
         comparison = {"status": "insufficient_history", "change_percent": None, "baseline_unit_price_idr": None, "baseline_purchase_id": None,
                       "baseline_supplier": None, "baseline_created_at": None}
         if not item.get("unit_price_idr") or item.get("warnings") or not supplier:
             return comparison
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-        cur = self._execute(
-            conn,
-            "SELECT id, supplier, created_at, body FROM purchases WHERE slug=%s AND supplier=%s AND created_at>=%s ORDER BY created_at DESC, id DESC",
-            (restaurant_id, supplier, cutoff),
-        )
-        for row in self._rows(cur):
+        if preloaded is not None:
+            # Overview already fetched every purchase: compare in memory.
+            rows = [row for row in preloaded if row.get("supplier") == supplier
+                    and str(row.get("created_at")) >= (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()]
+            rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse=True)
+        else:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+            cur = self._execute(
+                conn,
+                "SELECT id, supplier, created_at, body FROM purchases WHERE slug=%s AND supplier=%s AND created_at>=%s ORDER BY created_at DESC, id DESC",
+                (restaurant_id, supplier, cutoff),
+            )
+            rows = self._rows(cur)
+        for row in rows:
             purchase = row["body"]
             previous = [part for part in purchase["items"] if part["ingredient_id"] == item["ingredient_id"] and part["canonical_unit"] == item["canonical_unit"]]
             if not previous:
@@ -234,12 +246,12 @@ class PostgresStore:
             break
         return comparison
 
-    def _present(self, conn, draft, restaurant_id):
+    def _present(self, conn, draft, restaurant_id, preloaded_purchases=None):
         if draft["status"] == "recorded":
             return draft
         draft["total_idr"] = draft_total(draft["items"], draft["warnings"])
         for item in draft["items"]:
-            item["comparison"] = self._comparison(conn, item, draft["supplier"], restaurant_id)
+            item["comparison"] = self._comparison(conn, item, draft["supplier"], restaurant_id, preloaded_purchases)
         draft["comparison"] = next((item["comparison"] for item in draft["items"] if item["comparison"]["status"] == "price_increase"), None)
         return draft
 
@@ -302,6 +314,7 @@ class PostgresStore:
                 "INSERT INTO idempotency (key, fingerprint, response) VALUES (%s, %s, %s)",
                 (key, fingerprint, encode(result)),
             )
+            self._overview_cache.clear()
             return result
 
     def intake(self, key, payload, extracted=None, restaurant_id=None):
@@ -881,82 +894,114 @@ class PostgresStore:
             purchase, _ = self._update_purchase_payment(conn, purchase_id, payment_status, supplier, restaurant_id)
             return purchase
 
+    @staticmethod
+    def _as_datetime(value):
+        """timestamptz arrives as datetime from jsonb_agg; tolerate ISO strings."""
+        if isinstance(value, datetime):
+            return value
+        text_value = str(value)
+        # Python 3.10 fromisoformat rejects 7+ fractional digits: keep the
+        # fraction to 6 digits, preserving the timezone offset after it.
+        if "." in text_value:
+            head, rest = text_value.split(".", 1)
+            digits = ""
+            for index, char in enumerate(rest):
+                if char.isdigit():
+                    digits += char
+                else:
+                    break
+            # 3.10 accepts exactly 3 or 6 fractional digits; pad/truncate to 6.
+            text_value = f"{head}.{digits.ljust(6, '0')[:6]}{rest[index:]}"
+        return datetime.fromisoformat(text_value)
+
     def overview(self, restaurant_id=None):
+        """The full dashboard payload in ONE round trip, with a 3s cache.
+
+        Every sub-read (restaurant, drafts, purchases, stock, WhatsApp
+        sources, numbers, activity) is pulled as JSON in a single query; the
+        purchase bodies also seed the price comparisons, so projecting drafts
+        needs no further queries. The dashboard polls this every 5 seconds.
+        """
+        now_ts = time.time()
+        cached = self._overview_cache.get(restaurant_id)
+        if cached and now_ts - cached[0] < self._overview_cache_ttl:
+            return cached[1]
+
         catalog = self._catalog_for(restaurant_id)
-        # The whole read shares one transaction/connection; helpers receive it.
         with pg_transaction() as conn:
-            cur = self._execute(conn, "SELECT r.id, r.name, r.address FROM restaurants r JOIN tenants t ON t.restaurant_id=r.id WHERE t.slug=%s", (restaurant_id,))
-            restaurant = cur.fetchone()
-            if not restaurant:
-                raise DomainError("not_found", "Restaurant not found.", 404)
-            cur = self._execute(
-                conn,
-                "SELECT id, body, created_at FROM drafts WHERE slug=%s ORDER BY created_at DESC, id DESC",
-                (restaurant_id,),
-            )
-            drafts = [self._present(conn, row["body"], restaurant_id) for row in self._rows(cur)]
-            cur = self._execute(
-                conn,
-                "SELECT body, created_at FROM purchases WHERE slug=%s ORDER BY created_at DESC, id DESC",
-                (restaurant_id,),
-            )
-            purchase_rows = self._rows(cur)
-            purchases = [row["body"] for row in purchase_rows]
-            inventory = []
-            # One round trip for the whole stock table instead of one query
-            # per ingredient: every query is a cross-region round trip.
-            cur = self._execute(conn, "SELECT ingredient_id, quantity FROM stock WHERE slug=%s", (restaurant_id,))
-            stock_by_id = {row[0]: row[1] for row in cur.fetchall()}
-            for ingredient in catalog["list"]:
-                quantity = stock_by_id.get(ingredient["id"], "0")
-                inventory.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
-                                  "unit": ingredient["unit"], "reorder_threshold": ingredient["reorder_threshold"],
-                                  "low_stock": Decimal(quantity) < Decimal(ingredient["reorder_threshold"])})
-            today = datetime.now(RESTAURANT_TIMEZONE).date()
-            sources = {}
-            cur = self._execute(
-                conn,
-                "SELECT w.draft_id, w.transport, w.created_at FROM whatsapp_messages w "
-                "JOIN whatsapp_threads t ON t.id=w.thread_id "
-                "WHERE w.direction='inbound' AND w.draft_id IS NOT NULL AND t.slug=%s ORDER BY w.created_at, w.id",
-                (restaurant_id,),
-            )
-            for row in self._rows(cur):
-                created = row["created_at"].isoformat() if isinstance(row["created_at"], datetime) else row["created_at"]
-                sources.setdefault(row["draft_id"], {"kind": "whatsapp" if row["transport"] == LIVE else "simulator", "created_at": created})
-            for draft in drafts:
-                if draft["id"] in sources:
-                    draft["source"] = sources[draft["id"]]
-            purchase_days = [row["created_at"].astimezone(RESTAURANT_TIMEZONE).date() if isinstance(row["created_at"], datetime)
-                             else datetime.fromisoformat(row["created_at"]).astimezone(RESTAURANT_TIMEZONE).date()
-                             for row in purchase_rows]
-            return {
-                "restaurant": {"id": restaurant_id, "name": restaurant[1], "address": restaurant[2]},
-                "whatsapp_numbers": self._linked_numbers_conn(conn, restaurant_id),
-                "mode": {"transport": "manual", "extraction": "rules", "storage": "supabase", "identity": "session"},
-                "metrics": {"purchases_today_idr": sum(row["body"].get("total_idr") or 0 for row in purchase_rows if isinstance(row["body"].get("total_idr"), int) and (row["created_at"].astimezone(RESTAURANT_TIMEZONE).date() if isinstance(row["created_at"], datetime) else datetime.fromisoformat(row["created_at"]).astimezone(RESTAURANT_TIMEZONE).date()) == today),
-                            "purchases_yesterday_idr": sum(row["body"].get("total_idr") or 0 for row in purchase_rows if isinstance(row["body"].get("total_idr"), int) and (row["created_at"].astimezone(RESTAURANT_TIMEZONE).date() if isinstance(row["created_at"], datetime) else datetime.fromisoformat(row["created_at"]).astimezone(RESTAURANT_TIMEZONE).date()) == today - timedelta(days=1)),
-                            "pending_approvals": sum(row["status"] in ("pending_approval", "needs_clarification") for row in drafts),
-                            "low_stock_count": sum(row["low_stock"] for row in inventory), "recorded_purchases": len(purchases)},
-                "drafts": drafts, "purchases": purchases, "inventory": inventory,
-                "activity": self._activity(conn, restaurant_id),
-                "ingredients": catalog["list"],
-            }
+            cur = self._execute(conn, (
+                "SELECT "
+                "(SELECT jsonb_build_object('id', r.id, 'name', r.name, 'address', r.address) "
+                " FROM restaurants r JOIN tenants t ON t.restaurant_id=r.id WHERE t.slug=%s), "
+                "(SELECT COALESCE(jsonb_agg(body ORDER BY created_at DESC, id), '[]'::jsonb) "
+                " FROM drafts WHERE slug=%s), "
+                "(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', p.id, 'supplier', p.supplier, 'created_at', p.created_at, 'body', p.body) "
+                " ORDER BY p.created_at DESC, p.id), '[]'::jsonb) "
+                " FROM purchases p WHERE p.slug=%s), "
+                "(SELECT COALESCE(jsonb_object_agg(ingredient_id, quantity), '{}'::jsonb) "
+                " FROM stock WHERE slug=%s), "
+                "(SELECT COALESCE(jsonb_agg(jsonb_build_object('phone', phone, 'label', label, 'created_at', created_at) "
+                " ORDER BY created_at, id), '[]'::jsonb) "
+                " FROM whatsapp_links WHERE slug=%s), "
+                "(SELECT COALESCE(jsonb_agg(jsonb_build_object('draft_id', w.draft_id, 'transport', w.transport, 'created_at', w.created_at) "
+                " ORDER BY w.created_at, w.id), '[]'::jsonb) "
+                " FROM whatsapp_messages w JOIN whatsapp_threads t ON t.id=w.thread_id "
+                " WHERE w.direction='inbound' AND w.draft_id IS NOT NULL AND t.slug=%s), "
+                "(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', a.id, 'restaurant_id', a.slug, 'event', a.event, "
+                "'message', a.message, 'created_at', a.created_at) ORDER BY a.created_at DESC, a.id), '[]'::jsonb) "
+                " FROM (SELECT * FROM activity WHERE slug=%s ORDER BY created_at DESC, id DESC LIMIT 100) a)"
+            ), (restaurant_id,) * 7)
+            row = cur.fetchone()
 
-    def _activity(self, conn, restaurant_id):
-        cur = self._execute(
-            conn,
-            "SELECT id, slug AS restaurant_id, event, message, created_at FROM activity "
-            "WHERE slug=%s ORDER BY created_at DESC, id DESC LIMIT 100",
-            (restaurant_id,),
-        )
-        rows = self._rows(cur)
-        for row in rows:
-            if isinstance(row["created_at"], datetime):
-                row["created_at"] = row["created_at"].isoformat()
-        return rows
+        restaurant, drafts_bodies, purchase_rows, stock_map, numbers, sources, activity = row
+        if restaurant is None:
+            raise DomainError("not_found", "Restaurant not found.", 404)
 
-    # ---- authentication -----------------------------------------------------
+        # Price comparisons run in memory against the already-fetched purchases.
+        preloaded = [{**purchase, "created_at": purchase["created_at"].isoformat() if isinstance(purchase["created_at"], datetime) else purchase["created_at"]}
+                     for purchase in purchase_rows]
+        purchases = [purchase["body"] for purchase in purchase_rows]
+        drafts = [self._present(conn, body, restaurant_id, preloaded) for body in drafts_bodies]
+
+        inventory = []
+        for ingredient in catalog["list"]:
+            quantity = stock_map.get(ingredient["id"], "0")
+            inventory.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
+                              "unit": ingredient["unit"], "reorder_threshold": ingredient["reorder_threshold"],
+                              "low_stock": Decimal(quantity) < Decimal(ingredient["reorder_threshold"])})
+        today = datetime.now(RESTAURANT_TIMEZONE).date()
+        sources_by_draft = {}
+        for source in sources:
+            created = source["created_at"].isoformat() if isinstance(source["created_at"], datetime) else source["created_at"]
+            sources_by_draft.setdefault(source["draft_id"], {"kind": "whatsapp" if source["transport"] == LIVE else "simulator", "created_at": created})
+        for draft in drafts:
+            if draft["id"] in sources_by_draft:
+                draft["source"] = sources_by_draft[draft["id"]]
+        purchase_days = [self._as_datetime(purchase["created_at"]).astimezone(RESTAURANT_TIMEZONE).date() for purchase in purchase_rows]
+
+        activity = list(activity)
+        for entry in activity:
+            if isinstance(entry["created_at"], datetime):
+                entry["created_at"] = entry["created_at"].isoformat()
+        numbers = list(numbers)
+        for number in numbers:
+            if isinstance(number["created_at"], datetime):
+                number["created_at"] = number["created_at"].isoformat()
+
+        payload = {
+            "restaurant": dict(restaurant),
+            "whatsapp_numbers": numbers,
+            "mode": {"transport": "manual", "extraction": "rules", "storage": "supabase", "identity": "session"},
+            "metrics": {"purchases_today_idr": sum(purchase["body"].get("total_idr") or 0 for purchase in purchase_rows if isinstance(purchase["body"].get("total_idr"), int) and self._as_datetime(purchase["created_at"]).astimezone(RESTAURANT_TIMEZONE).date() == today),
+                        "purchases_yesterday_idr": sum(purchase["body"].get("total_idr") or 0 for purchase in purchase_rows if isinstance(purchase["body"].get("total_idr"), int) and self._as_datetime(purchase["created_at"]).astimezone(RESTAURANT_TIMEZONE).date() == today - timedelta(days=1)),
+                        "pending_approvals": sum(entry["status"] in ("pending_approval", "needs_clarification") for entry in drafts),
+                        "low_stock_count": sum(entry["low_stock"] for entry in inventory), "recorded_purchases": len(purchases)},
+            "drafts": drafts, "purchases": purchases, "inventory": inventory,
+            "activity": activity,
+            "ingredients": catalog["list"],
+        }
+        self._overview_cache[restaurant_id] = (now_ts, payload)
+        return payload
 
     def verify_login(self, username, password):
         with pg_connection() as conn:
