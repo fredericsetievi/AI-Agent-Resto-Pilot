@@ -341,6 +341,17 @@ class OperationsMixin:
                 self._inventory_query(conn,"SAVEPOINT operation_post")
                 try:
                     events = self._post_inventory_batch_conn(conn,active["payloads"],tenant,expected_preview=old_preview)
+                    # Retained stock locks also protect count evidence. A count
+                    # may leave the numeric balance unchanged, so comparing the
+                    # reviewed balances alone cannot detect this race.
+                    consumed = {item['ingredient_id'] for event in events if event['kind'] in {'usage','waste','sale'} and not event.get('history_only') for item in event['items']}
+                    own_events = {event['id'] for event in events}
+                    acknowledged = set(active.get('after_count_ids',[]))
+                    if consumed:
+                        for row in self._inventory_query(conn,'SELECT body FROM inventory_events WHERE restaurant_id=?',(tenant,)).fetchall():
+                            count = body(row[0])
+                            if count['kind'] == 'count' and count['id'] not in own_events and count['id'] not in acknowledged and self._inventory_event_date(count) == active['candidate']['business_date'] and any(item['ingredient_id'] in consumed for item in count['items']):
+                                raise DomainError('count_conflict','Hitungan fisik baru tercatat saat konfirmasi. Tinjau ulang apakah pemakaian sudah termasuk hitungan itu; tidak ada pengurangan stok.',409)
                     for package in active.get("packages",[]):
                         if not package.get("explicit"):
                             continue
@@ -354,6 +365,8 @@ class OperationsMixin:
                     self._inventory_query(conn,"ROLLBACK TO SAVEPOINT operation_post")
                     self._inventory_query(conn,"RELEASE SAVEPOINT operation_post")
                     active.update(status="clarification",questions=[exc.message],version=active["version"]+1)
+                    if exc.code == 'count_conflict':
+                        self._operation_resolve(conn,active)
                     self._operation_save(conn,active)
                     return self._operation_reply(active,self._operation_review_text(active),"operation_review_required")
                 workspace = self._inventory_workspace_conn(conn,tenant)

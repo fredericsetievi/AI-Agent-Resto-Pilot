@@ -137,3 +137,7 @@ Verification completed locally: **374 Python tests passed**, with 34 skipped
 PostgreSQL tests passed separately**, against disposable databases restricted
 to a local socket. **25 JavaScript tests passed**. No extension tests wrote to
 live Supabase or sent real WhatsApp messages.
+
+Final release audit added an unchanged-balance physical-count race regression
+and a count-evidence check under the posting locks. All **31 local PostgreSQL
+tests** and **28 SQLite operation-flow tests** passed after that fix.

@@ -180,6 +180,39 @@ def test_concurrent_stock_change_between_resolve_and_post_requires_review(operat
     assert query(store, "SELECT count(*) FROM inventory_events") == [(1,)]
 
 
+def test_same_day_unchanged_physical_count_between_resolve_and_post_requires_reconciliation(operations_store, monkeypatch):
+    store = operations_store
+    draft = op(send(store, "Pakai beras 2 kg hari ini"))
+    original = store._post_inventory_batch_conn
+    raced = False
+
+    def competing_count(conn, payloads, restaurant_id, **kwargs):
+        nonlocal raced
+        if not raced:
+            raced = True
+            count = usage("10", kind="count")
+            count["items"][0]["expected_quantity"] = "10"
+            # Balance remains 10, so an equality-only preview guard cannot
+            # detect this new physical-count evidence.
+            store.record_inventory_event("racing_unchanged_count", count, "alpha")
+        return original(conn, payloads, restaurant_id, **kwargs)
+
+    monkeypatch.setattr(store, "_post_inventory_batch_conn", competing_count)
+    blocked = confirm(store, draft)
+    assert blocked["result"]["action"] == "operation_review_required", blocked
+    assert balance(store) == 10
+    assert query(store, "SELECT count(*) FROM inventory_events") == [(1,)]
+    assert query(store, "SELECT count(*) FROM movements") == [(1,)]
+    assert query(store, "SELECT quantity FROM movements") == [("0",)]
+    assert query(store, "SELECT count(*) FROM inventory_events WHERE body::jsonb->>'operation_id' IS NOT NULL") == [(0,)]
+    assert op(blocked)["status"] == "clarification"
+    refreshed = op(send(store, "TINJAU ULANG"))
+    assert refreshed["status"] == "clarification"
+    assert any("hitungan" in question.casefold() for question in refreshed["questions"])
+    assert balance(store) == 10
+    assert query(store, "SELECT count(*) FROM inventory_events") == [(1,)]
+
+
 def test_sources_recipes_and_confirmation_ids_are_tenant_scoped(operations_store):
     store = operations_store
     recipes(store)
