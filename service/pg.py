@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -32,49 +33,59 @@ def db_config():
             "SUPABASE_DB_PASSWORD in the environment or a local .env (see .env.example)."
         )
     ref = url.split("//")[-1].split(".")[0]
-    return {"host": f"db.{ref}.supabase.co", "port": 5432, "dbname": "postgres",
-            "user": "postgres", "password": password}
+    host = (os.environ.get("SUPABASE_DB_HOST") or "").strip() or f"db.{ref}.supabase.co"
+    user = (os.environ.get("SUPABASE_DB_USER") or "").strip() or "postgres"
+    port = (os.environ.get("SUPABASE_DB_PORT") or "").strip() or "5432"
+    # TCP keepalives: the session pooler drops idle connections mid-flight,
+    # which surfaces as "server closed the connection unexpectedly".
+    return {"host": host, "port": int(port), "dbname": "postgres",
+            "user": user, "password": password,
+            "keepalives": 1, "keepalives_idle": 30,
+            "keepalives_interval": 10, "keepalives_count": 5}
 
 
-# A small persistent pool: opening a fresh TLS connection to Supabase per
-# query costs a full handshake, which made multi-query reads time out.
-_pool = None
-_pool_lock = threading.Lock()
+# The session pooler is far from this machine (Tokyo), and on a mobile
+# hotspot a fresh TLS connection costs 3-5s. A small pool does not help
+# because pooler connections die between borrows, so every operation paid
+# a fresh handshake. Instead, each worker thread keeps ONE long-lived
+# connection; a cheap health check replaces it when the pooler drops it.
+_local = threading.local()
 
 
-def _get_pool():
-    global _pool
-    with _pool_lock:
-        if _pool is None:
-            from psycopg2.pool import SimpleConnectionPool
-
-            _pool = SimpleConnectionPool(1, 8, sslmode="require", connect_timeout=15, **db_config())
-        return _pool
-
-
-def _borrow():
-    """Take a live connection from the pool, replacing stale ones once."""
+def _ambient():
+    """This thread's long-lived Postgres connection, replaced when dead."""
     import psycopg2
 
-    last_error = None
-    for _attempt in range(2):
-        conn = _get_pool().getconn()
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
         try:
             cur = conn.cursor()
             cur.execute("SELECT 1")
             cur.close()
             conn.rollback()
             return conn
+        except psycopg2.OperationalError:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _local.conn = None
+    last_error = None
+    for attempt in range(3):
+        try:
+            conn = psycopg2.connect(sslmode="require", connect_timeout=15, **db_config())
+            _local.conn = conn
+            return conn
         except psycopg2.OperationalError as error:
             last_error = error
-            _get_pool().putconn(conn, close=True)
+            time.sleep(0.5 * (attempt + 1))
     raise last_error
 
 
 @contextmanager
 def pg_connection():
-    """One pooled connection; callers commit or roll back explicitly."""
-    conn = _borrow()
+    """One live connection; callers commit or roll back explicitly."""
+    conn = _ambient()
     try:
         conn.autocommit = False
         yield conn
@@ -85,8 +96,6 @@ def pg_connection():
         except Exception:
             pass
         raise
-    finally:
-        _get_pool().putconn(conn)
 
 
 @contextmanager

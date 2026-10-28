@@ -17,6 +17,9 @@ SUPPORTED_ENV_KEYS = {
     "SUPABASE_SERVICE_KEY",
     "SUPABASE_MIRROR",
     "SUPABASE_DB_PASSWORD",
+    "SUPABASE_DB_HOST",
+    "SUPABASE_DB_USER",
+    "SUPABASE_DB_PORT",
     "META_WHATSAPP_ACCESS_TOKEN",
     "META_APP_SECRET",
     "META_WEBHOOK_VERIFY_TOKEN",
@@ -34,6 +37,7 @@ SUPPORTED_ENV_KEYS = {
     "AUDIO_ASR_BASE_URL",
     "AUDIO_ASR_API_KEY",
     "AUDIO_ASR_MODEL",
+    "AUDIO_ASR_LANGUAGE",
     "LLM_STOCK_ANSWER",
 }
 
@@ -89,6 +93,7 @@ def main():
     asr_api_key = setting("AUDIO_ASR_API_KEY")
     asr_base_url = setting("AUDIO_ASR_BASE_URL")
     asr_model_override = setting("AUDIO_ASR_MODEL")
+    asr_language = (setting("AUDIO_ASR_LANGUAGE") or "").strip() or None
     custom_asr = bool(asr_api_key and asr_base_url)
     asr_model_setting = (asr_model_override if custom_asr else None) or setting("STEPFUN_ASR_MODEL")
     stock_llm_enabled = vision_api_key and (setting("LLM_STOCK_ANSWER") or "").strip().casefold() in {"1", "true", "yes", "on"}
@@ -103,9 +108,9 @@ def main():
     else:
         print("StepFun text rescue: disabled (set STEPFUN_API_KEY and LLM_TEXT_EXTRACTION=1)")
     if custom_asr:
-        print(f"Voice note ASR: custom provider {asr_base_url} (model {asr_model_override or 'default'})")
+        print(f"Voice note ASR: custom provider {asr_base_url} (model {asr_model_override or 'default'}{', language ' + asr_language if asr_language else ''})")
     else:
-        print("Voice note ASR: StepFun (set AUDIO_ASR_BASE_URL/AUDIO_ASR_API_KEY/AUDIO_ASR_MODEL to override)")
+        print(f"Voice note ASR: StepFun (set AUDIO_ASR_BASE_URL/AUDIO_ASR_API_KEY/AUDIO_ASR_MODEL to override{', language ' + asr_language if asr_language else ''})")
     if stock_llm_enabled:
         print(f"StepFun stock phrasing: enabled (model {text_llm_model or 'default'}; numbers stay from the database)")
     else:
@@ -121,6 +126,7 @@ def main():
             asr_model=asr_model_setting,
             asr_api_key=asr_api_key,
             asr_base_url=asr_base_url,
+            asr_language=asr_language,
             tts_model=setting("STEPFUN_TTS_MODEL"),
             tts_voice=setting("STEPFUN_TTS_VOICE"),
             text_llm_enabled=bool(text_llm_enabled),

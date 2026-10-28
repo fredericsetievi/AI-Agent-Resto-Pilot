@@ -209,6 +209,7 @@ def create_app(
     asr_model=None,
     asr_api_key=None,
     asr_base_url=None,
+    asr_language=None,
     tts_model=None,
     tts_voice=None,
     text_llm_enabled=False,
@@ -709,6 +710,7 @@ def create_app(
                         api_key=asr_api_key,
                         model=asr_model,
                         base_url=asr_base_url,
+                        language=asr_language,
                         client=vision_http_client,
                     )
                     if payload["transcript"].strip():
