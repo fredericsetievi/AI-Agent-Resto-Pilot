@@ -487,8 +487,12 @@ def draft_reply(draft, catalog_names=None):
     lines = [_item_line(item, catalog_names) for item in draft["items"]]
     flagged = [str(index + 1) for index, item in enumerate(draft["items"]) if item.get("non_kitchen")]
     if flagged:
+        # After each removal the remaining lines renumber, so the hint tells
+        # the owner to repeat the command rather than listing stale indices.
+        repeat = "" if len(flagged) == 1 else (
+            " untuk membuang baris pertama, lalu ulangi untuk sisanya (nomor baris menyesuaikan)")
         lines.append("⚠ Baris " + ", ".join(flagged) + " bukan bahan masak — balas 'hapus "
-                     + flagged[0] + "' untuk membuangnya, atau perbaiki di dashboard.")
+                     + flagged[0] + "'" + repeat + ", atau perbaiki di dashboard.")
     unmapped = [
         str(item["raw_name"]).strip()
         for item in draft["items"]
