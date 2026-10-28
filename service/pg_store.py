@@ -47,15 +47,66 @@ from .whatsapp import (
 class PostgresStore:
     """The RestoPilot authority in Supabase Postgres. Same contract as Store."""
 
-    def __init__(self, path=None, seed=True):
+    # Tables/columns the application reads and writes (supabase/migrations/0003).
+    REQUIRED_SCHEMA = {
+        "restaurants": {"id", "name", "slug", "address"},
+        "tenants": {"slug", "restaurant_id", "created_at"},
+        "app_users": {"id", "username", "password_hash", "display_name", "role", "slug", "created_at"},
+        "app_sessions": {"token", "user_id", "created_at", "expires_at"},
+        "whatsapp_links": {"id", "slug", "phone", "label", "created_at"},
+        "custom_ingredients": {"id", "slug", "name", "unit", "reorder_threshold", "created_at"},
+        "drafts": {"id", "slug", "version", "status", "body", "created_at"},
+        "purchases": {"id", "slug", "draft_id", "supplier", "created_at", "body"},
+        "stock": {"slug", "ingredient_id", "quantity"},
+        "movements": {"id", "slug", "purchase_id", "ingredient_id", "quantity", "created_at"},
+        "activity": {"id", "slug", "event", "message", "created_at"},
+        "idempotency": {"key", "slug", "fingerprint", "response", "created_at"},
+        "whatsapp_threads": {"id", "slug", "channel", "sender", "transport", "active_draft_id",
+                             "active_version", "pending_followup"},
+        "whatsapp_messages": {"id", "thread_id", "direction", "body", "created_at", "transport",
+                              "status", "draft_id"},
+        "whatsapp_events": {"channel", "event_id", "thread_id", "fingerprint", "response"},
+        "app_metadata": {"key", "value"},
+    }
+
+    def __init__(self, path=None, seed=True, read_only_startup=False):
         # `path` is accepted and ignored so call sites stay identical.
         self._catalogs = {}
         # Short-TTL overview cache: each Supabase round trip costs 0.1-0.9s,
         # and the dashboard polls every 5s — serve repeats from memory.
         self._overview_cache = {}
         self._overview_cache_ttl = 3.0
-        self.initialize(seed)
+        if read_only_startup:
+            # Hosted deployments attach to an existing ledger: validate only,
+            # never insert demo users, allowlist rows, metadata or stock.
+            self.validate_schema()
+        else:
+            self.initialize(seed)
         self._load_custom_ingredients()
+
+    def validate_schema(self):
+        """SELECT-only check that every required table and column exists."""
+        with pg_connection() as conn:
+            self._execute(conn, "SET TRANSACTION READ ONLY")
+            cur = self._execute(
+                conn,
+                "SELECT table_name, column_name FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name = ANY(%s)",
+                (list(self.REQUIRED_SCHEMA),),
+            )
+            found = {}
+            for table, column in cur.fetchall():
+                found.setdefault(table, set()).add(column)
+        problems = []
+        for table, columns in self.REQUIRED_SCHEMA.items():
+            if table not in found:
+                problems.append(f"missing table {table}")
+                continue
+            missing = sorted(columns - found[table])
+            if missing:
+                problems.append(f"{table} missing columns {', '.join(missing)}")
+        if problems:
+            raise RuntimeError("Supabase schema does not match RestoPilot: " + "; ".join(problems))
 
     # ---- connection helpers -------------------------------------------------
 

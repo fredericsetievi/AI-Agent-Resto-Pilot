@@ -2,6 +2,15 @@
 
 A local restaurant purchasing demo: Indonesian text or WhatsApp message → editable purchase draft → owner approval → persistent purchase, estimated stock, price evidence and activity.
 
+## Atoms dashboard
+
+The hosted dashboard is **https://restopilot-dashboard.pub.atoms.world/**.
+The [Atoms project](https://atoms.dev/chat/2cc522e0e3264f43a31c2e2a62d0ba27)
+contains the published app. Its exported runtime and deployment instructions are
+in [deploy/atoms/](deploy/atoms/README.md). The application sources remain in
+`service/` and `frontend/`; deployment builds copy the current service into the
+managed backend package. Existing Git branches keep their original history.
+
 ## Run locally
 
 Requires Python 3.11 or newer. From this directory:
