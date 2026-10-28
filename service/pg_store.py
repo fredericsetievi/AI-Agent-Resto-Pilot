@@ -883,6 +883,7 @@ class PostgresStore:
 
     def overview(self, restaurant_id=None):
         catalog = self._catalog_for(restaurant_id)
+        # The whole read shares one transaction/connection; helpers receive it.
         with pg_transaction() as conn:
             cur = self._execute(conn, "SELECT r.id, r.name, r.address FROM restaurants r JOIN tenants t ON t.restaurant_id=r.id WHERE t.slug=%s", (restaurant_id,))
             restaurant = cur.fetchone()
@@ -902,10 +903,12 @@ class PostgresStore:
             purchase_rows = self._rows(cur)
             purchases = [row["body"] for row in purchase_rows]
             inventory = []
+            # One round trip for the whole stock table instead of one query
+            # per ingredient: every query is a cross-region round trip.
+            cur = self._execute(conn, "SELECT ingredient_id, quantity FROM stock WHERE slug=%s", (restaurant_id,))
+            stock_by_id = {row[0]: row[1] for row in cur.fetchall()}
             for ingredient in catalog["list"]:
-                cur = self._execute(conn, "SELECT quantity FROM stock WHERE slug=%s AND ingredient_id=%s", (restaurant_id, ingredient["id"]))
-                row = cur.fetchone()
-                quantity = row[0] if row else "0"
+                quantity = stock_by_id.get(ingredient["id"], "0")
                 inventory.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
                                   "unit": ingredient["unit"], "reorder_threshold": ingredient["reorder_threshold"],
                                   "low_stock": Decimal(quantity) < Decimal(ingredient["reorder_threshold"])})
@@ -929,7 +932,7 @@ class PostgresStore:
                              for row in purchase_rows]
             return {
                 "restaurant": {"id": restaurant_id, "name": restaurant[1], "address": restaurant[2]},
-                "whatsapp_numbers": self.linked_numbers(restaurant_id),
+                "whatsapp_numbers": self._linked_numbers_conn(conn, restaurant_id),
                 "mode": {"transport": "manual", "extraction": "rules", "storage": "supabase", "identity": "session"},
                 "metrics": {"purchases_today_idr": sum(row["body"].get("total_idr") or 0 for row in purchase_rows if isinstance(row["body"].get("total_idr"), int) and (row["created_at"].astimezone(RESTAURANT_TIMEZONE).date() if isinstance(row["created_at"], datetime) else datetime.fromisoformat(row["created_at"]).astimezone(RESTAURANT_TIMEZONE).date()) == today),
                             "purchases_yesterday_idr": sum(row["body"].get("total_idr") or 0 for row in purchase_rows if isinstance(row["body"].get("total_idr"), int) and (row["created_at"].astimezone(RESTAURANT_TIMEZONE).date() if isinstance(row["created_at"], datetime) else datetime.fromisoformat(row["created_at"]).astimezone(RESTAURANT_TIMEZONE).date()) == today - timedelta(days=1)),
@@ -1022,6 +1025,19 @@ class PostgresStore:
             )
             row = cur.fetchone()
         return {"id": row[0], "name": row[1]} if row else None
+
+    @staticmethod
+    def _linked_numbers_conn(conn, restaurant_id):
+        """linked_numbers on an existing connection (for inside transactions)."""
+        rows = PostgresStore._rows(PostgresStore._execute(
+            conn,
+            "SELECT phone, label, created_at FROM whatsapp_links WHERE slug=%s ORDER BY created_at, id",
+            (restaurant_id,),
+        ))
+        for row in rows:
+            if isinstance(row["created_at"], datetime):
+                row["created_at"] = row["created_at"].isoformat()
+        return rows
 
     def linked_numbers(self, restaurant_id):
         with pg_connection() as conn:

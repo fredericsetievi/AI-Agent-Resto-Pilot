@@ -85,3 +85,5 @@
 .readonly-note{display:flex;gap:8px;align-items:center;font-size:11px;color:var(--amber);background:var(--amber-bg);border-radius:7px;padding:10px 13px;margin-bottom:18px}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
 @media(max-width:620px){.form-grid{grid-template-columns:1fr}}
+
+body.is-admin .page-heading > .button{display:none}

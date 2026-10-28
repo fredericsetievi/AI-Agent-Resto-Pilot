@@ -155,6 +155,14 @@ test('admin login navigates to the restaurants console and hides owner nav',asyn
   assert.match(h.element('#page-title').textContent,/Restaurants/);
 });
 
+test('admin row data attributes drive the detail navigation',()=>{
+  const h=harness({hash:'#admin-detail'});
+  h.run(`state.user={id:'u1',username:'admin',display_name:'Platform admin',role:'admin',restaurant_id:null,restaurant_name:null};state.adminSelected='resto-1';state.adminList=[{id:'resto-1',name:'Warung Bu Sari',address:null,created_at:'2026-10-27T00:00:00Z',whatsapp_numbers:[],users:[],pending_drafts:1,recorded_purchases:2}];navigate()`);
+  assert.equal(h.element('#page-title').textContent,'Restaurant detail.');
+  assert.match(h.element('#content').innerHTML,/Warung Bu Sari/);
+  assert.match(h.element('#content').innerHTML,/data-open-resto="resto-1"|Nomor WhatsApp terhubung/);
+});
+
 test('review warnings are deduplicated and capped at four visible details',()=>{
   const h=harness();
   h.run(`state.data={ingredients:[]};state.draft={version:1,status:'recorded',items:[],supplier:null,source_text:'demo',warnings:['First warning','First warning','Second warning','Third warning','Fourth warning','Fifth warning']};renderReview()`);

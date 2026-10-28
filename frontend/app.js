@@ -34,7 +34,7 @@ document.addEventListener('change',event => {
 // ---- Admin console (role: admin) ----
 const ADMIN_TITLES = {admin:['Restaurants you manage.','Every restaurant, its owner login, and its linked WhatsApp numbers.'],'admin-detail':['Restaurant detail.','Information, WhatsApp numbers, and the read-only owner dashboard.']};
 async function loadAdminList() {
-  const payload=await api('/v1/admin/restaurants');
+  const payload=await api('/v1/admin/restaurants',{timeout:30000});
   state.adminList=payload.restaurants || [];
   state.adminRejected=payload.rejected_attempts || [];
   if(!state.adminSelected && state.adminList.length)state.adminSelected=state.adminList[0].id;
@@ -65,7 +65,7 @@ async function refreshAdminOverview() {
   const panel=$('#admin-overview-panel');if(!panel)return;
   const ticket=++adminOverviewTicket;
   try {
-    const data=await api(`/v1/admin/restaurants/${encodeURIComponent(state.adminSelected)}/overview`);
+    const data=await api(`/v1/admin/restaurants/${encodeURIComponent(state.adminSelected)}/overview`,{timeout:60000});
     if(ticket!==adminOverviewTicket || !$('#admin-overview-panel'))return;
     const drafts=data.drafts || [];
     panel.innerHTML=`<div class="panel-heading"><div><h2>Ringkasan ${e(data.restaurant.name)}</h2><p>Read-only view of the owner dashboard.</p></div></div><div class="draft-list" style="padding-top:6px">${drafts.filter(draft => ['pending_approval','needs_clarification'].includes(draft.status)).map(draftCardReadOnly).join('') || '<div class="empty"><strong>Tidak ada draf menunggu.</strong></div>'}</div><div class="panel-note">${data.metrics.recorded_purchases} pembelian tercatat · stok rendah: ${data.metrics.low_stock_count} · pembelian hari ini ${rupiah(data.metrics.purchases_today_idr)}</div>${inventoryRows((data.inventory || []).slice(0,5))}`;
@@ -155,6 +155,8 @@ async function logout() {
 }
 function renderIdentity() {
   const user = state.user; if(!user)return;
+  document.body?.classList?.toggle('is-admin', user.role==='admin');
+  $('#restaurant-name').textContent = user.role==='admin' ? 'Platform admin' : (user.restaurant_name || 'Restaurant workspace');
   $('#profile-name').textContent = user.display_name;
   $('#profile-role').textContent = user.role==='admin' ? 'Admin platform' : (user.restaurant_name || 'Pemilik resto');
   $('#profile-initials').textContent = user.display_name.split(/\s+/).map(part => part[0]).join('').slice(0,2).toUpperCase();
@@ -297,6 +299,13 @@ function render() {
   if(page==='whatsapp' && !state.whatsappLoaded && !state.whatsappLoading)loadWhatsAppMessages();
 }
 async function refresh() {
+  // Admins have no restaurant of their own: refresh their console views
+  // instead of the owner overview (which would 404 and clobber the page).
+  if(state.user?.role==='admin'){
+    if(state.page==='admin-detail')refreshAdminOverview();
+    else if(state.page==='admin')loadAdminList().catch(()=>{});
+    return;
+  }
   const id=++state.refreshId;
   try {
     const data=await api('/v1/overview');
@@ -310,7 +319,7 @@ async function refresh() {
     if(id!==state.refreshId)return;
     state.online=false;$('#sync-status').textContent='Connection lost';
     showError('connection-error',`${error.message} ${state.data?'Showing the last loaded data. Decisions are disabled until reconnected.':''}`);
-    if (!state.data) $('#content').innerHTML='<div class="empty"><strong>The kitchen is temporarily offline.</strong>Use the refresh button after starting the local server.</div>';
+    if (!state.data && state.user?.role!=='admin') $('#content').innerHTML='<div class="empty"><strong>The kitchen is temporarily offline.</strong>Use the refresh button after starting the local server.</div>';
     updateApprovalButton();
   }
 }
@@ -434,7 +443,8 @@ $('#intake-form').addEventListener('submit',async event => {
   finally {button.disabled=false;button.textContent='Prepare draft →';}
 });
 document.addEventListener('click',event => {
-  const button=event.target.closest('button');if(!button)return;
+  // Admin rows are div[role=button], not <button>: match either.
+  const button=event.target.closest('button,[data-open-resto],[data-back-to]');if(!button)return;
   if(button.dataset.action==='new-purchase')openIntake();
   if(button.dataset.close && !state.busy)document.getElementById(button.dataset.close).close();
   if(button.dataset.review)openReview(button.dataset.review);
@@ -457,6 +467,12 @@ function navigate() {
   render();
 }
 window.addEventListener('hashchange',navigate);
+document.addEventListener('keydown',event => {
+  // A focused admin row (role=button, tabindex=0) activates on Enter or Space.
+  if((event.key==='Enter'||event.key===' ') && event.target.classList && event.target.classList.contains('admin-row')){
+    event.preventDefault();event.target.click();
+  }
+});
 document.addEventListener('submit',event => {if(event.target.id==='login-form')login(event);});
 $('#login-form').addEventListener('submit',login);
 $('#logout').addEventListener('click',logout);
