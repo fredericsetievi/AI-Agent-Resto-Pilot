@@ -2,6 +2,15 @@
 
 A local restaurant purchasing demo: Indonesian text or WhatsApp message → editable purchase draft → owner approval → persistent purchase, estimated stock, price evidence and activity.
 
+## Atoms dashboard
+
+The hosted dashboard is **https://restopilot-dashboard.pub.atoms.world/**.
+The [Atoms project](https://atoms.dev/chat/2cc522e0e3264f43a31c2e2a62d0ba27)
+contains the published app. Its exported runtime and deployment instructions are
+in [deploy/atoms/](deploy/atoms/README.md). The application sources remain in
+`service/` and `frontend/`; deployment builds copy the current service into the
+managed backend package. Existing Git branches keep their original history.
+
 ## Run locally
 
 Requires Python 3.11 or newer. From this directory:
@@ -41,7 +50,7 @@ The SQLite file is kept untouched. Without the password set, the app falls back 
 
 Every restaurant is a tenant with its own drafts, purchases, inventory, ingredient catalog, price baselines and activity. An owner only ever sees their own restaurant; the admin console can view any restaurant's dashboard but cannot log, edit, or approve purchases — those decisions stay with the owner.
 
-WhatsApp numbers are linked to exactly one restaurant (the `whatsapp_links.phone` column is unique). A message from an unregistered number is rejected with a polite Indonesian reply; nothing is processed, no draft or model call happens, and the attempt appears in the admin console. A registered number's conversation — drafts, `YA` approvals, summaries — is scoped to its linked restaurant only, so a number can never read or ask about another restaurant's data. When the optional StepFun models are invoked (text rescue, invoice vision), the prompts carry an explicit tenant rule naming the sender's restaurant as defense in depth; the actual isolation is the allowlist plus per-tenant storage, and the model never receives another restaurant's content.
+WhatsApp numbers are linked to exactly one restaurant (the `whatsapp_links.phone` column is unique). With the launchers’ default `WHATSAPP_OPEN_ONBOARDING=1`, a new number receives a restaurant menu and must select a restaurant by name before purchase text, photos, audio, or stock questions are processed. Selecting a restaurant links the number without creating a purchase; the sender then resends the purchase message. Existing linked numbers retain their restaurant. Set `WHATSAPP_OPEN_ONBOARDING=0` for administrator-only linking and the previous rejection response. A registered number's conversation — drafts, `YA` approvals, summaries — is scoped to its linked restaurant only, so a number can never read or ask about another restaurant's data. When the optional StepFun models are invoked (text rescue, invoice vision), the prompts carry an explicit tenant rule naming the sender's restaurant as defense in depth; the actual isolation is the allowlist plus per-tenant storage, and the model never receives another restaurant's content.
 
 Sessions are HttpOnly `SameSite=Lax` cookies (7-day expiry, stored server-side so restarts keep logins). Owner passwords can be reset by the admin, which signs out that owner's sessions.
 

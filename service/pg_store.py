@@ -37,6 +37,7 @@ from .db import (
 )
 from .extraction import extract_purchase
 from .pg import pg_connection, pg_transaction
+from .onboarding import restaurant_selection
 from .whatsapp import (
     FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR,
     UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup,
@@ -47,15 +48,66 @@ from .whatsapp import (
 class PostgresStore:
     """The RestoPilot authority in Supabase Postgres. Same contract as Store."""
 
-    def __init__(self, path=None, seed=True):
+    # Tables/columns the application reads and writes (supabase/migrations/0003).
+    REQUIRED_SCHEMA = {
+        "restaurants": {"id", "name", "slug", "address"},
+        "tenants": {"slug", "restaurant_id", "created_at"},
+        "app_users": {"id", "username", "password_hash", "display_name", "role", "slug", "created_at"},
+        "app_sessions": {"token", "user_id", "created_at", "expires_at"},
+        "whatsapp_links": {"id", "slug", "phone", "label", "created_at"},
+        "custom_ingredients": {"id", "slug", "name", "unit", "reorder_threshold", "created_at"},
+        "drafts": {"id", "slug", "version", "status", "body", "created_at"},
+        "purchases": {"id", "slug", "draft_id", "supplier", "created_at", "body"},
+        "stock": {"slug", "ingredient_id", "quantity"},
+        "movements": {"id", "slug", "purchase_id", "ingredient_id", "quantity", "created_at"},
+        "activity": {"id", "slug", "event", "message", "created_at"},
+        "idempotency": {"key", "slug", "fingerprint", "response", "created_at"},
+        "whatsapp_threads": {"id", "slug", "channel", "sender", "transport", "active_draft_id",
+                             "active_version", "pending_followup"},
+        "whatsapp_messages": {"id", "thread_id", "direction", "body", "created_at", "transport",
+                              "status", "draft_id"},
+        "whatsapp_events": {"channel", "event_id", "thread_id", "fingerprint", "response"},
+        "app_metadata": {"key", "value"},
+    }
+
+    def __init__(self, path=None, seed=True, read_only_startup=False):
         # `path` is accepted and ignored so call sites stay identical.
         self._catalogs = {}
         # Short-TTL overview cache: each Supabase round trip costs 0.1-0.9s,
         # and the dashboard polls every 5s — serve repeats from memory.
         self._overview_cache = {}
         self._overview_cache_ttl = 3.0
-        self.initialize(seed)
+        if read_only_startup:
+            # Hosted deployments attach to an existing ledger: validate only,
+            # never insert demo users, allowlist rows, metadata or stock.
+            self.validate_schema()
+        else:
+            self.initialize(seed)
         self._load_custom_ingredients()
+
+    def validate_schema(self):
+        """SELECT-only check that every required table and column exists."""
+        with pg_connection() as conn:
+            self._execute(conn, "SET TRANSACTION READ ONLY")
+            cur = self._execute(
+                conn,
+                "SELECT table_name, column_name FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name = ANY(%s)",
+                (list(self.REQUIRED_SCHEMA),),
+            )
+            found = {}
+            for table, column in cur.fetchall():
+                found.setdefault(table, set()).add(column)
+        problems = []
+        for table, columns in self.REQUIRED_SCHEMA.items():
+            if table not in found:
+                problems.append(f"missing table {table}")
+                continue
+            missing = sorted(columns - found[table])
+            if missing:
+                problems.append(f"{table} missing columns {', '.join(missing)}")
+        if problems:
+            raise RuntimeError("Supabase schema does not match RestoPilot: " + "; ".join(problems))
 
     # ---- connection helpers -------------------------------------------------
 
@@ -602,7 +654,7 @@ class PostgresStore:
             row = cur.fetchone()
         return row[0] if row else None
 
-    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None):
+    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, open_onboarding=False):
         channel = channel or transport
         extracted_photo = payload.get("extracted")
         source_label = payload.get("source_label") or "Foto nota WhatsApp"
@@ -631,7 +683,21 @@ class PostgresStore:
             cur = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s", (payload["sender"],))
             link = cur.fetchone()
             linked = link[0] if link else None
-            if restaurant_id is not None and linked != restaurant_id:
+            onboarding_reply = None
+            if linked is None and open_onboarding:
+                rows = self._rows(self._execute(conn,
+                    "SELECT t.slug AS id, r.name FROM tenants t JOIN restaurants r ON r.id=t.restaurant_id ORDER BY r.name, t.slug"))
+                choices = [row for row in rows if restaurant_id is None or row["id"] == restaurant_id]
+                selected, onboarding_reply = restaurant_selection(choices, payload["text"])
+                if selected:
+                    phone = validate_phone_number(payload["sender"])
+                    self._execute(conn,
+                        "INSERT INTO whatsapp_links (id, slug, phone, label) VALUES (%s, %s, %s, %s) ON CONFLICT (phone) DO NOTHING",
+                        (uuid.uuid4().hex, selected["id"], phone, "WhatsApp self-registration"))
+                    linked = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s", (phone,)).fetchone()[0]
+                    if linked != selected["id"]:
+                        raise DomainError("sender_link_changed", "This number was linked elsewhere. Please send your message again.", 409)
+            if restaurant_id is not None and linked != restaurant_id and not (linked is None and open_onboarding):
                 raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
             tenant = linked
             thread = self._whatsapp_thread(conn, payload["sender"], channel, transport, restaurant_id=tenant, create=True)
@@ -644,7 +710,10 @@ class PostgresStore:
             thread["pending_followup"] = None
             command = payload["text"].strip().casefold()
             result = {}
-            if tenant is None:
+            if onboarding_reply is not None:
+                reply = onboarding_reply
+                result["action"] = "restaurant_selected" if tenant else "restaurant_selection_required"
+            elif tenant is None:
                 reply = UNREGISTERED_REPLY
                 result["action"] = "unregistered_sender"
             elif extracted_photo:

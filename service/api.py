@@ -35,7 +35,7 @@ from .audio import (
     validate_asr_model,
     validate_tts_model,
 )
-from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
+from .db import APPROVE_COMMANDS, DEMO_USERS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
 from .pg_store import PostgresStore
 from .extraction import extract_purchase
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
@@ -218,20 +218,58 @@ def create_app(
     stock_llm_enabled=False,
     stock_llm_http_client=None,
     kitchen_filter_enabled=True,
+    hosted=False,
+    secure_cookies=None,
+    store_factory=None,
+    whatsapp_open_onboarding=False,
 ):
+    """Build the app.
+
+    ``hosted=True`` is the deployment mode for an existing Supabase ledger:
+    startup only validates the schema (no demo users, allowlist, metadata or
+    stock writes), a missing or unreachable database fails closed with a JSON
+    error on every route except ``/health/live`` (never a SQLite fallback),
+    session cookies are Secure, and the well-known demo credentials are
+    rejected at login. ``store_factory`` lets offline tests inject a store.
+    """
     app = FastAPI(title="RestoPilot local demo", version="0.2.0", description="Session login with resto owner and platform admin roles, per-restaurant tenant isolation, WhatsApp allowlist, rules extraction and SQLite.")
-    # The authority is Supabase Postgres when configured; the local SQLite
-    # file stays as an offline/demo fallback so the app still boots without it.
+    secure_cookies = hosted if secure_cookies is None else secure_cookies
     store = None
-    if not _test_sqlite_fallback():
+    storage_error = None
+    if hosted:
         try:
-            store = PostgresStore(seed=seed)
+            if store_factory is not None:
+                store = store_factory()
+            else:
+                store = PostgresStore(seed=False, read_only_startup=True)
             storage = "supabase"
-        except RuntimeError:
+        except Exception as exc:  # noqa: BLE001 - any config/connect/schema failure fails closed
+            logger.error("Hosted storage unavailable; failing closed: %s", type(exc).__name__)
             store = None
-    if store is None:
-        store = Store(db_path, seed=seed)
-        storage = "sqlite"
+            storage = "unavailable"
+            storage_error = str(exc) if isinstance(exc, RuntimeError) else "The database could not be reached."
+    else:
+        # The authority is Supabase Postgres when configured; the local SQLite
+        # file stays as an offline/demo fallback so the app still boots without it.
+        if not _test_sqlite_fallback():
+            try:
+                store = PostgresStore(seed=seed)
+                storage = "supabase"
+            except RuntimeError:
+                store = None
+        if store is None:
+            store = Store(db_path, seed=seed)
+            storage = "sqlite"
+    app.state.storage = storage
+    default_credentials = {(user["username"].casefold(), user["password"]) for user in DEMO_USERS}
+    # Server-only, default-off escape hatch: ALLOW_DEMO_OWNER_LOGIN=1 (exactly)
+    # lets the existing "owner" account authenticate through the normal
+    # store.verify_login against its stored hash. Every other default
+    # credential (including admin's) stays blocked.
+    import os
+    allow_demo_owner_login = hosted and os.environ.get("ALLOW_DEMO_OWNER_LOGIN", "") == "1"
+    if allow_demo_owner_login:
+        logger.warning("ALLOW_DEMO_OWNER_LOGIN is enabled: the 'owner' account may log in with its existing password.")
 
     # Text words that mean "operate on the previous draft" never reach the
     # model: a bare "ya" must stay a zero-cost command.
@@ -355,6 +393,15 @@ def create_app(
     tts_model = validate_tts_model(tts_model) if tts_model else DEFAULT_TTS_MODEL
     tts_voice = (tts_voice or DEFAULT_TTS_VOICE).strip() or DEFAULT_TTS_VOICE
 
+    if storage == "unavailable":
+        @app.middleware("http")
+        async def fail_closed(request: Request, call_next):
+            if request.url.path == "/health/live":
+                return await call_next(request)
+            response = error("storage_unavailable", f"RestoPilot storage is unavailable: {storage_error}", 500)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
     @app.middleware("http")
     async def loopback_boundary(request: Request, call_next):
         public_webhook = request.method in ("GET", "POST") and request.url.path == WEBHOOK_PATH and matches_public_host(request.headers.get("host", ""), configured_origin)
@@ -424,12 +471,16 @@ def create_app(
 
     @app.post("/v1/auth/login")
     def login(body: Login, response: Response):
+        demo_owner_exempt = allow_demo_owner_login and body.username == "owner"
+        if hosted and not demo_owner_exempt and (body.username.casefold(), body.password) in default_credentials:
+            # Checked before any database lookup; stored hashes are untouched.
+            raise DomainError("default_credentials_rejected", "Default demo credentials are disabled on this deployment.", 401)
         user = store.verify_login(body.username, body.password)
         token = store.create_session(user["id"])
         response.set_cookie(
             SESSION_COOKIE, token,
             max_age=int(SESSION_TTL.total_seconds()),
-            httponly=True, samesite="lax", path="/",
+            httponly=True, samesite="lax", path="/", secure=secure_cookies,
         )
         return {"data": user}
 
@@ -438,7 +489,7 @@ def create_app(
         token = request.cookies.get(SESSION_COOKIE)
         if token:
             store.delete_session(token)
-        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(SESSION_COOKIE, path="/", secure=secure_cookies, httponly=True, samesite="lax")
         return {"data": {"ok": True}}
 
     @app.get("/v1/auth/me")
@@ -447,7 +498,7 @@ def create_app(
 
     @app.get("/health/live")
     def live():
-        return {"data": {"status": "ok", "mode": "local_demo"}}
+        return {"data": {"status": "ok", "mode": "hosted" if hosted else "local_demo", "storage": storage}}
 
     @app.get("/health/ready")
     def ready():
@@ -521,17 +572,17 @@ def create_app(
     async def simulate_whatsapp(body: SimulatedMessage, actor=Depends(owner_actor), idempotency_key=Depends(key)):
         # The simulator may only speak as one of this restaurant's linked numbers.
         sender_restaurant = store.restaurant_for_sender(body.sender)
-        if not sender_restaurant or sender_restaurant["id"] != actor["restaurant_id"]:
+        if (sender_restaurant and sender_restaurant["id"] != actor["restaurant_id"]) or (not sender_restaurant and not whatsapp_open_onboarding):
             raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
         payload = body.model_dump()
-        if payload["text"].strip():
+        if sender_restaurant and payload["text"].strip():
             # A stock question is answered read-only from the restaurant's own
             # inventory; the purchase extraction is skipped entirely for it.
             payload["stock_answer"] = await build_stock_answer(payload["text"], actor["restaurant_id"])
             if payload["stock_answer"] is None:
                 payload["extracted_text"] = await filter_kitchen_items(
                     await extract_text(payload["text"], actor["restaurant_name"]), actor["restaurant_id"])
-        return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"])}
+        return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"], open_onboarding=whatsapp_open_onboarding)}
 
     def csv_attachment(rows, filename):
         buffer = io.StringIO()
@@ -735,6 +786,7 @@ def create_app(
                 channel=LIVE + ":" + meta_phone_number_id,
                 outbound_status=OUTBOUND_PENDING,
                 restaurant_id=restaurant_id,
+                open_onboarding=whatsapp_open_onboarding,
             )
             outbound = result["messages"][-1]
             claimed = await run_in_threadpool(

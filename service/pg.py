@@ -21,27 +21,56 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENV_PATH = PROJECT_ROOT / ".env"
 
 
+def hosted_mode() -> bool:
+    """Hosted deployments read configuration from server env only (no .env)."""
+    return os.environ.get("RESTOPILOT_HOSTED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @lru_cache(maxsize=1)
 def db_config():
-    """Resolve the direct-connection settings once; fail fast when unset."""
-    load_dotenv(ENV_PATH)
-    url = (os.environ.get("SUPABASE_URL") or "").strip()
-    password = (os.environ.get("SUPABASE_DB_PASSWORD") or "").strip()
+    """Resolve the connection settings once; fail fast when unset.
+
+    Defaults to the direct host ``db.<ref>.supabase.co:5432`` as user
+    ``postgres``. Runtimes without IPv6 can point at the Supabase session
+    pooler instead via SUPABASE_DB_HOST / SUPABASE_DB_PORT / SUPABASE_DB_USER
+    (e.g. ``aws-0-<region>.pooler.supabase.com``, ``5432``, ``postgres.<ref>``).
+    TLS is always required.
+    """
+    if not hosted_mode():
+        load_dotenv(ENV_PATH)
+    env = os.environ.get
+    url = (env("SUPABASE_URL") or "").strip()
+    password = (env("SUPABASE_DB_PASSWORD") or "").strip()
     if not url or not password:
         raise RuntimeError(
             "Postgres authority is not configured: set SUPABASE_URL and "
-            "SUPABASE_DB_PASSWORD in the environment or a local .env (see .env.example)."
+            "SUPABASE_DB_PASSWORD in the server environment."
         )
     ref = url.split("//")[-1].split(".")[0]
-    host = (os.environ.get("SUPABASE_DB_HOST") or "").strip() or f"db.{ref}.supabase.co"
-    user = (os.environ.get("SUPABASE_DB_USER") or "").strip() or "postgres"
-    port = (os.environ.get("SUPABASE_DB_PORT") or "").strip() or "5432"
+    port_text = (env("SUPABASE_DB_PORT") or "5432").strip()
+    if not port_text.isdigit() or not 0 < int(port_text) < 65536:
+        raise RuntimeError("SUPABASE_DB_PORT must be a TCP port number.")
     # TCP keepalives: the session pooler drops idle connections mid-flight,
     # which surfaces as "server closed the connection unexpectedly".
-    return {"host": host, "port": int(port), "dbname": "postgres",
-            "user": user, "password": password,
+    return {"host": (env("SUPABASE_DB_HOST") or "").strip() or f"db.{ref}.supabase.co",
+            "port": int(port_text), "dbname": "postgres",
+            "user": (env("SUPABASE_DB_USER") or "").strip() or "postgres",
+            "password": password,
             "keepalives": 1, "keepalives_idle": 30,
             "keepalives_interval": 10, "keepalives_count": 5}
+
+
+def reset_pool():
+    """Drop cached config and pool (used after a failed hosted bootstrap and by tests)."""
+    global _pool
+    db_config.cache_clear()
+    with _pool_lock:
+        if _pool is not None:
+            try:
+                _pool.closeall()
+            except Exception:
+                pass
+        _pool = None
 
 
 # The session pooler is far from this machine (Tokyo), and on a mobile
