@@ -8,10 +8,9 @@ import os
 
 import pytest
 
-# Live-cloud module, opt-in via TEST_PG=1. The suite-wide FORCE_SQLITE=1 set
-# in conftest is flipped per-test here (with teardown) so no other test file
-# ever touches the cloud.
-os.environ.setdefault("TEST_PG", "1")
+# Live-cloud module, strictly opt-in via TEST_PG=1 (never sets it itself, so
+# CI without credentials skips this file). The suite-wide FORCE_SQLITE=1 from
+# conftest is flipped per-test here so no other test file touches the cloud.
 
 
 @pytest.fixture(autouse=True)
