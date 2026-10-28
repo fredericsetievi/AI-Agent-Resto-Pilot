@@ -20,7 +20,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .extraction import catalog_aliases, extract_purchase, normalize_item
-from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup, parse_remove_item, stock_reply, weekly_summary_reply
+from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup, parse_remove_request, stock_reply, weekly_summary_reply
 
 
 CATALOG = [
@@ -804,25 +804,43 @@ class Store:
                 reply = weekly_summary_reply(summary, SUMMARY_WINDOW_DAYS)
                 result["action"] = "weekly_summary"
                 result["summary"] = summary
-            elif draft and (remove_index := parse_remove_item(payload["text"])):
-                # 'hapus 2' drops the 1-based flagged item from the active
-                # draft — the owner's confirmation for the kitchen filter.
-                flagged = [position for position, item in enumerate(draft["items"]) if item.get("non_kitchen")]
-                if remove_index - 1 not in flagged:
-                    hint = ", ".join(str(position + 1) for position in flagged) or "tidak ada"
-                    reply = f"Item {remove_index} tidak bertanda bukan bahan masak. Hapus hanya baris bertanda: " + hint + "."
+            elif draft and (request := parse_remove_request(payload["text"])):
+                # 'hapus 4', 'hapus 4, 5' and 'hapus semua' drop flagged
+                # (non-kitchen) lines from the active draft — the owner's
+                # confirmation for the kitchen filter.
+                items = draft["items"]
+                flagged = [position for position, item in enumerate(items) if item.get("non_kitchen")]
+                hint = ", ".join(str(position + 1) for position in flagged) or "tidak ada"
+                if request["mode"] == "all":
+                    targets = flagged
+                else:
+                    targets = [index - 1 for index in dict.fromkeys(request["indices"])]
+                unknown = [position for position in targets if not 0 <= position < len(items)]
+                unflagged = [position for position in targets if position not in flagged]
+                if unknown:
+                    reply = (f"Item {', '.join(str(position + 1) for position in unknown)} tidak ada di draf "
+                             f"({len(items)} baris). Hapus hanya baris bertanda: {hint}.")
                     result["action"] = "remove_rejected"
-                elif len(draft["items"]) <= 1:
-                    reply = "Draf tinggal satu baris. Balas BATAL untuk membatalkan seluruh draf."
+                elif unflagged:
+                    reply = (f"Item {', '.join(str(position + 1) for position in unflagged)} tidak bertanda "
+                             f"bukan bahan masak. Hapus hanya baris bertanda: {hint}.")
+                    result["action"] = "remove_rejected"
+                elif not targets:
+                    reply = "Tidak ada baris yang bertanda bukan bahan masak."
+                    result["action"] = "remove_rejected"
+                elif len(targets) >= len(items):
+                    reply = "Kalau semua baris dibuang, draf jadi kosong. Balas BATAL untuk membatalkan seluruh draf."
                     result["action"] = "remove_rejected"
                 else:
-                    removed = draft["items"].pop(remove_index - 1)
+                    removed_names = [str(items[position].get("raw_name")) for position in targets]
+                    for position in sorted(targets, reverse=True):
+                        items.pop(position)
                     # Re-derive warnings for the remaining items: numbered
-                    # warnings ('Item 2: ...') shift when a line disappears.
-                    remaining, field_warnings = self._normalize(draft["items"], self._catalog_for(tenant))
-                    flags = [item.get("non_kitchen") for item in draft["items"]]
-                    for item, flagged in zip(remaining, flags):
-                        if flagged:
+                    # warnings ('Item 2: ...') shift when lines disappear.
+                    remaining, field_warnings = self._normalize(items, self._catalog_for(tenant))
+                    flags = [item.get("non_kitchen") for item in items]
+                    for item, still_flagged in zip(remaining, flags):
+                        if still_flagged:
                             item["non_kitchen"] = True
                     kept_warnings = [warning for warning in draft.get("warnings") or []
                                      if "bukan bahan masak" in warning
@@ -834,8 +852,10 @@ class Store:
                                   "version": draft["version"] + 1})
                     self._save_draft(conn, draft)
                     thread["active_version"] = draft["version"]
-                    self._audit(conn, "draft_item_removed", f"Non-kitchen item '{removed.get('raw_name')}' removed from draft {draft['id'][:8]}.", tenant)
-                    reply = f"Item '{removed.get('raw_name')}' dihapus dari draf.\n" + draft_reply(draft, names)
+                    quoted = [f"'{name}'" for name in removed_names]
+                    names_text = " dan ".join([", ".join(quoted[:-1]), quoted[-1]]) if len(quoted) > 1 else quoted[0]
+                    self._audit(conn, "draft_item_removed", f"Non-kitchen item(s) {names_text} removed from draft {draft['id'][:8]}.", tenant)
+                    reply = f"Item {names_text} dihapus dari draf.\n\n" + draft_reply(draft, names)
                     result["action"] = "item_removed"
             elif stock_answer:
                 # A stock question answered from inventory facts before the

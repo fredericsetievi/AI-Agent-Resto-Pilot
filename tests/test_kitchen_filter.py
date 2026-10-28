@@ -157,6 +157,51 @@ def test_simulator_flags_and_hapus_removes_the_flagged_item(tmp_path):
     assert approved["result"]["action"] == "approved"
 
 
+def test_simulator_hapus_semua_clears_every_flagged_line(tmp_path):
+    fake = FakeFilterClient()
+    # cabai is catalog-seeded; sikat gigi and odol reach the model as payload
+    # indices 0 and 1 and both get flagged (draft lines 2 and 3)
+    fake.responses.append(fake.completion({"kitchen": [], "non_kitchen": [0, 1]}))
+    app, client = filter_app(tmp_path, fake)
+
+    result = client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
+                         json={"sender": SENDER_NUMBER, "text": QUESTION_FREE_FORM}).json()["data"]
+    assert len([item for item in result["draft"]["items"] if item.get("non_kitchen")]) == 2
+
+    cleared = client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
+                          json={"sender": SENDER_NUMBER, "text": "hapus semua"}).json()["data"]
+    assert cleared["result"]["action"] == "item_removed"
+    assert [item["raw_name"] for item in cleared["draft"]["items"]] == ["cabai"]
+    assert cleared["draft"]["status"] == "pending_approval"
+    assert "'sikat gigi' dan 'odol' dihapus" in cleared["messages"][-1]["body"]
+    # Nothing stays flagged, so the confirmation warning disappears and the
+    # owner can approve the remaining kitchen purchase straight away.
+    assert "bukan bahan masak" not in cleared["messages"][-1]["body"]
+
+
+def test_simulator_hapus_batch_and_rejections(tmp_path):
+    fake = FakeFilterClient()
+    fake.responses.append(fake.completion({"kitchen": [], "non_kitchen": [0, 1]}))
+    app, client = filter_app(tmp_path, fake)
+
+    def simulate(text):
+        return client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
+                           json={"sender": SENDER_NUMBER, "text": text}).json()["data"]
+
+    simulate(QUESTION_FREE_FORM)
+    # Mixing a flagged line with an unflagged one rejects the whole command.
+    mixed = simulate("hapus 1, 3")
+    assert mixed["result"]["action"] == "remove_rejected"
+    assert len(mixed["draft"]["items"]) == 3
+    # Batch indices clear both flagged lines in one message.
+    batch = simulate("hapus 3, 2")
+    assert batch["result"]["action"] == "item_removed"
+    assert [item["raw_name"] for item in batch["draft"]["items"]] == ["cabai"]
+    assert batch["draft"]["status"] == "pending_approval"
+    # Names echo back in the order the owner typed them.
+    assert "'odol' dan 'sikat gigi' dihapus" in batch["messages"][-1]["body"]
+
+
 def test_hapus_rejects_an_unflagged_index(tmp_path):
     fake = FakeFilterClient()
     # minyak goreng is catalog-seeded; the model sees only sabun mandi
