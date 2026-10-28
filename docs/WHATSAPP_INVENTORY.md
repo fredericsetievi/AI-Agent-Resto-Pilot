@@ -1,11 +1,11 @@
 # WhatsApp stock and sales reporting
 
-Implemented and locally verified on 2026-10-29. The owner subsequently approved
-committing/pushing this release, applying migration0005 and publishing it to the
-existing Atoms project. That approval is not itself a deployment-success claim;
-verify the saved version and public endpoints after publication. The existing dashboard
-inventory release is separately live as Atoms V7, from application source
-`ca15832a079bd0e5fdcd1df02b8fa59da40581b6`.
+Published on 2026-10-29 as **Atoms V9** on the existing
+https://restopilot-dashboard.pub.atoms.world/ domain, from source
+`1c27af32cca570d27648a71082af4f9a69ad1515`. Migration0005 was explicitly applied
+to the existing Supabase project. It added three RLS-enabled tables without
+changing existing stock, purchases, users, links, inventory history or settings.
+This includes the earlier dashboard inventory release (V7).
 
 ## Owner experience
 
@@ -106,7 +106,7 @@ Successful replies include the recorded event references, updated balances and
 available reorder advice. There is no scheduled reminder service or automatic
 purchase ordering.
 
-## Approved rollout
+## Release contents and verification
 
 Review these source changes:
 
@@ -125,19 +125,40 @@ the dashboard publication. Do not rerun or edit it. Hosted startup stays
 read-only and fails closed. Missing0005 produces a safe operations/photo-intake
 response while text purchase functionality stays available.
 
-After explicit rollout approval: review/commit the local changes, push the
-reviewed source, explicitly apply0005 to the existing project, import the pinned
-release into the existing Atoms native scaffold, re-vendor the backend, run the
-native checks, verify saved preview and Update the same published domain.
-Preserve Keys, history/branches, the official Atoms badge, open restaurant
-selection and the existing Meta test callback/account.
+The approved rollout committed/pushed the source, applied0005, imported the
+pinned release into the existing native Atoms scaffold, re-vendored the backend,
+checked external preview, then published V9 on the same domain. Keys,
+history/branches, open restaurant selection and the existing Meta test
+callback/account were retained. The native V7 startup/proxy repair was not
+overwritten. GitHub synchronization and Atoms publication remain separate;
+see [the workflow guide](ATOMS_GITHUB_WORKFLOW.md).
 
 Verification completed locally: **374 Python tests passed**, with 34 skipped
 (30 opt-in local PostgreSQL tests plus four legacy live tests). All **30 local
 PostgreSQL tests passed separately**, against disposable databases restricted
-to a local socket. **25 JavaScript tests passed**. No extension tests wrote to
-live Supabase or sent real WhatsApp messages.
+to a local socket. **25 JavaScript tests passed**. These local tests used isolated
+databases and did not send real WhatsApp messages.
 
 Final release audit added an unchanged-balance physical-count race regression
 and a count-evidence check under the posting locks. All **31 local PostgreSQL
 tests** and **28 SQLite operation-flow tests** passed after that fix.
+
+Atoms' Python 3.10 runtime needed a portable test cleanup callback instead of
+`set_authorizer(None)`. After that test-only correction, its complete source
+suite passed **371 tests, 35 skipped** (the three GitHub-layout adapter tests
+were excluded). Native frontend tests passed22/22; lint/build passed.
+
+Independent post-publication verification confirmed:
+
+- Health/live and readiness200 with hosted Supabase storage; signed-out
+  inventory401; demo-owner login and inventory readback200.
+- Published `assets/app.js` exactly matches the reviewed source file.
+- A simulator usage message produced a versioned review; retrying its key
+  returned the identical response, then `BATAL` cancelled it.
+- All seven pre-existing business-table counts and fingerprints stayed equal.
+  No purchase, stock movement or inventory event was posted by verification.
+
+One cancelled QA simulator operation is deliberately retained for audit:
+`b306a87f9d7745b18ba78c26eabc4f19`. Its simulator messages were retained; no real
+WhatsApp message was sent. The sanitized verification report is ignored under
+`tmp/whatsapp-release-check-20261028T180828Z.json`.
