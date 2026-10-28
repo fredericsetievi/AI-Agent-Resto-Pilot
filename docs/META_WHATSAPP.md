@@ -61,3 +61,26 @@ If the browser can reach Meta but the local Python process cannot, start the ser
 Cloudflare quick-tunnel hostnames are temporary. When one changes, update `PUBLIC_BASE_URL`, restart the service and replace Meta's callback URL before testing again.
 
 The WhatsApp sender and purchasing workflow are a local demo without production user enrollment or tenant authentication. Use synthetic rehearsal data, do not expose credentials, and do not treat the public webhook as a production deployment.
+
+## Atoms test-account deployment
+
+The account was verified read-only on October 28, 2026 as **Test WhatsApp Business
+Account**, with sender **Test Number +1 555-666-1772** and business verification
+`not_verified`. Keeping this sender does not require switching to a production
+number or initiating business verification. Meta’s own test-recipient limits
+still apply even when RestoPilot accepts new numbers.
+
+The approved callback target is:
+
+```text
+https://restopilot-dashboard.pub.atoms.world/api/v1/restopilot/webhooks/meta/whatsapp
+```
+
+Use the Atoms HTTPS origin as server-side `PUBLIC_BASE_URL`; keep the same
+Meta credentials in private server keys. With `WHATSAPP_OPEN_ONBOARDING=1`, a
+new sender first selects a restaurant by name. No purchase, stock answer, media
+download, or model call is processed before selection. Existing numbers keep
+their links. Registration and its conversation response share the event’s
+transaction and retry guard; the selection message does not create a draft.
+This is open enrollment into the chosen restaurant for the demo, not an owner
+identity check. `WHATSAPP_OPEN_ONBOARDING=0` retains administrator-only linking.

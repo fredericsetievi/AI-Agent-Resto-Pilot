@@ -10,21 +10,22 @@
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar" hidden>
     <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true">r<span>·</span></span>RestoPilot</a>
-    <div class="workspace"><span class="workspace-icon" aria-hidden="true">⌂</span><div><strong id="restaurant-name">Demo kitchen</strong><small>Restaurant workspace</small></div></div>
-    <p class="nav-label">YOUR OPERATIONS</p>
-    <nav aria-label="Main navigation">
+    <div class="workspace"><span class="workspace-icon" aria-hidden="true">⌂</span><div><strong id="restaurant-name">…</strong><small id="workspace-sub">Restaurant workspace</small></div></div>
+    <p class="nav-label" id="nav-label">YOUR OPERATIONS</p>
+    <nav aria-label="Main navigation" id="main-nav">
       <a href="#overview" data-page="overview"><span aria-hidden="true">◫</span> Overview</a>
-      <a href="#approvals" data-page="approvals"><span aria-hidden="true">☑</span> Approvals <span id="nav-count" class="nav-count">—</span></a>
+      <a href="#approvals" data-page="approvals" id="nav-approvals"><span aria-hidden="true">☑</span> Approvals <span id="nav-count" class="nav-count">—</span></a>
       <a href="#purchases" data-page="purchases"><span aria-hidden="true">▤</span> Purchases</a>
       <a href="#inventory" data-page="inventory"><span aria-hidden="true">▦</span> Inventory</a>
       <a href="#activity" data-page="activity"><span aria-hidden="true">↗</span> Activity</a>
-      <a href="#whatsapp" data-page="whatsapp"><span aria-hidden="true">◌</span> WhatsApp demo</a>
+      <a href="#whatsapp" data-page="whatsapp" id="nav-whatsapp"><span aria-hidden="true">◌</span> WhatsApp demo</a>
+      <a href="#admin" data-page="admin" id="nav-admin" hidden><span aria-hidden="true">⚙</span> Restaurants</a>
     </nav>
-    <div class="sidebar-bottom"><span class="status-dot"></span> WhatsApp simulator ready<p>Synthetic starting data.<br>Live Meta transport is configured separately.</p><div class="profile"><span>DO</span><div>Demo owner<small>Local access only</small></div></div></div>
+    <div class="sidebar-bottom"><span class="status-dot"></span> Session active<p>Demo authentication.<br>WhatsApp numbers are linked per restaurant by the admin.</p><div class="profile"><span id="profile-initials">…</span><div><span id="profile-name">…</span><small id="profile-role">…</small></div></div><button class="button mini" id="logout" type="button">Keluar</button></div>
   </aside>
-  <div class="shell">
+  <div class="shell" id="shell" hidden>
     <header class="topbar"><span>Workspace <span class="breadcrumb">/ <span id="breadcrumb">Overview</span></span></span><div><span class="demo-pill">DEMO</span><span id="sync-status" role="status">Connecting…</span><button id="refresh" class="icon-button" aria-label="Refresh dashboard">↻</button></div></header>
     <main id="main" tabindex="-1">
       <div class="page-heading"><div><p class="eyebrow">A LITTLE CLARITY FOR YOUR KITCHEN</p><h1 id="page-title">Your kitchen, in view.</h1><p id="page-subtitle">Purchases, stock, and the decisions that need you.</p></div><button class="button primary" data-action="new-purchase"><span aria-hidden="true">＋</span> Log a purchase</button></div>
@@ -50,6 +51,20 @@
     </form>
   </dialog>
   <dialog id="review-dialog" class="review-dialog" aria-labelledby="review-title"><div id="review-content"></div></dialog>
+  <div id="login-page" class="login-page" hidden>
+    <form id="login-form" class="login-card">
+      <span class="brand-mark login-mark" aria-hidden="true">r<span>·</span></span>
+      <h1>Masuk ke RestoPilot</h1>
+      <p class="muted">Dashboard pembelian untuk pemilik resto dan admin platform.</p>
+      <label for="login-username">Username</label>
+      <input id="login-username" name="username" autocomplete="username" maxlength="50" required>
+      <label for="login-password">Password</label>
+      <input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="200" required>
+      <div id="login-error" class="notice error" role="alert" hidden></div>
+      <button class="button primary login-submit" type="submit">Masuk <span aria-hidden="true">→</span></button>
+      <p class="field-help">Masuk dengan akun pemilik restoran atau admin platform Anda.</p>
+    </form>
+  </div>
   <div id="toast" role="status" class="toast" hidden></div>
 </body>
 </html>

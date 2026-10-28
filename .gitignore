@@ -24,3 +24,13 @@ PROJECT-SUMMARY.md
 STEPFUN-COLLABORATION-ANALYSIS.md
 demo-evidence/
 invoice-samples/
+
+# Atoms build outputs and locally generated service package.
+node_modules/
+dist/
+*.log
+deploy/atoms/backend/restopilot_app/service/
+# Signed-in browser profiles stay on this computer.
+tools/browser/.local/
+
+.venv-atoms/

@@ -168,14 +168,16 @@ def _parse_quantity(text: str) -> tuple[str, str | None, str | None, str | None]
     return text[: match.start()].strip(), _plain_decimal(quantity), unit, None
 
 
-def _match_name(name: str) -> tuple[str, str | None]:
+def _match_name(name: str) -> tuple[str, str | None, bool]:
+    """Return (candidate, ingredient_id, fuzzy): fuzzy marks a spelling recovery
+    that the owner should confirm, while exact alias/prefix matches are trusted."""
     candidate = re.sub(r"\s+", " ", name.strip(" ,.-")).casefold()
     for alias, canonical_id in _ALIASES:
         if candidate == alias:
-            return candidate, canonical_id
+            return candidate, canonical_id, False
     tokens = [token for token in _NAME_TOKEN.findall(candidate) if token not in _NAME_NOISE]
     if not tokens or _NAME_BLOCKERS.intersection(tokens):
-        return candidate, None
+        return candidate, None, False
     # Longest alias that opens the printed name wins, so "bawang putih kupas"
     # beats the shorter "bawang" alias. Prefix-only matching keeps "daun bawang"
     # from collapsing into "bawang".
@@ -185,7 +187,7 @@ def _match_name(name: str) -> tuple[str, str | None]:
         if alias_tokens and tokens[: len(alias_tokens)] == alias_tokens and (best is None or len(alias_tokens) > best[0]):
             best = (len(alias_tokens), canonical_id)
     if best:
-        return candidate, best[1]
+        return candidate, best[1], False
 
     # Spelling slips ("kombrang", "bwang merah") are close enough to recover,
     # but only when the same word opens the name; that keeps a different item
@@ -199,13 +201,24 @@ def _match_name(name: str) -> tuple[str, str | None]:
         scored.append((SequenceMatcher(a=" ".join(tokens[: len(alias_tokens)]), b=" ".join(alias_tokens)).ratio(), canonical_id))
     scored.sort(reverse=True)
     if scored and scored[0][0] >= _FUZZY_CUTOFF:
-        return candidate, scored[0][1]
-    return candidate, None
+        return candidate, scored[0][1], True
+    return candidate, None, False
 
 
 def match_catalog_name(name: str) -> tuple[str, str | None]:
     """Public alias lookup so non-text extractors reuse the same catalog mapping."""
+    candidate, ingredient_id, _fuzzy = match_catalog_detail(name)
+    return candidate, ingredient_id
+
+
+def match_catalog_detail(name: str) -> tuple[str, str | None, bool]:
+    """Public alias lookup that also reports spelling-recovery matches."""
     return _match_name(name)
+
+
+def catalog_aliases() -> tuple[tuple[str, str], ...]:
+    """Public alias list so the stock-question matcher reuses the same catalog mapping."""
+    return _ALIASES
 
 
 def canonical_unit_name(unit: str | None) -> str | None:
@@ -232,7 +245,7 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
     # Price is parsed first so its numeric amount can never become a quantity.
     remainder, line_total, price_problem = _parse_price(source)
     remainder, quantity, unit, quantity_problem = _parse_quantity(remainder)
-    raw_name, ingredient_id = _match_name(remainder)
+    raw_name, ingredient_id, fuzzy = match_catalog_detail(remainder)
     if not raw_name:
         return None, [f"Line {line_number}: no item name was found."]
     if price_problem:
@@ -247,6 +260,7 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
         warnings.append(f"Line {line_number}: line total is missing or unsupported.")
     # An unknown ingredient is not a parse failure: the item stays intact and
     # the store decides between dashboard correction and auto-create on approval.
+    # A fuzzy recovery is recorded so the confirmation reply can show the guess.
 
     return {
         "ingredient_id": ingredient_id,
@@ -254,6 +268,7 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
         "quantity": quantity,
         "unit": unit,
         "line_total_idr": line_total,
+        **({"matched_from": raw_name} if fuzzy and ingredient_id else {}),
     }, warnings
 
 
@@ -278,6 +293,7 @@ def extract_purchase(text: str) -> dict[str, Any]:
 
 def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
     """Validate and normalize one parsed item using exact decimal arithmetic."""
+    matched_from = item.get("matched_from")
     result = {
         "ingredient_id": item.get("ingredient_id"),
         "raw_name": item.get("raw_name"),
@@ -289,6 +305,8 @@ def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
         "unit_price_idr": None,
         "warnings": [],
     }
+    if isinstance(matched_from, str) and matched_from.strip():
+        result["matched_from"] = matched_from.strip()[:200]
     warnings: list[str] = result["warnings"]
     qty_raw = item.get("quantity")
     qty: Decimal | None = None

@@ -3,7 +3,7 @@ import uuid
 import pytest
 
 from service import supabase_db
-from service.db import Store
+from service.db import RESTAURANT, Store
 
 
 @pytest.fixture(autouse=True)
@@ -91,10 +91,10 @@ def test_mirror_enabled_with_flag(monkeypatch):
 def test_store_mirrors_approved_purchase(monkeypatch):
     calls = []
     monkeypatch.setattr(supabase_db, "mirror_enabled", lambda: True)
-    monkeypatch.setattr(supabase_db, "mirror_purchase", lambda purchase: calls.append(purchase) or {"status": "mirrored", "invoice_id": purchase["id"]})
+    monkeypatch.setattr(supabase_db, "mirror_purchase", lambda purchase, restaurant=None: calls.append(purchase) or {"status": "mirrored", "invoice_id": purchase["id"]})
     store = Store(":memory:", seed=False)
-    draft = store.intake("key-1", {"text": "Telur 10 kg 430rb"})
-    store.decision(draft["id"], "key-2", {"expected_version": draft["version"], "decision": "approve", "received": True})
+    draft = store.intake("key-1", {"text": "Telur 10 kg 430rb"}, restaurant_id=RESTAURANT["id"])
+    store.decision(draft["id"], "key-2", {"expected_version": draft["version"], "decision": "approve", "received": True}, restaurant_id=RESTAURANT["id"])
     assert len(calls) == 1
     assert calls[0]["items"][0]["ingredient_id"] == "telur"
     assert calls[0]["total_idr"] == 430000
@@ -103,21 +103,21 @@ def test_store_mirrors_approved_purchase(monkeypatch):
 def test_store_skips_mirror_when_disabled(monkeypatch):
     calls = []
     monkeypatch.setattr(supabase_db, "mirror_enabled", lambda: False)
-    monkeypatch.setattr(supabase_db, "mirror_purchase", lambda purchase: calls.append(purchase))
+    monkeypatch.setattr(supabase_db, "mirror_purchase", lambda purchase, restaurant=None: calls.append(purchase))
     store = Store(":memory:", seed=False)
-    draft = store.intake("key-1", {"text": "Telur 10 kg 430rb"})
-    store.decision(draft["id"], "key-2", {"expected_version": draft["version"], "decision": "approve", "received": True})
+    draft = store.intake("key-1", {"text": "Telur 10 kg 430rb"}, restaurant_id=RESTAURANT["id"])
+    store.decision(draft["id"], "key-2", {"expected_version": draft["version"], "decision": "approve", "received": True}, restaurant_id=RESTAURANT["id"])
     assert calls == []
 
 
 def test_store_survives_mirror_failure(monkeypatch):
     monkeypatch.setattr(supabase_db, "mirror_enabled", lambda: True)
-    def boom(_purchase):
+    def boom(_purchase, _restaurant=None):
         raise RuntimeError("network down")
     monkeypatch.setattr(supabase_db, "mirror_purchase", boom)
     store = Store(":memory:", seed=False)
-    draft = store.intake("key-1", {"text": "Telur 10 kg 430rb"})
-    recorded = store.decision(draft["id"], "key-2", {"expected_version": draft["version"], "decision": "approve", "received": True})
+    draft = store.intake("key-1", {"text": "Telur 10 kg 430rb"}, restaurant_id=RESTAURANT["id"])
+    recorded = store.decision(draft["id"], "key-2", {"expected_version": draft["version"], "decision": "approve", "received": True}, restaurant_id=RESTAURANT["id"])
     assert recorded["status"] == "recorded"  # demo unaffected
-    events = [event["event"] for event in store.overview()["activity"]]
+    events = [event["event"] for event in store.overview(RESTAURANT["id"])["activity"]]
     assert "cloud_mirror_failed" in events

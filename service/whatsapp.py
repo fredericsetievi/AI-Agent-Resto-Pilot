@@ -385,6 +385,12 @@ HELP_REPLY = (
     "Halo! 👋 Saya asisten pembelian RestoPilot. Kirim catatan belanja seperti "
     "'Beli bawang 2 kg 80 rb', foto nota, atau voice note — saya langsung buatkan drafnya."
 )
+# Sent to WhatsApp numbers the admin has not linked to any restaurant. Nothing
+# about the sender's message is processed, stored as a draft, or answered.
+UNREGISTERED_REPLY = (
+    "Maaf, nomor WhatsApp ini belum terdaftar di RestoPilot. "
+    "Minta admin untuk menghubungkan nomor Anda dengan resto terlebih dahulu."
+)
 _PAYMENT_PAID = re.compile(r"(?i)\b(?:lunas(?:\s+semua)?|paid|sudah\s+(?:bayar|dibayar)|udah\s+(?:bayar|lunas))\b")
 _PAYMENT_UNPAID = re.compile(r"(?i)\b(?:belum\s+(?:lunas|bayar|dibayar)|utang|hutang|kredit|credit)\b")
 _PAYMENT_SKIP = ("skip", "lewati")
@@ -393,13 +399,35 @@ _SUPPLIER_TAIL = re.compile(r"(?i)\bdari\s+(.{1,100})")
 _SUPPLIER_DI_TAIL = re.compile(r"(?i)\bdi\s+(.{1,100})")
 
 
+# A stock question reads the ledger; a purchase instruction records new
+# stock. The keyword plus the purchase-verb guard keep the two intents apart.
+_STOCK_QUESTION = re.compile(r"(?i)\b(?:berapa|sisa|tersisa|sisanya|stok|stock|tinggal)\b")
+_PURCHASE_INTENT = re.compile(r"(?i)\b(?:beli|belikan|beliin|catat|pesankan|pesan|order)\b")
+
+
+def is_stock_question(text):
+    """True when a plain text message asks about current stock levels.
+
+    Deterministic and conservative: a stock keyword must be present and no
+    purchase verb may appear, so greetings and purchase notes never land
+    here. Command words and payment follow-ups are decided earlier in the
+    ingest branch order and never reach this check.
+    """
+    if not isinstance(text, str):
+        return False
+    candidate = text.strip()
+    if not candidate or _PURCHASE_INTENT.search(candidate):
+        return False
+    return bool(_STOCK_QUESTION.search(candidate))
+
+
 def _idr(value):
     """Format an integer rupiah amount with Indonesian thousands separators."""
     return f"{int(value):,}".replace(",", ".")
 
 
-def _item_line(item):
-    name = CATALOG_NAMES.get(item.get("ingredient_id"))
+def _item_line(item, catalog_names=None):
+    name = (catalog_names or CATALOG_NAMES).get(item.get("ingredient_id"))
     if not name:
         raw = str(item.get("raw_name") or "").strip()
         name = raw.capitalize() if raw else "Item"
@@ -416,6 +444,21 @@ def _item_line(item):
         if unit_price is not None and unit_price > 0 and unit_price == unit_price.to_integral_value():
             return f"• {head} × Rp{_idr(unit_price)} = Rp{_idr(total)}"
     return f"• {head} = Rp{_idr(total)}"
+
+
+def stock_reply(facts):
+    """Format inventory facts as a short Indonesian WhatsApp reply.
+
+    Facts are read from the inventory table by the caller; this builder only
+    prints them, so every number in the reply is a database number.
+    """
+    lines = ["Stok saat ini:"]
+    for fact in facts:
+        line = f"• {fact['name']} — {fact['quantity']} {fact['unit']}"
+        if fact.get("low_stock"):
+            line += f" (di bawah ambang pesan ulang {fact['reorder_threshold']} {fact['unit']})"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 # Raw extraction warnings are admin-facing English; the owner-facing reply
@@ -438,8 +481,14 @@ def _draft_total(draft):
     return sum(parts) if parts else None
 
 
-def draft_reply(draft):
-    lines = [_item_line(item) for item in draft["items"]]
+def draft_reply(draft, catalog_names=None):
+    # Display names come from the caller's restaurant catalog when given, so
+    # custom bahan from other restaurants can never surface in a reply.
+    lines = [_item_line(item, catalog_names) for item in draft["items"]]
+    flagged = [str(index + 1) for index, item in enumerate(draft["items"]) if item.get("non_kitchen")]
+    if flagged:
+        lines.append("⚠ Baris " + ", ".join(flagged) + " bukan bahan masak — balas 'hapus "
+                     + flagged[0] + "' untuk membuangnya, atau perbaiki di dashboard.")
     unmapped = [
         str(item["raw_name"]).strip()
         for item in draft["items"]
@@ -451,6 +500,15 @@ def draft_reply(draft):
             "Catatan: " + ", ".join(unmapped)
             + " belum ada di daftar bahan — akan ditambahkan otomatis saat kamu balas YA."
         )
+    fuzzy = []
+    for item in draft.get("items", []):
+        typed = str(item.get("matched_from") or "").strip()
+        if not typed:
+            continue
+        name = (catalog_names or CATALOG_NAMES).get(item.get("ingredient_id")) or str(item.get("raw_name") or "").strip()
+        fuzzy.append(f"'{typed}' saya baca sebagai {name}")
+    if fuzzy:
+        notes.append("Catatan: " + "; ".join(fuzzy) + " — tolong dicek dulu, benar kan? Balas YA jika sudah benar.")
     if any(_UNMAPPED_WARNING.search(str(warning)) is None for warning in draft.get("warnings", [])):
         notes.append("Catatan: ada baris yang perlu dicek di dashboard (harga, satuan, atau keterbacaan foto).")
     supplier = str(draft.get("supplier") or "").strip()
@@ -475,6 +533,21 @@ def draft_reply(draft):
     parts += notes
     parts.append("Balas YA jika semua barang sudah diterima, BATAL untuk batal.")
     return "\n".join(parts)
+
+
+_REMOVE_ITEM = re.compile(r"(?i)^\s*(?:hapus|remove)\s+(?:item\s+)?(\d{1,2})\s*$")
+
+
+def parse_remove_item(text):
+    """Parse 'hapus 2' / 'hapus item 2' into a 1-based draft item index.
+
+    Returns None for anything else, so ordinary messages keep flowing to
+    purchase parsing. Removal only ever touches items flagged non-kitchen.
+    """
+    if not isinstance(text, str):
+        return None
+    match = _REMOVE_ITEM.fullmatch(text.strip())
+    return int(match.group(1)) if match else None
 
 
 def parse_payment_followup(text):

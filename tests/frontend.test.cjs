@@ -13,7 +13,8 @@ function harness({fetchImpl=()=>new Promise(()=>{}),hash='#overview'}={}) {
   }
   const context=vm.createContext({console,Intl,Date,Number,String,Object,AbortController,TypeError,Map,Promise,crypto,setTimeout,clearTimeout,setInterval:()=>{},location:{hash},window:{addEventListener(){}},document:{hidden:false,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement:()=>element('new-element')},fetch:fetchImpl});
   // Omit boot calls; no network request or timer is required by these tests.
-  const source=fs.readFileSync('frontend/app.js','utf8').replace('navigate();refresh();','');
+  // Omit boot: the real app boots via boot() (auth check) which no test needs implicitly.
+  const source=fs.readFileSync('frontend/app.js','utf8').replace('boot();','');
   vm.runInContext(source,context);
   return {context,element,run:code=>vm.runInContext(code,context)};
 }
@@ -105,6 +106,7 @@ test('simulator POST uses the requested body and reuses event id and idempotency
     return {ok:true,json:async()=>({data:{messages:[],draft:null,result:{action:'no_active_draft'}}})};
   };
   const h=harness({fetchImpl});
+  h.run(`WHATSAPP_SENDER='628123456789'`);
   await h.run(`sendWhatsAppMessage('beli cabai 3 kg 150rb')`);
   await h.run(`sendWhatsAppMessage('beli cabai 3 kg 150rb')`);
   assert.equal(requests.length,2);
@@ -114,16 +116,51 @@ test('simulator POST uses the requested body and reuses event id and idempotency
   const first=JSON.parse(requests[0].options.body), second=JSON.parse(requests[1].options.body);
   assert.deepEqual(first,second);
   assert.equal(first.text,'beli cabai 3 kg 150rb');
-  assert.equal(first.sender,'demo-owner');
+  assert.equal(first.sender,'628123456789');
   assert.match(first.event_id,/^[0-9a-f-]{36}$/i);
 });
 
-test('message history GET uses the fixed demo sender',async()=>{
+test('message history GET uses the restaurant-linked sender number',async()=>{
   let request;
-  const h=harness({fetchImpl:async(path,options)=>{request={path,options};return {ok:true,json:async()=>({data:{thread:{sender:'demo-owner'},messages:[]}})}}});
-  h.run(`state.data={restaurant:{name:'Demo kitchen'},drafts:[],metrics:{purchases_today_idr:0,low_stock_count:0,recorded_purchases:0},purchases:[],inventory:[],activity:[],ingredients:[]};location.hash='#whatsapp';navigate()`);
+  const h=harness({fetchImpl:async(path,options)=>{request={path,options};return {ok:true,json:async()=>({data:{thread:{sender:'628123456789'},messages:[]}})}}});
+  h.run(`WHATSAPP_SENDER='628123456789';state.user={display_name:'Bu Sari',role:'owner'};state.data={restaurant:{name:'Demo kitchen'},drafts:[],whatsapp_numbers:[{phone:'628123456789',label:'Bu Sari'}],metrics:{purchases_today_idr:0,low_stock_count:0,recorded_purchases:0},purchases:[],inventory:[],activity:[],ingredients:[]};location.hash='#whatsapp';navigate()`);
   await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(request.path,'/v1/whatsapp/messages?sender=demo-owner');
+  assert.equal(request.path,'/v1/whatsapp/messages?sender=628123456789');
+});
+
+test('unauthenticated boot shows the login page and hides the shell',async()=>{
+  let requested;
+  const h=harness({fetchImpl:async(path,options)=>{requested=path;return {ok:false,json:async()=>({error:{code:'unauthorized',message:'Log in to continue.'}})}}});
+  await h.run('boot()');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(requested,'/v1/auth/me');
+  assert.equal(h.element('#login-page').hidden,false);
+  assert.equal(h.element('#sidebar').hidden,true);
+  assert.equal(h.element('#shell').hidden,true);
+});
+
+test('admin login navigates to the restaurants console and hides owner nav',async()=>{
+  const requests=[];
+  const h=harness({fetchImpl:async(path,options)=>{
+    requests.push(path);
+    return {ok:true,json:async()=>({data:{id:'u1',username:'admin',display_name:'Platform admin',role:'admin',restaurant_id:null,restaurant_name:null}})};
+  }});
+  await h.run(`login({preventDefault(){},target:{reset(){}}})`);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(requests[0],'/v1/auth/login');
+  assert.equal(h.element('#nav-admin').hidden,false);
+  assert.equal(h.element('#nav-approvals').hidden,true);
+  assert.equal(h.element('#nav-whatsapp').hidden,true);
+  assert.equal(h.element('#sidebar').hidden,false);
+  assert.match(h.element('#page-title').textContent,/Restaurants/);
+});
+
+test('admin row data attributes drive the detail navigation',()=>{
+  const h=harness({hash:'#admin-detail'});
+  h.run(`state.user={id:'u1',username:'admin',display_name:'Platform admin',role:'admin',restaurant_id:null,restaurant_name:null};state.adminSelected='resto-1';state.adminList=[{id:'resto-1',name:'Warung Bu Sari',address:null,created_at:'2026-10-27T00:00:00Z',whatsapp_numbers:[],users:[],pending_drafts:1,recorded_purchases:2}];navigate()`);
+  assert.equal(h.element('#page-title').textContent,'Restaurant detail.');
+  assert.match(h.element('#content').innerHTML,/Warung Bu Sari/);
+  assert.match(h.element('#content').innerHTML,/data-open-resto="resto-1"|Nomor WhatsApp terhubung/);
 });
 
 test('review warnings are deduplicated and capped at four visible details',()=>{
@@ -134,4 +171,34 @@ test('review warnings are deduplicated and capped at four visible details',()=>{
   assert.ok(html.includes('Fourth warning'));
   assert.ok(!html.includes('Fifth warning'));
   assert.ok(html.includes('Review the fields above for the remaining details.'));
+});
+
+test('ingredient combo resolves catalog matches and keeps typed new names',()=>{
+  const h=harness();
+  h.run(`state.data={ingredients:[{id:'cabai',name:'Cabai merah'},{ingredient_id:'kecap_manis',name:'Kecap manis'}]};`);
+  const matched=h.run(`resolveIngredient('cabai merah','old')`);
+  assert.equal(matched.ingredient_id,'cabai');
+  assert.equal(matched.raw_name,'Cabai merah');
+  const custom=h.run(`resolveIngredient('KECAP manis','old')`);
+  assert.equal(custom.ingredient_id,'kecap_manis');
+  assert.equal(custom.raw_name,'Kecap manis');
+  const created=h.run(`resolveIngredient('  Terasi  ','old')`);
+  assert.equal(created.ingredient_id,null);
+  assert.equal(created.raw_name,'Terasi');
+  const empty=h.run(`resolveIngredient('','original raw')`);
+  assert.equal(empty.ingredient_id,null);
+  assert.equal(empty.raw_name,'original raw');
+});
+
+test('review editor prefills mapped names and leaves new rows blank',()=>{
+  const h=harness();
+  h.run(`state.data={ingredients:[{id:'cabai',name:'Cabai merah'}]};state.draft={version:1,status:'needs_clarification',items:[{ingredient_id:'cabai',raw_name:'cabai',quantity:'3',unit:'kg',line_total_idr:150000},{ingredient_id:null,raw_name:'terasi',quantity:'1',unit:'kg',line_total_idr:49000},{ingredient_id:null,raw_name:'',quantity:null,unit:null,line_total_idr:null}],supplier:null,source_text:'demo',warnings:[]};renderReview()`);
+  const html=h.element('#review-content').innerHTML;
+  assert.ok(html.includes('value="Cabai merah"'));
+  assert.ok(html.includes('value="terasi"'));
+  assert.ok(html.includes('name="ingredient_query"'));
+  assert.ok(html.includes('list="ingredient-options"'));
+  assert.ok(html.includes('datalist id="ingredient-options"'));
+  assert.ok(!html.includes('<select'));
+  assert.ok(!html.includes('value="Unmatched item"'));
 });

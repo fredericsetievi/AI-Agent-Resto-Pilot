@@ -6,11 +6,12 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import SENDER_NUMBER as SENDER, login_owner
 from service.api import create_app
+from service.db import RESTAURANT
 from service.whatsapp import draft_reply, parse_payment_followup
 
-
-SENDER = "demo-owner"
+OTHER = "628999000001"
 
 
 @pytest.fixture
@@ -21,13 +22,17 @@ def app(tmp_path):
 @pytest.fixture
 def client(app):
     with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as value:
+        login_owner(value)
         yield value
 
 
-def simulate(client, text, *, sender=SENDER, key=None, event=None, role=None):
+def link_number(client, phone):
+    """Register an extra WhatsApp number on the demo restaurant (admin action)."""
+    return client.app.state.store.add_whatsapp_number(RESTAURANT["id"], uuid4().hex, {"whatsapp_number": phone})
+
+
+def simulate(client, text, *, sender=SENDER, key=None, event=None):
     headers = {"Idempotency-Key": key or uuid4().hex}
-    if role:
-        headers["X-Demo-Role"] = role
     payload = {"sender": sender, "text": text}
     if event is not None:
         payload["event_id"] = event
@@ -76,7 +81,8 @@ def test_simulator_deduplicates_keys_and_events(client):
     assert data(simulate(client, "Telur 3 kg 150rb", key=key, event=event)) == first
     assert data(simulate(client, "Telur 3 kg 150rb", event=event)) == first
     assert simulate(client, "Beras 2 kg 50rb", event=event).status_code == 409
-    assert simulate(client, "Telur 3 kg 150rb", sender="other", event=event).status_code == 409
+    link_number(client, OTHER)
+    assert simulate(client, "Telur 3 kg 150rb", sender=OTHER, event=event).status_code == 409
     key, event = uuid4().hex, uuid4().hex
     approved = data(simulate(client, "ya", key=key, event=event))
     assert data(simulate(client, "ya", key=key, event=event)) == approved
@@ -91,7 +97,8 @@ def test_active_draft_cannot_be_replaced_and_wrong_sender_cannot_approve(client)
     assert collision["result"]["action"] == "active_draft_exists"
     assert collision["draft"]["id"] == first["draft"]["id"]
     assert collision["draft"]["source_text"] == "Cabai 3 kg 150rb"
-    assert data(simulate(client, "ya", sender="other"))["result"]["action"] == "no_active_draft"
+    link_number(client, OTHER)
+    assert data(simulate(client, "ya", sender=OTHER))["result"]["action"] == "no_active_draft"
     assert len(overview(client)["purchases"]) == 2
     assert data(simulate(client, "batal"))["draft"]["status"] == "rejected"
     assert len(overview(client)["purchases"]) == 2
@@ -132,6 +139,7 @@ def test_concurrent_ya_and_restart_preserve_exactly_one_purchase(app, client, tm
     assert len(overview(client)["purchases"]) == 3
     second_app = create_app(tmp_path / "whatsapp.sqlite3")
     with TestClient(second_app, base_url="http://127.0.0.1") as restarted:
+        login_owner(restarted)
         saved = data(restarted.get("/v1/whatsapp/messages", params={"sender": SENDER}))
         assert len(saved["messages"]) == 6
         assert saved["thread"]["active_draft_id"] is None
@@ -155,11 +163,16 @@ def test_message_failure_rolls_back_inbound_ledger_stock_and_deduplication(app, 
     assert data(simulate(client, "ya", key=key, event=event))["result"]["action"] == "approved"
 
 
-def test_simulator_requires_owner_idempotency_and_local_origin(client):
-    assert simulate(client, "ya", role="staff").status_code == 403
-    assert client.get("/v1/whatsapp/messages", headers={"X-Demo-Role": "staff"}).status_code == 403
-    assert client.post("/v1/whatsapp/simulate", json={"text": "ya"}).status_code == 400
-    assert client.post("/v1/whatsapp/simulate", json={"text": "ya"}, headers={"Idempotency-Key": uuid4().hex, "Origin": "https://evil.example"}).status_code == 403
+def test_simulator_requires_owner_idempotency_and_local_origin(client, app):
+    from conftest import login_admin
+    with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as admin:
+        login_admin(admin)
+        assert admin.post("/v1/whatsapp/simulate", json={"text": "ya", "sender": SENDER}, headers={"Idempotency-Key": uuid4().hex}).status_code == 403
+        assert admin.get("/v1/whatsapp/messages", params={"sender": SENDER}).status_code == 403
+    with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as anon:
+        assert anon.get("/v1/whatsapp/messages", params={"sender": SENDER}).status_code == 401
+    assert client.post("/v1/whatsapp/simulate", json={"text": "ya", "sender": SENDER}).status_code == 400
+    assert client.post("/v1/whatsapp/simulate", json={"text": "ya", "sender": SENDER}, headers={"Idempotency-Key": uuid4().hex, "Origin": "https://evil.example"}).status_code == 403
 
 
 def test_public_origin_must_be_https_without_path(tmp_path):
@@ -336,3 +349,18 @@ def test_greeting_text_gets_help_instead_of_an_empty_draft(client):
     created = data(simulate(client, "Beli bawang 2 kg 80 rb"))
     assert created["result"]["action"] == "draft_created"
     assert created["draft"]["items"][0]["raw_name"] == "bawang"
+
+
+def test_simulator_confirms_a_spelling_recovery_before_approval(client):
+    first = data(simulate(client, "beli bwang putih 2 kg 30rb"))
+    assert first["draft"]["status"] == "pending_approval"
+    assert first["draft"]["items"][0]["ingredient_id"] == "bawang_putih"
+    assert first["draft"]["items"][0]["matched_from"] == "bwang putih"
+    reply = first["messages"][-1]["body"]
+    assert "'bwang putih' saya baca sebagai Bawang putih" in reply
+    assert "Balas YA jika sudah benar" in reply
+    approved = data(simulate(client, "ya"))
+    assert approved["result"]["action"] == "approved"
+    # A recovered typo maps to the existing catalog entry; nothing new is created.
+    assert not approved["draft"].get("new_ingredients")
+    assert any(row["ingredient_id"] == "bawang_putih" for row in overview(client)["inventory"])

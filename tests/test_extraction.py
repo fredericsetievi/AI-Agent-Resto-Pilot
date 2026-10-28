@@ -1,4 +1,4 @@
-from service.extraction import extract_purchase, match_catalog_name, normalize_item
+from service.extraction import extract_purchase, match_catalog_detail, match_catalog_name, normalize_item
 
 
 def test_market_names_map_by_prefix_but_prepared_products_stay_unknown():
@@ -141,3 +141,22 @@ def test_normalization_warns_when_quantity_is_missing():
     result = extract_purchase("beli beras")["items"][0]
     normalized = normalize_item(result)
     assert any("Quantity is missing" in warning for warning in normalized["warnings"])
+
+
+def test_spelling_recoveries_are_marked_for_confirmation():
+    assert match_catalog_detail("bwang putih") == ("bwang putih", "bawang_putih", True)
+    assert match_catalog_detail("kombrang")[2] is True
+    # Trusted alias and prefix matches stay unmarked.
+    assert match_catalog_detail("cabe")[2] is False
+    assert match_catalog_detail("bawang putih kupas")[2] is False
+    assert match_catalog_detail("daun bawang")[1] is None
+
+    result = extract_purchase("beli bwang putih 2 kg 30rb")
+    item = result["items"][0]
+    assert item["ingredient_id"] == "bawang_putih"
+    assert item["matched_from"] == "bwang putih"
+    assert result["warnings"] == []
+    exact = extract_purchase("beli cabe 3 kg 150rb")["items"][0]
+    assert "matched_from" not in exact
+    # The annotation survives normalization so the confirmation reply can show it.
+    assert normalize_item(dict(item))["matched_from"] == "bwang putih"

@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .extraction import canonical_unit_name, match_catalog_name
+from .extraction import canonical_unit_name, match_catalog_detail
 
 
 DEFAULT_BASE_URL = "https://api.stepfun.com/v1"
@@ -66,6 +66,13 @@ Rules, in priority order:
    add its name to "unreadable" prefixed with "skip:". When unsure whether
    an item is kitchen-related, keep it in "items".
 """ % MAX_ITEMS
+
+# Defense in depth for the tenant guard: every caller passes its restaurant
+# name so the prompt carries the rule. The store scopes data on its side too;
+# the model never sees another restaurant's content in the first place.
+TENANT_RULE = ("Tenant rule: this invoice belongs to the restaurant \"%s\". "
+               "Read only what is on this photo; never include, infer, or reveal "
+               "anything about any other restaurant or business.\n\n")
 
 
 class StepFunVisionError(Exception):
@@ -189,7 +196,7 @@ def clean_extraction(data):
         if not name:
             warnings.append(f"{label}: no item name was read from the photo.")
             continue
-        raw_name, ingredient_id = match_catalog_name(name)
+        raw_name, ingredient_id, fuzzy = match_catalog_detail(name)
         quantity = _quantity_text(raw.get("quantity"))
         unit = canonical_unit_name(raw.get("unit"))
         total = _idr_amount(raw.get("line_total_idr"))
@@ -209,6 +216,7 @@ def clean_extraction(data):
             "quantity": quantity,
             "unit": unit,
             "line_total_idr": total,
+            **({"matched_from": raw_name} if fuzzy and ingredient_id else {}),
         })
     for note in data.get("unreadable") or []:
         if isinstance(note, str) and note.strip():
@@ -216,20 +224,21 @@ def clean_extraction(data):
     return {"supplier": supplier, "items": items, "warnings": warnings}
 
 
-async def extract_invoice(image, *, media_type="image/jpeg", api_key, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL, client=None):
+async def extract_invoice(image, *, media_type="image/jpeg", api_key, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL, client=None, restaurant=None):
     """Send one invoice photo to StepFun and return proposed draft items."""
     if not api_key or not api_key.strip():
         raise StepFunVisionError("StepFun vision is not configured.", 503)
     base_url = validate_base_url(base_url)
     model = validate_model(model)
     image = _check_image(image, media_type)
+    prompt = PROMPT + (TENANT_RULE % restaurant.strip() if restaurant and restaurant.strip() else "")
     payload = {
         "model": model,
         "temperature": 0,
         "messages": [{
             "role": "user",
             "content": [
-                {"type": "text", "text": PROMPT},
+                {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{base64.b64encode(image).decode('ascii')}"}},
             ],
         }],

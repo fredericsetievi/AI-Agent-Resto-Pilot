@@ -17,6 +17,8 @@ def app(tmp_path):
 @pytest.fixture
 def client(app):
     with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as value:
+        from conftest import login_owner
+        login_owner(value)
         yield value
 
 
@@ -50,6 +52,8 @@ def test_stock_csv_lists_the_catalog_with_last_recorded_prices(client):
 
 def test_export_respects_an_empty_database(tmp_path):
     with TestClient(create_app(tmp_path / "empty.sqlite3", seed=False), base_url="http://127.0.0.1") as client:
+        from conftest import login_owner
+        login_owner(client)
         purchases = csv_rows(client.get("/v1/export/purchases.csv"))
         stock = csv_rows(client.get("/v1/export/stock.csv"))
     assert purchases == [["id", "created_at", "supplier", "item_count", "total_idr", "status"]]
@@ -58,6 +62,10 @@ def test_export_respects_an_empty_database(tmp_path):
     assert all(row[2] == "0" and row[3] == "" for row in stock[1:])
 
 
-def test_export_respects_the_demo_boundary(client):
-    assert client.get("/v1/export/purchases.csv", headers={"X-Demo-Role": "admin"}).status_code == 403
+def test_export_respects_the_demo_boundary(client, app):
+    assert client.get("/v1/export/purchases.csv", headers={"X-Demo-Role": "admin"}).status_code == 200
     assert client.get("/v1/export/stock.csv", headers={"Host": "evil.example"}).status_code == 403
+    from conftest import login_admin
+    with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as admin:
+        login_admin(admin)
+        assert admin.get("/v1/export/purchases.csv").status_code == 403
