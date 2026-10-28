@@ -45,6 +45,12 @@ Facts (JSON):
 Question:
 %s"""
 
+# Defense in depth for the tenant guard: the facts are already scoped by the
+# store, and the prompt names the restaurant so the rephrase stays with it.
+TENANT_RULE = ("Tenant rule: these facts belong to the restaurant \"%s\". "
+               "Answer only about that restaurant; never mention, infer, or reveal "
+               "any other restaurant or business.\n\n")
+
 
 def validate_stock_reply(reply, facts):
     """Accept the model reply only when every database fact appears verbatim.
@@ -79,7 +85,7 @@ def _reply_text(response):
     return content.strip()
 
 
-async def phrase_stock_answer(question, facts, *, api_key, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL, client=None):
+async def phrase_stock_answer(question, facts, *, api_key, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL, client=None, restaurant=None):
     """Send the DB facts plus the question to StepFun and return a checked reply.
 
     Raises StepFunTextError on any configuration, transport, or validation
@@ -93,15 +99,18 @@ async def phrase_stock_answer(question, facts, *, api_key, model=DEFAULT_MODEL, 
         raise StepFunTextError("The question text is empty.", 400)
     base_url = validate_base_url(base_url)
     model = validate_model(model)
+    prompt = PROMPT % (
+        json.dumps(facts[:MAX_FACTS], ensure_ascii=False),
+        question.strip()[:MAX_MESSAGE_CHARS],
+    )
+    if restaurant and restaurant.strip():
+        prompt = prompt + "\n" + (TENANT_RULE % restaurant.strip())
     payload = {
         "model": model,
         "temperature": 0,
         "messages": [{
             "role": "user",
-            "content": PROMPT % (
-                json.dumps(facts[:MAX_FACTS], ensure_ascii=False),
-                question.strip()[:MAX_MESSAGE_CHARS],
-            ),
+            "content": prompt,
         }],
     }
     owns_client = client is None

@@ -12,7 +12,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from service.api import create_app
-from service.db import Store
+from conftest import SENDER_NUMBER, login_owner
+from service.db import RESTAURANT, Store
 from service.stock_llm import StepFunTextError, phrase_stock_answer, validate_stock_reply
 from service.whatsapp import is_stock_question, stock_reply
 
@@ -78,13 +79,13 @@ def test_stock_reply_only_prints_database_facts():
 
 
 def facts_for(store, text):
-    result = store.stock_facts(text)
+    result = store.stock_facts(text, RESTAURANT["id"])
     return {fact["ingredient_id"]: fact for fact in result["facts"]} if result else None
 
 
 def test_stock_facts_answers_the_acceptance_question_from_the_seed(tmp_path):
     store = Store(tmp_path / "stock.sqlite3")
-    result = store.stock_facts(QUESTION)
+    result = store.stock_facts(QUESTION, RESTAURANT["id"])
     assert result is not None and result["question"] == QUESTION
     assert len(result["facts"]) == 1
     cabai = result["facts"][0]
@@ -167,7 +168,7 @@ def test_phrase_stock_answer_requires_a_key():
 # --- End to end through the simulator ---------------------------------------
 
 
-def simulate(client, text, *, sender="demo-owner", key=None):
+def simulate(client, text, *, sender=SENDER_NUMBER, key=None):
     return client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": key or uuid4().hex}, json={"sender": sender, "text": text})
 
 
@@ -182,6 +183,7 @@ def overview(client):
 
 def test_simulator_answers_the_acceptance_question_without_a_model(tmp_path):
     client = TestClient(create_app(tmp_path / "demo.sqlite3"), base_url="http://127.0.0.1")
+    login_owner(client)
     before = overview(client)
     result = data(simulate(client, QUESTION))
     assert result["result"]["action"] == "stock_answer"
@@ -198,6 +200,7 @@ def test_simulator_answers_the_acceptance_question_without_a_model(tmp_path):
 
 def test_stock_question_with_an_active_draft_answers_and_keeps_the_draft(tmp_path):
     client = TestClient(create_app(tmp_path / "demo.sqlite3"), base_url="http://127.0.0.1")
+    login_owner(client)
     draft = data(simulate(client, "beli telur 2 kg 60rb"))["draft"]
     result = data(simulate(client, QUESTION))
     assert result["result"]["action"] == "stock_answer"
@@ -208,6 +211,7 @@ def test_stock_question_with_an_active_draft_answers_and_keeps_the_draft(tmp_pat
 
 def test_purchase_wording_is_never_mistaken_for_a_stock_question(tmp_path):
     client = TestClient(create_app(tmp_path / "demo.sqlite3"), base_url="http://127.0.0.1")
+    login_owner(client)
     result = data(simulate(client, "beli cabai 3 kg 150rb"))
     assert result["result"]["action"] == "draft_created"
     assert result["draft"]["status"] == "pending_approval"
@@ -215,6 +219,7 @@ def test_purchase_wording_is_never_mistaken_for_a_stock_question(tmp_path):
 
 def test_custom_ingredient_becomes_askable_after_approval(tmp_path):
     client = TestClient(create_app(tmp_path / "demo.sqlite3"), base_url="http://127.0.0.1")
+    login_owner(client)
     draft = data(simulate(client, "beli sambal 2 kg 20rb"))["draft"]
     response = client.post(f"/v1/drafts/{draft['id']}/decision", headers={"Idempotency-Key": uuid4().hex}, json={
         "expected_version": draft["version"], "decision": "approve", "received": True,
@@ -239,6 +244,7 @@ def test_model_phrasing_is_used_only_when_it_repeats_the_database_numbers(tmp_pa
         stock_llm_http_client=fake,
     )
     client = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    login_owner(client)
     result = data(simulate(client, QUESTION))
     assert result["result"]["action"] == "stock_answer"
     assert result["messages"][-1]["body"].startswith("Stok Cabai merah sekarang tinggal 3 kg")
@@ -255,6 +261,7 @@ def test_a_fabricated_model_number_falls_back_to_the_deterministic_reply(tmp_pat
         stock_llm_http_client=fake,
     )
     client = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    login_owner(client)
     result = data(simulate(client, QUESTION))
     assert result["result"]["action"] == "stock_answer"
     assert "Cabai merah — 3 kg" in result["messages"][-1]["body"]
@@ -271,6 +278,7 @@ def test_a_model_error_falls_back_to_the_deterministic_reply(tmp_path):
         stock_llm_http_client=fake,
     )
     client = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    login_owner(client)
     result = data(simulate(client, QUESTION))
     assert result["result"]["action"] == "stock_answer"
     assert "Cabai merah — 3 kg" in result["messages"][-1]["body"]
