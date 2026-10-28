@@ -721,7 +721,8 @@ class PostgresStore:
                 # draft - the owner's confirmation for the kitchen filter.
                 flagged = [position for position, item in enumerate(draft["items"]) if item.get("non_kitchen")]
                 if remove_index - 1 not in flagged:
-                    reply = f"Item {remove_index} tidak bertanda bukan bahan masak. Hapus hanya baris bertanda: " + ", ".join(str(position + 1) for position in flagged) + "."
+                    hint = ", ".join(str(position + 1) for position in flagged) or "tidak ada"
+                    reply = f"Item {remove_index} tidak bertanda bukan bahan masak. Hapus hanya baris bertanda: " + hint + "."
                     result["action"] = "remove_rejected"
                 elif len(draft["items"]) <= 1:
                     reply = "Draf tinggal satu baris. Balas BATAL untuk membatalkan seluruh draf."
