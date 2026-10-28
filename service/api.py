@@ -677,14 +677,17 @@ def create_app(
                         meta_graph_api_version,
                         client=meta_http_client,
                     )
-                    payload["extracted"] = await extract_invoice(
-                        photo,
-                        media_type=media_type,
-                        restaurant=sender_restaurant["name"],
-                        api_key=vision_api_key,
-                        model=vision_model,
-                        base_url=vision_base_url,
-                        client=vision_http_client,
+                    payload["extracted"] = await filter_kitchen_items(
+                        await extract_invoice(
+                            photo,
+                            media_type=media_type,
+                            restaurant=sender_restaurant["name"],
+                            api_key=vision_api_key,
+                            model=vision_model,
+                            base_url=vision_base_url,
+                            client=vision_http_client,
+                        ),
+                        restaurant_id,
                     )
                     payload["source_label"] = "Foto nota WhatsApp"
                 except (MetaWhatsAppError, StepFunVisionError) as exc:
