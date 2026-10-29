@@ -1,13 +1,15 @@
 """Transport routing: operation evidence never falls through to a purchase."""
 
 import hashlib
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from conftest import SENDER_NUMBER, login_owner
 from service import api
-from service.db import DomainError
+from service.db import DomainError, RESTAURANT_TIMEZONE
+from service.operation_extraction import clean_operations_document
 from service.whatsapp import LIVE, MetaWhatsAppError, parse_webhook
 from test_meta_whatsapp import (
     APP_SECRET, ACCESS_TOKEN, GRAPH_VERSION, ORIGIN, PHONE_NUMBER_ID,
@@ -122,6 +124,45 @@ def test_active_clarification_skips_text_purchase_models(tmp_path, monkeypatch):
         assert webhook(client, payload("Satu dus 12 liter", event_id="wamid.package-answer")).status_code == 200
     assert channels == [(SENDER, LIVE + ":" + PHONE_NUMBER_ID)]
     assert calls[0]["text"] == "Satu dus 12 liter"
+
+
+def test_sales_photo_date_reply_uses_saved_facts_without_another_model_call(tmp_path, monkeypatch):
+    provider = FakeMetaClient()
+    provider.responses.extend([
+        FakeResponse(body={"url": "https://lookaside.example/media/report", "mime_type": "image/jpeg"}),
+        FakeResponse(content=b"\xff\xd8\xff\xe0" + b"\x00" * 64),
+    ])
+    app = application(tmp_path, provider, vision_api_key="synthetic-stepfun-key", text_llm_enabled=True)
+    store = app.state.store
+    store.save_inventory_recipe("date-answer-recipe", {
+        "name": "Nasi goreng", "items": [{"ingredient_id": "beras", "quantity": "0.1"}],
+    }, "demo-resto")
+    classified = []
+
+    async def classify(photo, **kwargs):
+        classified.append(photo)
+        return clean_operations_document({
+            "document_type": "sales_report", "business_date": None,
+            "lines": [{"kind": "sale", "name": "Nasi goreng", "quantity": "2", "unit": "porsi"}],
+        })
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("date clarification must reuse the saved report without AI")
+
+    monkeypatch.setattr(api, "extract_operations_document", classify)
+    monkeypatch.setattr(api, "extract_invoice", unexpected)
+    monkeypatch.setattr(api, "extract_message", unexpected)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        assert webhook(client, payload(message_type="image", event_id="wamid.missing-photo-date")).status_code == 200
+        assert "Tanggal laporan ini kapan" in provider.calls[-1]["json"]["text"]["body"]
+        assert webhook(client, payload("kemarin", event_id="wamid.photo-date-answer")).status_code == 200
+    reply = provider.calls[-1]["json"]["text"]["body"]
+    yesterday = (datetime.now(RESTAURANT_TIMEZONE).date() - timedelta(days=1)).isoformat()
+    assert yesterday in reply and "2 × 0.1 = 0.2" in reply
+    assert "Balas YA" in reply and "tidak terbaca" not in reply
+    assert len(classified) == 1
+    assert [call["method"] for call in provider.calls] == ["GET", "GET", "POST", "POST"]
+    assert store.inventory_workspace("demo-resto")["events"] == []
 
 
 def test_unregistered_media_is_not_downloaded_or_classified(tmp_path, monkeypatch):

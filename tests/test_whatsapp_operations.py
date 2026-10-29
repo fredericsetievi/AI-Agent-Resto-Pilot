@@ -10,7 +10,7 @@ import pytest
 
 from conftest import SENDER_NUMBER
 from service.db import RESTAURANT_TIMEZONE, Store
-from service.operation_extraction import parse_operations_text
+from service.operation_extraction import clean_operations_document, parse_operations_text
 
 
 TENANT = "demo-resto"
@@ -367,11 +367,15 @@ def test_partial_line_revenues_cannot_hide_unallocated_report_total(store):
     assert balances(store) == before and events(store) == []
 
 
-def test_document_type_answer_preserves_existing_lines_until_date_is_clarified(store):
+@pytest.mark.parametrize("date_note", [
+    "Tanggal usaha belum terbaca.",
+    "Tanggal usaha tidak terbaca; tanggal berapa laporan ini?",
+])
+def test_document_type_answer_preserves_existing_lines_until_date_is_clarified(store, date_note):
     recipe(store)
     candidate = parse_operations_text("Terjual nasi goreng2porsi")
     candidate.update(document_type="ambiguous", business_date=None,
-                     unresolved=["Jenis dokumen belum jelas.", "Tanggal usaha belum terbaca."])
+                     unresolved=["Jenis dokumen belum jelas.", date_note])
     pending = ingest(store, "Foto belum jelas", candidate=candidate, source={"digest": "f" * 64, "media_kind": "image"})
     assert op(pending)["status"] == "clarification"
     original_lines = op(pending)["candidate"]["lines"]
@@ -390,6 +394,74 @@ def test_document_type_answer_preserves_existing_lines_until_date_is_clarified(s
     assert balances(store)["beras"] == 30 and events(store) == []
     approve(store, review)
     assert balances(store)["beras"] == Decimal("29.8")
+
+
+@pytest.mark.parametrize("answer", ["kemarin", "hari ini", "2026-01-02"])
+def test_photo_missing_date_answer_reaches_review_without_changing_stock(store, answer):
+    recipe(store)
+    candidate = clean_operations_document({
+        "document_type": "sale_receipt", "business_date": None,
+        "lines": [{"kind": "sale", "name": "Nasi goreng", "quantity": "2", "unit": "porsi"}],
+    })
+    pending = ingest(store, "", candidate=candidate, source={"digest": "f" * 64, "media_kind": "image"})
+    assert "Tanggal laporan ini kapan" in final_reply(pending)
+    # A persisted draft must also recover after restarting the process.
+    restarted = Store(store.path, seed=False)
+    review = ingest(restarted, answer)
+    expected = (datetime.now(RESTAURANT_TIMEZONE).date() - timedelta(days=answer == "kemarin")).isoformat() if answer in {"hari ini", "kemarin"} else answer
+    assert op(review)["id"] == op(pending)["id"]
+    assert op(review)["candidate"]["business_date"] == expected
+    assert op(review)["status"] == "review"
+    assert op(review)["questions"] == []
+    assert "2 × 0.1 = 0.2" in final_reply(review)
+    assert balances(restarted)["beras"] == 30 and events(restarted) == []
+
+
+@pytest.mark.parametrize("issue", [
+    "Tanggal dan total tidak terbaca.",
+    "Jumlah penjualan tidak terbaca.",
+    "Ada refund/void yang belum jelas.",
+])
+def test_photo_date_answer_does_not_clear_other_uncertainty(store, issue):
+    recipe(store)
+    candidate = clean_operations_document({
+        "document_type": "sales_report", "business_date": None, "unresolved": [issue],
+        "lines": [{"kind": "sale", "name": "Nasi goreng", "quantity": "2", "unit": "porsi"}],
+    })
+    ingest(store, "", candidate=candidate, source={"digest": "f" * 64, "media_kind": "image"})
+    pending = ingest(store, "kemarin")
+    assert op(pending)["status"] == "clarification"
+    assert issue in final_reply(pending)
+    assert op(approve(store, pending))["status"] == "clarification"
+    assert balances(store)["beras"] == 30 and events(store) == []
+
+
+def test_photo_date_answer_moves_to_recipe_question_instead_of_repeating_date(store):
+    candidate = clean_operations_document({
+        "document_type": "sale_receipt", "business_date": None,
+        "lines": [{"kind": "sale", "name": "Nasi spesial", "quantity": "2", "unit": "porsi"}],
+    })
+    ingest(store, "", candidate=candidate, source={"digest": "f" * 64, "media_kind": "image"})
+    pending = ingest(store, "kemarin")
+    assert op(pending)["status"] == "clarification"
+    assert "Resep untuk nasi spesial belum pasti" in final_reply(pending)
+    assert "tidak terbaca" not in final_reply(pending)
+    assert balances(store)["beras"] == 30 and events(store) == []
+
+
+@pytest.mark.parametrize("answer", ["2026-02-30", "2999-01-01"])
+def test_photo_date_answer_still_rejects_invalid_or_future_dates(store, answer):
+    recipe(store)
+    candidate = clean_operations_document({
+        "document_type": "sales_report", "business_date": None,
+        "lines": [{"kind": "sale", "name": "Nasi goreng", "quantity": "2", "unit": "porsi"}],
+    })
+    ingest(store, "", candidate=candidate, source={"digest": "f" * 64, "media_kind": "image"})
+    pending = ingest(store, answer)
+    assert op(pending)["status"] == "clarification"
+    assert "Tanggal laporan ini kapan" in final_reply(pending)
+    assert op(approve(store, pending))["status"] == "clarification"
+    assert balances(store)["beras"] == 30 and events(store) == []
 
 
 def test_oversized_review_refuses_confirmation_instead_of_hiding_breakdown(store):

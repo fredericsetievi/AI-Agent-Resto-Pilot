@@ -7,6 +7,12 @@ to the existing Supabase project. It added three RLS-enabled tables without
 changing existing stock, purchases, users, links, inventory history or settings.
 This includes the earlier dashboard inventory release (V7).
 
+An **unpublished local follow-up** fixes a stale photo-date warning that repeated
+after `kemarin`/`hari ini`/an ISO date. It also reuses HTTP connections within a
+webhook and adds sanitized stage timings. Verification: 390 Python tests passed
+(35 opt-in tests skipped), plus 25 JavaScript tests. No migration is required;
+this follow-up has not been pushed or published to Atoms.
+
 ## Owner experience
 
 Send ordinary Indonesian text, a receipt/report photo, or a transcribed voice
@@ -52,11 +58,24 @@ purchase invoice enters the existing purchase flow. POS daily reports and
 customer sales receipts enter the sales review. Uncertain or unreadable
 documents ask for clarification; they never silently become purchases.
 
+If a photo's date is missing, answer `hari ini`, `kemarin`, or `YYYY-MM-DD`.
+Relative dates use restaurant time (Asia/Jakarta). The answer updates the saved
+report; other unknown facts still need clarification and the calculations still
+require the versioned confirmation before stock changes.
+
 Supported photos/screenshots: JPEG, PNG and WebP, up to 5 MiB. Text input is
 bounded to 8,000 characters and a report to 30 rows. Oversized reports and
 reviews too long to display fully are held without posting; send smaller
 sections with explicit separate coverage. PDF/XLS/CSV intake is not supported.
 Provider timeouts, bad JSON and invalid media return a useful no-write response.
+
+For latency diagnosis, enable INFO logging for `restopilot.api`. WhatsApp timing
+records contain only stage, media kind and milliseconds: sender lookup, media
+download, document reading, text enrichment, store ingestion/claim, sending and
+total processing. They omit phone numbers, event IDs, receipt contents and keys.
+The total starts after webhook validation. HTTP reuse is scoped to one webhook;
+provider retries still repeat extraction before the existing transactional
+deduplication. No live latency improvement has yet been measured.
 
 Voice uses the existing optional transcription configuration and then the same
 review pipeline. Actual provider quality and live WhatsApp delivery have not

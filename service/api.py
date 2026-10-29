@@ -13,10 +13,13 @@ import csv
 import hashlib
 import io
 import logging
+from contextlib import AsyncExitStack
+from time import perf_counter
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
+import httpx
 from fastapi import Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -79,6 +82,29 @@ from .whatsapp import (
 
 
 logger = logging.getLogger("restopilot.api")
+
+
+class _MetaWebhookClient:
+    """One request-scoped pool with the transport's existing time limits."""
+
+    def __init__(self, client):
+        self.client = client
+
+    async def get(self, url, **kwargs):
+        return await self.client.get(url, timeout=30.0, **kwargs)
+
+    async def post(self, url, **kwargs):
+        timeout = 30.0 if kwargs.get("files") is not None else 5.0
+        return await self.client.post(url, timeout=timeout, **kwargs)
+
+
+async def _timed_whatsapp(stage, kind, awaitable):
+    """Log timing labels only; never include messages, identities or credentials."""
+    started = perf_counter()
+    try:
+        return await awaitable
+    finally:
+        logger.info("WhatsApp stage=%s kind=%s duration_ms=%.1f", stage, kind, (perf_counter() - started) * 1000)
 
 SESSION_COOKIE = "restopilot_session"
 
@@ -752,6 +778,28 @@ def create_app(
             logger.warning("Rejected Meta WhatsApp webhook: %s", exc)
             raise DomainError("invalid_meta_webhook", str(exc), exc.status)
 
+        # The Atoms forwarding adapter does not run this inner app's lifespan.
+        # Request-scoped pools therefore close reliably on success and failure.
+        async with AsyncExitStack() as stack:
+            scoped_meta = meta_http_client
+            scoped_vision = vision_http_client
+
+            async def get_meta_client():
+                nonlocal scoped_meta
+                if scoped_meta is None:
+                    owned = await stack.enter_async_context(httpx.AsyncClient(timeout=30.0, follow_redirects=False))
+                    scoped_meta = _MetaWebhookClient(owned)
+                return scoped_meta
+
+            async def get_vision_client():
+                nonlocal scoped_vision
+                if scoped_vision is None:
+                    scoped_vision = await stack.enter_async_context(httpx.AsyncClient(timeout=60.0, follow_redirects=False))
+                return scoped_vision
+
+            return await _timed_whatsapp("total", "batch", handle_meta_messages(messages, get_meta_client, get_vision_client))
+
+    async def handle_meta_messages(messages, get_meta_client, get_vision_client):
         async def summary_voice(text):
             """Speak the summary and upload it; returns a Meta media ID or None.
 
@@ -766,14 +814,14 @@ def create_app(
                     model=tts_model,
                     voice=tts_voice,
                     base_url=vision_base_url,
-                    client=vision_http_client,
+                    client=await get_vision_client(),
                 )
                 return await upload_audio(
                     meta_access_token,
                     meta_phone_number_id,
                     meta_graph_api_version,
                     speech,
-                    client=meta_http_client,
+                    client=await get_meta_client(),
                 )
             except (MetaWhatsAppError, StepFunAudioError, ValueError) as exc:
                 logger.warning("WhatsApp summary voice reply unavailable: %s", exc)
@@ -784,9 +832,10 @@ def create_app(
             payload = {key: message[key] for key in ("sender", "text", "event_id", "num_media")}
             # The allowlist is checked before any media download or model call:
             # unregistered numbers cost nothing to process and learn nothing.
-            sender_restaurant = await run_in_threadpool(store.restaurant_for_sender, message["sender"])
-            restaurant_id = sender_restaurant["id"] if sender_restaurant else None
             media_kind = message.get("media_kind")
+            timing_kind = media_kind or ("unsupported" if payload["num_media"] else "text")
+            sender_restaurant = await _timed_whatsapp("sender_lookup", timing_kind, run_in_threadpool(store.restaurant_for_sender, message["sender"]))
+            restaurant_id = sender_restaurant["id"] if sender_restaurant else None
             if payload["num_media"]:
                 payload["operation_source"] = {
                     "media_id": message.get("media_id") or event_id,
@@ -798,24 +847,24 @@ def create_app(
                     "Foto belum dapat dibaca. Jelaskan jenis dokumen dan rinciannya sebagai teks; stok belum berubah.")
                 if vision_api_key:
                     try:
-                        photo, media_type = await download_image(
+                        photo, media_type = await _timed_whatsapp("media_download", timing_kind, download_image(
                             message["media_id"], meta_access_token, meta_graph_api_version,
-                            client=meta_http_client,
-                        )
+                            client=await get_meta_client(),
+                        ))
                         payload["operation_source"]["digest"] = hashlib.sha256(photo).hexdigest()
-                        document = await extract_operations_document(
+                        document = await _timed_whatsapp("document_read", timing_kind, extract_operations_document(
                             photo, media_type=media_type, caption=payload["text"],
                             restaurant=sender_restaurant["name"], api_key=vision_api_key,
-                            model=vision_model, base_url=vision_base_url, client=vision_http_client,
-                        )
+                            model=vision_model, base_url=vision_base_url, client=await get_vision_client(),
+                        ))
                         if document.get("document_type") == "purchase_invoice":
                             # Only an explicit supplier-purchase classification
                             # enters the existing stock-increasing receipt flow.
-                            payload["extracted"] = await extract_invoice(
+                            payload["extracted"] = await _timed_whatsapp("document_read", timing_kind, extract_invoice(
                                 photo, media_type=media_type, restaurant=sender_restaurant["name"],
                                 api_key=vision_api_key, model=vision_model,
-                                base_url=vision_base_url, client=vision_http_client,
-                            )
+                                base_url=vision_base_url, client=await get_vision_client(),
+                            ))
                             payload.pop("operation_candidate", None)
                             payload["source_label"] = "Foto nota WhatsApp"
                         else:
@@ -824,27 +873,27 @@ def create_app(
                         logger.warning("WhatsApp document intake failed: %s", exc)
             elif media_kind == "audio" and vision_api_key and sender_restaurant:
                 try:
-                    audio, mime = await download_audio(
+                    audio, mime = await _timed_whatsapp("media_download", timing_kind, download_audio(
                         message["media_id"], meta_access_token, meta_graph_api_version,
-                        client=meta_http_client,
-                    )
+                        client=await get_meta_client(),
+                    ))
                     payload["operation_source"]["digest"] = hashlib.sha256(audio).hexdigest()
-                    payload["transcript"] = await transcribe_audio(
+                    payload["transcript"] = await _timed_whatsapp("document_read", timing_kind, transcribe_audio(
                         audio, mime, api_key=asr_api_key, model=asr_model,
-                        base_url=asr_base_url, client=vision_http_client,
-                    )
+                        base_url=asr_base_url, client=await get_vision_client(),
+                    ))
                     if payload["transcript"].strip():
-                        await enrich_whatsapp_text(
-                            payload, sender_restaurant, channel=LIVE + ":" + meta_phone_number_id)
+                        await _timed_whatsapp("text_enrichment", timing_kind, enrich_whatsapp_text(
+                            payload, sender_restaurant, channel=LIVE + ":" + meta_phone_number_id))
                 except (MetaWhatsAppError, StepFunAudioError) as exc:
                     logger.warning("WhatsApp voice intake failed: %s", exc)
             elif payload["num_media"] and media_kind != "audio" and sender_restaurant:
                 payload["operation_candidate"] = uncertain_document(
                     "Format lampiran belum didukung. Kirim JPG/PNG/WebP atau rincian sebagai teks; stok belum berubah.")
             elif payload["text"].strip() and sender_restaurant:
-                await enrich_whatsapp_text(
-                    payload, sender_restaurant, channel=LIVE + ":" + meta_phone_number_id)
-            result = await run_in_threadpool(
+                await _timed_whatsapp("text_enrichment", timing_kind, enrich_whatsapp_text(
+                    payload, sender_restaurant, channel=LIVE + ":" + meta_phone_number_id))
+            result = await _timed_whatsapp("store_ingestion", timing_kind, run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),
                 payload,
@@ -853,14 +902,14 @@ def create_app(
                 outbound_status=OUTBOUND_PENDING,
                 restaurant_id=restaurant_id,
                 open_onboarding=whatsapp_open_onboarding,
-            )
+            ))
             outbound = result["messages"][-1]
-            claimed = await run_in_threadpool(
+            claimed = await _timed_whatsapp("store_claim", timing_kind, run_in_threadpool(
                 store.claim_whatsapp_message,
                 outbound["id"],
                 OUTBOUND_PENDING,
                 OUTBOUND_SENDING,
-            )
+            ))
             if not claimed:
                 continue
             # whatsapp_ingest nests the ingest result (action/summary) under "result".
@@ -870,27 +919,27 @@ def create_app(
                 audio_id = await summary_voice(outbound["body"])
             if audio_id:
                 try:
-                    await send_audio_message(
+                    await _timed_whatsapp("send", timing_kind, send_audio_message(
                         meta_access_token,
                         meta_phone_number_id,
                         meta_graph_api_version,
                         message["sender"],
                         audio_id,
-                        client=meta_http_client,
-                    )
+                        client=await get_meta_client(),
+                    ))
                 except (MetaWhatsAppError, ValueError) as exc:
                     logger.warning("WhatsApp audio reply failed; falling back to text: %s", exc)
                     audio_id = None
             if not audio_id:
                 try:
-                    await send_text(
+                    await _timed_whatsapp("send", timing_kind, send_text(
                         meta_access_token,
                         meta_phone_number_id,
                         meta_graph_api_version,
                         message["sender"],
                         outbound["body"],
-                        client=meta_http_client,
-                    )
+                        client=await get_meta_client(),
+                    ))
                 except (MetaWhatsAppError, ValueError) as exc:
                     await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], OUTBOUND_PENDING)
                     status = exc.status if isinstance(exc, MetaWhatsAppError) else 500

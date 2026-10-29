@@ -15,6 +15,15 @@ SQLITE_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS inventory_packages (restaurant_id TEXT NOT NULL, ingredient_id TEXT NOT NULL, package_name TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(restaurant_id,ingredient_id,package_name))",
 )
 
+# Date-only extraction warnings describe a missing field, not a separate
+# uncertainty. Revalidate that field on every review, including persisted drafts.
+# Match the whole note so a combined date/quantity/total warning still blocks.
+_DATE_FIELD_ISSUE = re.compile(
+    r"tanggal(?: usaha| dokumen| laporan)? (?:tidak|belum) (?:terbaca|valid|jelas)"
+    r"(?:[.;] *(?:tanggal berapa laporan ini|tulis YYYY-MM-DD))?[.?]?",
+    re.I,
+)
+
 
 def normalized(value):
     return re.sub(r"\s+", " ", str(value or "").strip().casefold())
@@ -119,6 +128,8 @@ class OperationsMixin:
             questions.append("Ini nota pembelian, penjualan, pemakaian, limbah, atau hitungan stok? Sebutkan jenis dan rincian yang terbaca; tidak ada stok berubah.")
         for issue in candidate.get("unresolved") or []:
             # Missing fields are regenerated below after a focused answer.
+            if _DATE_FIELD_ISSUE.fullmatch(str(issue).strip()):
+                continue
             if re.search(r"refund|void|gross|bruto|neto|netto|diskon|discount|pajak|tax|total|terpotong|truncat|tidak terbaca|unsupported|belum dapat|format",str(issue),re.I) or not re.search(r"quantity|quantit|jumlah|tanggal|date|recipe|resep|package|kemasan|unit|satuan|document.type|jenis dokumen|coverage", str(issue), re.I):
                 questions.append("Perlu diperjelas: " + str(issue)[:300] + ". Kirim ulang rincian lengkap yang sudah benar.")
         catalog = self._catalog_for(tenant)
