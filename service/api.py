@@ -38,7 +38,7 @@ from .audio import (
 from .db import APPROVE_COMMANDS, DEMO_USERS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
 from .pg_store import PostgresStore
 from .extraction import extract_purchase
-from .operation_extraction import extract_operations_document, parse_operations_text
+from .operation_extraction import caption_requests_purchase, extract_operations_document, parse_operations_text
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .text_llm import StepFunTextError, extract_message
 from .stock_llm import phrase_stock_answer
@@ -808,11 +808,17 @@ def create_app(
                             client=meta_http_client,
                         )
                         payload["operation_source"]["digest"] = hashlib.sha256(photo).hexdigest()
-                        document = await extract_operations_document(
-                            photo, media_type=media_type, caption=payload["text"],
-                            restaurant=sender_restaurant["name"], api_key=vision_api_key,
-                            model=vision_model, base_url=vision_base_url, client=vision_http_client,
-                        )
+                        if caption_requests_purchase(payload["text"]):
+                            # The owner's caption decides the direction: a
+                            # supplier invoice titled "Sales Invoice" is still
+                            # a purchase for the warung. Skip the classifier.
+                            document = {"document_type": "purchase_invoice"}
+                        else:
+                            document = await extract_operations_document(
+                                photo, media_type=media_type, caption=payload["text"],
+                                restaurant=sender_restaurant["name"], api_key=vision_api_key,
+                                model=vision_model, base_url=vision_base_url, client=vision_http_client,
+                            )
                         if document.get("document_type") == "purchase_invoice":
                             # Only an explicit supplier-purchase classification
                             # enters the existing stock-increasing receipt flow.
