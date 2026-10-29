@@ -38,6 +38,7 @@ from .audio import (
 from .db import APPROVE_COMMANDS, DEMO_USERS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
 from .pg_store import PostgresStore
 from .extraction import extract_purchase
+from .operation_extraction import extract_operations_document, parse_operations_text
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .text_llm import StepFunTextError, extract_message
 from .stock_llm import phrase_stock_answer
@@ -52,6 +53,7 @@ from .vision import (
 )
 from .whatsapp import (
     LIVE,
+    SIMULATOR,
     OUTBOUND_PENDING,
     OUTBOUND_SENDING,
     OUTBOUND_SENT,
@@ -634,13 +636,25 @@ def create_app(
             raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
         payload = body.model_dump()
         if sender_restaurant and payload["text"].strip():
-            # A stock question is answered read-only from the restaurant's own
-            # inventory; the purchase extraction is skipped entirely for it.
-            payload["stock_answer"] = await build_stock_answer(payload["text"], actor["restaurant_id"])
-            if payload["stock_answer"] is None:
-                payload["extracted_text"] = await filter_kitchen_items(
-                    await extract_text(payload["text"], actor["restaurant_name"]), actor["restaurant_id"])
+            await enrich_whatsapp_text(payload, sender_restaurant, channel=SIMULATOR)
         return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"], open_onboarding=whatsapp_open_onboarding)}
+
+    async def enrich_whatsapp_text(payload, restaurant, *, channel):
+        """Operations and active clarification take priority over purchase AI."""
+        text = payload.get("transcript") or payload.get("text") or ""
+        candidate = parse_operations_text(text)
+        if candidate is not None:
+            payload["operation_candidate"] = candidate
+            return
+        if await run_in_threadpool(store.has_active_operation, payload["sender"], channel):
+            return
+        payload["stock_answer"] = await build_stock_answer(text, restaurant["id"])
+        if payload["stock_answer"] is None:
+            payload["extracted_text"] = await filter_kitchen_items(
+                await extract_text(text, restaurant["name"]), restaurant["id"])
+
+    def uncertain_document(message):
+        return {"document_type": "ambiguous", "lines": [], "unresolved": [message]}
 
     def csv_attachment(rows, filename):
         buffer = io.StringIO()
@@ -777,65 +791,71 @@ def create_app(
             # unregistered numbers cost nothing to process and learn nothing.
             sender_restaurant = await run_in_threadpool(store.restaurant_for_sender, message["sender"])
             restaurant_id = sender_restaurant["id"] if sender_restaurant else None
-            if message.get("media_kind") == "image" and vision_api_key and sender_restaurant:
-                # A photo is read before the draft is created so the owner gets
-                # the same review-and-confirm flow as typed text.
-                try:
-                    photo, media_type = await download_image(
-                        message["media_id"],
-                        meta_access_token,
-                        meta_graph_api_version,
-                        client=meta_http_client,
-                    )
-                    payload["extracted"] = await filter_kitchen_items(
-                        await extract_invoice(
-                            photo,
-                            media_type=media_type,
-                            restaurant=sender_restaurant["name"],
-                            api_key=vision_api_key,
-                            model=vision_model,
-                            base_url=vision_base_url,
-                            client=vision_http_client,
-                        ),
-                        restaurant_id,
-                    )
-                    payload["source_label"] = "Foto nota WhatsApp"
-                except (MetaWhatsAppError, StepFunVisionError) as exc:
-                    # A failed read falls back to the safe media reply; no draft.
-                    logger.warning("WhatsApp photo intake failed: %s", exc)
-            elif message.get("media_kind") == "audio" and vision_api_key and sender_restaurant:
+            media_kind = message.get("media_kind")
+            if payload["num_media"]:
+                payload["operation_source"] = {
+                    "media_id": message.get("media_id") or event_id,
+                    "media_kind": media_kind or "unsupported",
+                    "caption": payload["text"],
+                }
+            if media_kind == "image" and sender_restaurant:
+                payload["operation_candidate"] = uncertain_document(
+                    "Foto belum dapat dibaca. Jelaskan jenis dokumen dan rinciannya sebagai teks; stok belum berubah.")
+                if vision_api_key:
+                    try:
+                        photo, media_type = await download_image(
+                            message["media_id"], meta_access_token, meta_graph_api_version,
+                            client=meta_http_client,
+                        )
+                        payload["operation_source"]["digest"] = hashlib.sha256(photo).hexdigest()
+                        document = await extract_operations_document(
+                            photo, media_type=media_type, caption=payload["text"],
+                            restaurant=sender_restaurant["name"], api_key=vision_api_key,
+                            model=vision_model, base_url=vision_base_url, client=vision_http_client,
+                        )
+                        if document.get("document_type") == "purchase_invoice":
+                            # Only an explicit supplier-purchase classification
+                            # enters the existing stock-increasing receipt flow.
+                            # Non-kitchen goods still get flagged for owner review.
+                            payload["extracted"] = await filter_kitchen_items(
+                                await extract_invoice(
+                                    photo, media_type=media_type, restaurant=sender_restaurant["name"],
+                                    api_key=vision_api_key, model=vision_model,
+                                    base_url=vision_base_url, client=vision_http_client,
+                                ),
+                                restaurant_id,
+                            )
+                            payload.pop("operation_candidate", None)
+                            payload["source_label"] = "Foto nota WhatsApp"
+                        else:
+                            payload["operation_candidate"] = document
+                    except (MetaWhatsAppError, StepFunVisionError, ValueError) as exc:
+                        logger.warning("WhatsApp document intake failed: %s", exc)
+            elif media_kind == "audio" and vision_api_key and sender_restaurant:
                 # A voice note is transcribed and then parsed like typed text;
                 # a failed read falls back to the safe media reply; no draft.
                 try:
                     audio, mime = await download_audio(
-                        message["media_id"],
-                        meta_access_token,
-                        meta_graph_api_version,
+                        message["media_id"], meta_access_token, meta_graph_api_version,
                         client=meta_http_client,
                     )
+                    payload["operation_source"]["digest"] = hashlib.sha256(audio).hexdigest()
                     payload["transcript"] = await transcribe_audio(
-                        audio,
-                        mime,
-                        api_key=asr_api_key,
-                        model=asr_model,
-                        base_url=asr_base_url,
-                        language=asr_language,
+                        audio, mime, api_key=asr_api_key, model=asr_model,
+                        base_url=asr_base_url, language=asr_language,
                         client=vision_http_client,
                     )
                     if payload["transcript"].strip():
-                        payload["extracted_text"] = await filter_kitchen_items(
-                            await extract_text(payload["transcript"], sender_restaurant["name"]), restaurant_id)
+                        await enrich_whatsapp_text(
+                            payload, sender_restaurant, channel=LIVE + ":" + meta_phone_number_id)
                 except (MetaWhatsAppError, StepFunAudioError) as exc:
                     logger.warning("WhatsApp voice intake failed: %s", exc)
-            elif not message.get("media_kind") and payload["text"].strip() and sender_restaurant:
-                # Plain text gets the same rules-then-model rescue so free-form
-                # sentences reach the draft flow; commands skip the model. A
-                # stock question is answered read-only from the sender's own
-                # restaurant inventory before any of that.
-                payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
-                if payload["stock_answer"] is None:
-                    payload["extracted_text"] = await filter_kitchen_items(
-                        await extract_text(payload["text"], sender_restaurant["name"]), restaurant_id)
+            elif payload["num_media"] and media_kind != "audio" and sender_restaurant:
+                payload["operation_candidate"] = uncertain_document(
+                    "Format lampiran belum didukung. Kirim JPG/PNG/WebP atau rincian sebagai teks; stok belum berubah.")
+            elif payload["text"].strip() and sender_restaurant:
+                await enrich_whatsapp_text(
+                    payload, sender_restaurant, channel=LIVE + ":" + meta_phone_number_id)
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),

@@ -188,6 +188,7 @@ def test_complete_history_uses_all_calendar_days_and_excludes_counts(client, app
     with app.state.store.transaction() as conn:
         for entry in (usage, correction):
             entry['created_at'] = stamp
+            entry.pop('business_date', None)  # Legacy entries derive their Jakarta business date from posting time.
             conn.execute('UPDATE inventory_events SET body=?,created_at=? WHERE id=?', (json.dumps(entry), stamp, entry['id']))
     settings = {'lead_days': 2, 'safety_days': 1, 'daily_usage': {}, 'history_start': str(start), 'history_end': str(end), 'history_complete': True}
     r = post(client, 'settings', settings)

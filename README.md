@@ -6,10 +6,19 @@ A local restaurant purchasing demo: Indonesian text or WhatsApp message → edit
 
 The hosted dashboard is **https://restopilot-dashboard.pub.atoms.world/**.
 The [Atoms project](https://atoms.dev/chat/2cc522e0e3264f43a31c2e2a62d0ba27)
-contains the published app. Its exported runtime and deployment instructions are
-in [deploy/atoms/](deploy/atoms/README.md). The application sources remain in
+contains the published app. Use the current [team deployment guide](docs/ATOMS_GITHUB_WORKFLOW.md)
+for releases. The older exported runtime is in [deploy/atoms/](deploy/atoms/README.md);
+preserve the native Atoms files called out in the current guide. The application sources remain in
 `service/` and `frontend/`; deployment builds copy the current service into the
 managed backend package. Existing Git branches keep their original history.
+
+## Team workflow
+
+Coding agents should read [AGENTS.md](AGENTS.md). **Implement** means code and
+test locally; **implement and deploy** also includes the release push, required
+additive migrations, Atoms sync, publication and public verification. Current
+deployment and feature guides take precedence over historical setup notes below.
+This convention is shared guidance, not an automatic GitHub deployment pipeline.
 
 ## Run locally
 

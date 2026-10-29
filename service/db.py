@@ -20,6 +20,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .inventory import InventoryMixin, SQLITE_SCHEMA
+from .operations import OperationsMixin, SQLITE_SCHEMA as OPERATIONS_SQLITE_SCHEMA
+from .purchase_sources import PurchaseSourcesMixin, SQLITE_SCHEMA as PURCHASE_SOURCES_SQLITE_SCHEMA
 from .extraction import catalog_aliases, extract_purchase, normalize_item
 from .onboarding import restaurant_selection
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup, parse_remove_request, stock_reply, weekly_summary_reply
@@ -173,7 +175,7 @@ def normalize_items_for_catalog(items, catalog):
     return normalized, list(dict.fromkeys(warnings))
 
 
-class Store(InventoryMixin):
+class Store(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
     def __init__(self, path, seed=True):
         self.path = str(path)
         # Each restaurant owns a catalog: the shared base plus the ingredients
@@ -249,7 +251,7 @@ class Store(InventoryMixin):
                 "CREATE TABLE IF NOT EXISTS custom_ingredients (id TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL, reorder_threshold TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
             ):
                 conn.execute(statement)
-            for statement in SQLITE_SCHEMA:
+            for statement in (*SQLITE_SCHEMA, *OPERATIONS_SQLITE_SCHEMA, *PURCHASE_SOURCES_SQLITE_SCHEMA):
                 conn.execute(statement)
             movement_columns = {row[1] for row in conn.execute("PRAGMA table_info(movements)")}
             if "inventory_event_id" not in movement_columns:
@@ -688,6 +690,8 @@ class Store(InventoryMixin):
         admin console; their message is never processed.
         """
         channel = channel or transport
+        operation_candidate = payload.get("operation_candidate")
+        operation_source = payload.get("operation_source")
         extracted_photo = payload.get("extracted")
         source_label = payload.get("source_label") or "Foto nota WhatsApp"
         # A voice transcript, like a vision read, is not byte-identical across
@@ -705,13 +709,33 @@ class Store(InventoryMixin):
         if not isinstance(extracted_text, dict) or not isinstance(extracted_text.get("items"), list) or not isinstance(extracted_text.get("warnings"), list):
             extracted_text = None
         payload = {"sender": payload["sender"], "text": payload["text"], "event_id": payload.get("event_id"), "num_media": payload.get("num_media", 0)}
+        # Provenance bytes/media identity are stable across provider retries;
+        # model-derived candidates and transcripts deliberately are not.
+        fingerprint_source = {}
+        if isinstance(operation_source, dict):
+            identity_fields = ("media_id", "media_kind", "caption") if operation_source.get("media_id") else ("digest", "media_kind", "caption")
+            identity = {name: operation_source[name] for name in identity_fields if operation_source.get(name) is not None}
+            if identity:
+                fingerprint_source = identity
         event_id = payload["event_id"] or "sim:" + key
-        fingerprint = hashlib.sha256(encode({"sender": payload["sender"], "text": payload["text"], "num_media": payload["num_media"]}).encode()).hexdigest()
+        request_identity = dict(payload)
+        if fingerprint_source.get("media_kind") == "image" and fingerprint_source.get("media_id"):
+            # Older normalizers omitted image captions. Keep their request-key
+            # identity while retaining the caption in the stronger event hash.
+            request_identity["text"] = ""
+            fingerprint_source.setdefault("caption", payload["text"])
+        fingerprint_body = {"sender": request_identity["sender"], "text": request_identity["text"], "num_media": request_identity["num_media"]}
+        # Preserve request-key compatibility with already stored WhatsApp
+        # callbacks; media identity tightens the provider-event comparison.
+        legacy_fingerprint = hashlib.sha256(encode(fingerprint_body).encode()).hexdigest()
+        if fingerprint_source:
+            fingerprint_body["operation_source"] = fingerprint_source
+        fingerprint = hashlib.sha256(encode(fingerprint_body).encode()).hexdigest()
 
         def action(conn):
             prior = conn.execute("SELECT fingerprint, response FROM whatsapp_events WHERE channel=? AND event_id=?", (channel, event_id)).fetchone()
             if prior:
-                if prior["fingerprint"] != fingerprint:
+                if prior["fingerprint"] not in (fingerprint, legacy_fingerprint):
                     raise DomainError("event_conflict", "This message event was already used for different content or sender.")
                 return json.loads(prior["response"])
             link = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=?", (payload["sender"],)).fetchone()
@@ -740,7 +764,16 @@ class Store(InventoryMixin):
             # The payment/supplier follow-up is a one-shot offer: the very next
             # message either answers it or the opportunity lapses.
             pending_purchase = thread.get("pending_followup")
-            thread["pending_followup"] = None
+            operation_result = None
+            if tenant and onboarding_reply is None:
+                operation_result = self._operation_handle(
+                    conn, thread, tenant, transcript or payload["text"],
+                    candidate=operation_candidate, source=operation_source,
+                    purchase_draft=draft,
+                )
+            # Inventory conversations must not consume purchase payment state.
+            if operation_result is None:
+                thread["pending_followup"] = None
             command = payload["text"].strip().casefold()
             result = {}
             if onboarding_reply is not None:
@@ -752,12 +785,20 @@ class Store(InventoryMixin):
                 # attempt in the console and can register the number.
                 reply = UNREGISTERED_REPLY
                 result["action"] = "unregistered_sender"
+            elif operation_result is not None:
+                reply = operation_result["reply"]
+                result = operation_result["result"]
             elif extracted_photo:
-                if draft:
+                source_digest, source_result = self._purchase_source_guard(conn, tenant, operation_source)
+                if source_result is not None:
+                    reply, result = source_result["reply"], source_result["result"]
+                    thread["pending_followup"] = pending_purchase
+                elif draft:
                     reply = "Foto diterima. Masih ada draf yang menunggu konfirmasimu dulu, jadi foto ini belum dicatat:\n" + draft_reply(draft, names)
                     result["action"] = "active_draft_exists"
                 else:
                     draft = self._new_draft(conn, source_label, extracted_photo.get("supplier"), extracted_photo.get("items") or [], extracted_photo.get("warnings") or [], restaurant_id=tenant)
+                    self._purchase_source_register(conn, tenant, source_digest, draft["id"])
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = "Nota diterima. Cek draf pembelian ini:\n" + draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
@@ -922,7 +963,7 @@ class Store(InventoryMixin):
             conn.execute("INSERT INTO whatsapp_events VALUES (?, ?, ?, ?, ?)", (channel, event_id, thread["id"], fingerprint, encode(response)))
             return response
 
-        response = self._idempotent(key, "whatsapp:" + channel, payload, action)
+        response = self._idempotent(key, "whatsapp:" + channel, request_identity, action)
         self.maybe_cloud_mirror(response.get("draft"), response["thread"].get("restaurant_id"))
         return response
 
