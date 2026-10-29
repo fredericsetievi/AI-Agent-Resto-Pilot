@@ -1,6 +1,7 @@
 """Kitchen filter agent: non-kitchen goods (odol, sikat gigi, ...) are flagged
 for owner confirmation, never silently recorded."""
 
+import asyncio
 import json
 from uuid import uuid4
 
@@ -9,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from conftest import SENDER_NUMBER, login_owner
 from service.api import create_app
-from service.kitchen_filter import validate_classification
+from service.kitchen_filter import classify_items, validate_classification
 from service.stock_llm import StepFunTextError
 
 
@@ -66,8 +67,9 @@ def test_validate_classification_requires_a_full_partition():
 
 def test_flagged_text_message_blocks_approval_until_the_owner_removes(tmp_path):
     fake = FakeFilterClient()
-    # items in order: cabai (index 0), sikat gigi (1), odol (2)
-    fake.responses.append(fake.completion({"kitchen": [0], "non_kitchen": [1, 2]}))
+    # items in order: cabai (catalog-seeded, never sent), sikat gigi and odol
+    # reach the model as payload indices 0 and 1 (global 1 and 2)
+    fake.responses.append(fake.completion({"kitchen": [], "non_kitchen": [0, 1]}))
     app, client = filter_app(tmp_path, fake)
 
     draft = client.post("/v1/intake", headers={"Idempotency-Key": uuid4().hex},
@@ -128,7 +130,9 @@ def test_feature_off_never_calls_the_model(tmp_path):
 
 def test_simulator_flags_and_hapus_removes_the_flagged_item(tmp_path):
     fake = FakeFilterClient()
-    fake.responses.append(fake.completion({"kitchen": [0], "non_kitchen": [1]}))
+    # minyak goreng is catalog-seeded; only sabun mandi reaches the model
+    # as payload index 0 (global draft index 1)
+    fake.responses.append(fake.completion({"kitchen": [], "non_kitchen": [0]}))
     app, client = filter_app(tmp_path, fake)
 
     result = client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
@@ -153,9 +157,56 @@ def test_simulator_flags_and_hapus_removes_the_flagged_item(tmp_path):
     assert approved["result"]["action"] == "approved"
 
 
+def test_simulator_hapus_semua_clears_every_flagged_line(tmp_path):
+    fake = FakeFilterClient()
+    # cabai is catalog-seeded; sikat gigi and odol reach the model as payload
+    # indices 0 and 1 and both get flagged (draft lines 2 and 3)
+    fake.responses.append(fake.completion({"kitchen": [], "non_kitchen": [0, 1]}))
+    app, client = filter_app(tmp_path, fake)
+
+    result = client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
+                         json={"sender": SENDER_NUMBER, "text": QUESTION_FREE_FORM}).json()["data"]
+    assert len([item for item in result["draft"]["items"] if item.get("non_kitchen")]) == 2
+
+    cleared = client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
+                          json={"sender": SENDER_NUMBER, "text": "hapus semua"}).json()["data"]
+    assert cleared["result"]["action"] == "item_removed"
+    assert [item["raw_name"] for item in cleared["draft"]["items"]] == ["cabai"]
+    assert cleared["draft"]["status"] == "pending_approval"
+    assert "'sikat gigi' dan 'odol' dihapus" in cleared["messages"][-1]["body"]
+    # Nothing stays flagged, so the confirmation warning disappears and the
+    # owner can approve the remaining kitchen purchase straight away.
+    assert "bukan bahan masak" not in cleared["messages"][-1]["body"]
+
+
+def test_simulator_hapus_batch_and_rejections(tmp_path):
+    fake = FakeFilterClient()
+    fake.responses.append(fake.completion({"kitchen": [], "non_kitchen": [0, 1]}))
+    app, client = filter_app(tmp_path, fake)
+
+    def simulate(text):
+        return client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
+                           json={"sender": SENDER_NUMBER, "text": text}).json()["data"]
+
+    simulate(QUESTION_FREE_FORM)
+    # Mixing a flagged line with an unflagged one rejects the whole command.
+    mixed = simulate("hapus 1, 3")
+    assert mixed["result"]["action"] == "remove_rejected"
+    assert len(mixed["draft"]["items"]) == 3
+    # Batch indices clear both flagged lines in one message.
+    batch = simulate("hapus 3, 2")
+    assert batch["result"]["action"] == "item_removed"
+    assert [item["raw_name"] for item in batch["draft"]["items"]] == ["cabai"]
+    assert batch["draft"]["status"] == "pending_approval"
+    # Names echo back in the order the owner typed them.
+    assert "'odol' dan 'sikat gigi' dihapus" in batch["messages"][-1]["body"]
+
+
 def test_hapus_rejects_an_unflagged_index(tmp_path):
     fake = FakeFilterClient()
-    fake.responses.append(fake.completion({"kitchen": [0], "non_kitchen": [1]}))
+    # minyak goreng is catalog-seeded; the model sees only sabun mandi
+    # (payload index 0) and classifies it as kitchen — nothing gets flagged
+    fake.responses.append(fake.completion({"kitchen": [0], "non_kitchen": []}))
     app, client = filter_app(tmp_path, fake)
     client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
                 json={"sender": SENDER_NUMBER, "text": "beli minyak 2 l 36rb\nsabun mandi 3 15rb"})
@@ -163,3 +214,28 @@ def test_hapus_rejects_an_unflagged_index(tmp_path):
                            json={"sender": SENDER_NUMBER, "text": "hapus 1"}).json()["data"]
     assert rejected["result"]["action"] == "remove_rejected"
     assert len(rejected["draft"]["items"]) == 2
+
+
+def test_classify_items_maps_payload_indices_back_to_global():
+    """Regression: api.py passes only catalog-unknown items keyed by their
+    global draft indices (e.g. 1 and 2 when items 0 and 3 are already mapped).
+    The model answers in the 0-based payload space it sees; the verdict must
+    map back to the global indices instead of failing the partition check."""
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"kitchen": [0], "non_kitchen": [1]}'}}]}
+
+    class _Client:
+        async def post(self, url, *, headers, json):
+            sent = json["messages"][0]["content"]
+            assert '"index": 0' in sent and '"index": 1' in sent
+            assert '"index": 2' not in sent
+            return _Response()
+
+    verdict = asyncio.run(classify_items(
+        [(1, "sabun cair"), (2, "deterjen")],
+        api_key="synthetic-stepfun-key", client=_Client()))
+    assert verdict == {"kitchen": [1], "non_kitchen": [2]}

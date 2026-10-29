@@ -72,12 +72,13 @@ def _check_audio(raw, mime):
     return raw
 
 
-async def transcribe_audio(data, mime, *, api_key, model=DEFAULT_ASR_MODEL, base_url=DEFAULT_BASE_URL, client=None):
+async def transcribe_audio(data, mime, *, api_key, model=DEFAULT_ASR_MODEL, base_url=DEFAULT_BASE_URL, language=None, client=None):
     """Send one WhatsApp voice note to StepFun ASR and return its transcript."""
     if not api_key or not api_key.strip():
         raise StepFunAudioError("StepFun speech recognition is not configured.", 503)
     base_url = validate_base_url(base_url)
     model = validate_asr_model(model)
+    language = (language or "").strip().lower() or None
     data = _check_audio(data, mime)
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=60.0, follow_redirects=False)
@@ -87,7 +88,7 @@ async def transcribe_audio(data, mime, *, api_key, model=DEFAULT_ASR_MODEL, base
                 base_url + "/audio/transcriptions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 files={"file": (_MEDIA_FILENAMES.get(mime, "voice"), data, mime)},
-                data={"model": model, "response_format": "json"},
+                data={"model": model, "response_format": "json", **({"language": language} if language else {})},
             )
         except httpx.HTTPError:
             raise StepFunAudioError("StepFun speech recognition could not be reached; try again.")

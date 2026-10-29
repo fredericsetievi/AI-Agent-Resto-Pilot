@@ -487,11 +487,21 @@ def _draft_total(draft):
 def draft_reply(draft, catalog_names=None):
     # Display names come from the caller's restaurant catalog when given, so
     # custom bahan from other restaurants can never surface in a reply.
+    # Sections (items, warnings, supplier/total, notes, instructions) are
+    # separated by blank lines so long replies stay scannable on a phone.
     lines = [_item_line(item, catalog_names) for item in draft["items"]]
     flagged = [str(index + 1) for index, item in enumerate(draft["items"]) if item.get("non_kitchen")]
+    warning = None
     if flagged:
-        lines.append("⚠ Baris " + ", ".join(flagged) + " bukan bahan masak — balas 'hapus "
-                     + flagged[0] + "' untuk membuangnya, atau perbaiki di dashboard.")
+        # One 'hapus semua' clears every flagged line; removal renumbers the
+        # remaining rows, so the hint never lists stale indices.
+        if len(flagged) == 1:
+            warning = ("⚠ Baris " + flagged[0] + " bukan bahan masak — balas 'hapus semua'"
+                       " untuk membuangnya, atau perbaiki di dashboard.")
+        else:
+            warning = ("⚠ Baris " + ", ".join(flagged) + " bukan bahan masak — balas 'hapus semua'"
+                       " untuk membuang semuanya, 'hapus " + flagged[0]
+                       + "' untuk satu baris, atau perbaiki di dashboard.")
     unmapped = [
         str(item["raw_name"]).strip()
         for item in draft["items"]
@@ -512,45 +522,60 @@ def draft_reply(draft, catalog_names=None):
         fuzzy.append(f"'{typed}' saya baca sebagai {name}")
     if fuzzy:
         notes.append("Catatan: " + "; ".join(fuzzy) + " — tolong dicek dulu, benar kan? Balas YA jika sudah benar.")
-    if any(_UNMAPPED_WARNING.search(str(warning)) is None for warning in draft.get("warnings", [])):
+    if any(_UNMAPPED_WARNING.search(str(warning_text)) is None for warning_text in draft.get("warnings", [])):
         notes.append("Catatan: ada baris yang perlu dicek di dashboard (harga, satuan, atau keterbacaan foto).")
     supplier = str(draft.get("supplier") or "").strip()
     total = _draft_total(draft)
-    if draft["status"] == "needs_clarification":
-        parts = ["Draf pembelian (perlu konfirmasi):"] + lines
+
+    def _sections(header, items, total_label, footer):
+        summary = []
         if supplier:
-            parts.append(f"Pemasok: {supplier}")
+            summary.append(f"Pemasok: {supplier}")
         if total:
-            parts.append(f"Total sementara: Rp{_idr(total)}")
-        parts += notes
+            summary.append(f"{total_label}: Rp{_idr(total)}")
+        sections = [[header] + items]
+        if warning:
+            sections.append([warning])
+        if summary:
+            sections.append(summary)
+        if notes:
+            sections.append(notes)
+        sections.append([footer])
+        return "\n\n".join("\n".join(section) for section in sections)
+
+    if draft["status"] == "needs_clarification":
         if unmapped:
-            parts.append("Balas YA untuk konfirmasi semua item di atas — item baru otomatis masuk daftar bahan. Atau perbaiki dulu di dashboard. BATAL untuk batal.")
+            footer = ("Balas YA untuk konfirmasi semua item di atas — item baru otomatis masuk daftar bahan. "
+                      "Atau perbaiki dulu di dashboard. BATAL untuk batal.")
         else:
-            parts.append("Perbaiki di dashboard, lalu balas YA kalau sudah benar & barang diterima. BATAL untuk batal.")
-        return "\n".join(parts)
-    parts = ["Draf pembelian:"] + lines
-    if supplier:
-        parts.append(f"Pemasok: {supplier}")
-    if total:
-        parts.append(f"Total: Rp{_idr(total)}")
-    parts += notes
-    parts.append("Balas YA jika semua barang sudah diterima, BATAL untuk batal.")
-    return "\n".join(parts)
+            footer = "Perbaiki di dashboard, lalu balas YA kalau sudah benar & barang diterima. BATAL untuk batal."
+        return _sections("Draf pembelian (perlu konfirmasi):", lines, "Total sementara", footer)
+    return _sections("Draf pembelian:", lines, "Total", "Balas YA jika semua barang sudah diterima, BATAL untuk batal.")
 
 
-_REMOVE_ITEM = re.compile(r"(?i)^\s*(?:hapus|remove)\s+(?:item\s+)?(\d{1,2})\s*$")
+_REMOVE_ALL = re.compile(r"(?i)^\s*(?:hapus|remove)\s+(?:semua|semuanya|all)\s*$")
+_REMOVE_ITEMS = re.compile(r"(?i)^\s*(?:hapus|remove)\s+(?:item\s+)?(\d{1,2}(?:\s*[,;]\s*|\s+\d{1,2})*)\s*$")
 
 
-def parse_remove_item(text):
-    """Parse 'hapus 2' / 'hapus item 2' into a 1-based draft item index.
+def parse_remove_request(text):
+    """Parse removal commands for the kitchen-filter flow.
 
-    Returns None for anything else, so ordinary messages keep flowing to
-    purchase parsing. Removal only ever touches items flagged non-kitchen.
+    'hapus semua' clears every flagged (non-kitchen) line in one message;
+    'hapus 4', 'hapus item 2' and 'hapus 4, 5' target 1-based lines. Returns
+    {'mode': 'all'}, {'mode': 'indices', 'indices': [...]}, or None so
+    ordinary messages keep flowing to purchase parsing. Removal still only
+    ever touches items flagged non-kitchen — enforced by the stores.
     """
     if not isinstance(text, str):
         return None
-    match = _REMOVE_ITEM.fullmatch(text.strip())
-    return int(match.group(1)) if match else None
+    candidate = text.strip()
+    if _REMOVE_ALL.fullmatch(candidate):
+        return {"mode": "all"}
+    match = _REMOVE_ITEMS.fullmatch(candidate)
+    if not match:
+        return None
+    indices = [int(value) for value in re.split(r"[\s,;]+", match.group(1))]
+    return {"mode": "indices", "indices": indices}
 
 
 def parse_payment_followup(text):

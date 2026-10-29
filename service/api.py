@@ -41,7 +41,7 @@ from .audio import (
 from .db import APPROVE_COMMANDS, DEMO_USERS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
 from .pg_store import PostgresStore
 from .extraction import extract_purchase
-from .operation_extraction import extract_operations_document, parse_operations_text
+from .operation_extraction import caption_requests_purchase, extract_operations_document, parse_operations_text
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .text_llm import StepFunTextError, extract_message
 from .stock_llm import phrase_stock_answer
@@ -275,6 +275,7 @@ def create_app(
     asr_model=None,
     asr_api_key=None,
     asr_base_url=None,
+    asr_language=None,
     tts_model=None,
     tts_voice=None,
     text_llm_enabled=False,
@@ -366,7 +367,11 @@ def create_app(
         except (StepFunTextError, ValueError) as exc:
             logger.warning("StepFun text rescue failed; keeping the rules result: %s", exc)
             return extracted
-        return rescued if rescued["items"] else extracted
+        if rescued["items"]:
+            if extracted.get("supplier") and not rescued.get("supplier"):
+                rescued["supplier"] = extracted["supplier"]
+            return rescued
+        return extracted
 
     async def filter_kitchen_items(extracted, restaurant_id):
         """Mark non-kitchen goods (odol, sikat gigi, sabun, ...) in an extraction.
@@ -852,19 +857,29 @@ def create_app(
                             client=await get_meta_client(),
                         ))
                         payload["operation_source"]["digest"] = hashlib.sha256(photo).hexdigest()
-                        document = await _timed_whatsapp("document_read", timing_kind, extract_operations_document(
-                            photo, media_type=media_type, caption=payload["text"],
-                            restaurant=sender_restaurant["name"], api_key=vision_api_key,
-                            model=vision_model, base_url=vision_base_url, client=await get_vision_client(),
-                        ))
+                        if caption_requests_purchase(payload["text"]):
+                            # The owner's caption decides the direction: a
+                            # supplier invoice titled "Sales Invoice" is still
+                            # a purchase for the warung. Skip the classifier.
+                            document = {"document_type": "purchase_invoice"}
+                        else:
+                            document = await _timed_whatsapp("document_read", timing_kind, extract_operations_document(
+                                photo, media_type=media_type, caption=payload["text"],
+                                restaurant=sender_restaurant["name"], api_key=vision_api_key,
+                                model=vision_model, base_url=vision_base_url, client=await get_vision_client(),
+                            ))
                         if document.get("document_type") == "purchase_invoice":
                             # Only an explicit supplier-purchase classification
                             # enters the existing stock-increasing receipt flow.
-                            payload["extracted"] = await _timed_whatsapp("document_read", timing_kind, extract_invoice(
-                                photo, media_type=media_type, restaurant=sender_restaurant["name"],
-                                api_key=vision_api_key, model=vision_model,
-                                base_url=vision_base_url, client=await get_vision_client(),
-                            ))
+                            # Non-kitchen goods still get flagged for owner review.
+                            payload["extracted"] = await filter_kitchen_items(
+                                await _timed_whatsapp("document_read", timing_kind, extract_invoice(
+                                    photo, media_type=media_type, restaurant=sender_restaurant["name"],
+                                    api_key=vision_api_key, model=vision_model,
+                                    base_url=vision_base_url, client=await get_vision_client(),
+                                )),
+                                restaurant_id,
+                            )
                             payload.pop("operation_candidate", None)
                             payload["source_label"] = "Foto nota WhatsApp"
                         else:
@@ -872,6 +887,8 @@ def create_app(
                     except (MetaWhatsAppError, StepFunVisionError, ValueError) as exc:
                         logger.warning("WhatsApp document intake failed: %s", exc)
             elif media_kind == "audio" and vision_api_key and sender_restaurant:
+                # A voice note is transcribed and then parsed like typed text;
+                # a failed read falls back to the safe media reply; no draft.
                 try:
                     audio, mime = await _timed_whatsapp("media_download", timing_kind, download_audio(
                         message["media_id"], meta_access_token, meta_graph_api_version,
@@ -880,7 +897,8 @@ def create_app(
                     payload["operation_source"]["digest"] = hashlib.sha256(audio).hexdigest()
                     payload["transcript"] = await _timed_whatsapp("document_read", timing_kind, transcribe_audio(
                         audio, mime, api_key=asr_api_key, model=asr_model,
-                        base_url=asr_base_url, client=await get_vision_client(),
+                        base_url=asr_base_url, language=asr_language,
+                        client=await get_vision_client(),
                     ))
                     if payload["transcript"].strip():
                         await _timed_whatsapp("text_enrichment", timing_kind, enrich_whatsapp_text(
