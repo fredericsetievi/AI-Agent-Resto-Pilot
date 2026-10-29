@@ -1,11 +1,30 @@
 # WhatsApp stock and sales reporting
 
-Published on 2026-10-29 as **Atoms V9** on the existing
+Published on 2026-10-29 as **Atoms V10 — WhatsApp Reliability Release** on the existing
 https://restopilot-dashboard.pub.atoms.world/ domain, from source
-`1c27af32cca570d27648a71082af4f9a69ad1515`. Migration0005 was explicitly applied
-to the existing Supabase project. It added three RLS-enabled tables without
+`bd5aec77a23c2c4e7ed1a1a83336f29093d3f640`. This includes the dashboard inventory
+release (V7) and initial WhatsApp release (V9). Migration0005 was explicitly applied
+to the existing Supabase project for V9. It added three RLS-enabled tables without
 changing existing stock, purchases, users, links, inventory history or settings.
-This includes the earlier dashboard inventory release (V7).
+V10 required no migration; none was applied or replayed.
+
+V10 fixes a stale photo-date warning that repeated after `kemarin`/`hari ini`/an
+ISO date. It also reuses HTTP connections within a webhook and adds sanitized
+stage timings. Local verification: 390 Python tests passed (35 opt-in tests
+skipped), plus 25 JavaScript tests. Atoms: 387 Python tests passed, 35 skipped
+(the three GitHub-layout adapter tests excluded), 22 frontend tests passed,
+native lint/build passed. Imported application paths and all 20 vendored service
+modules were verified byte-identical to the pinned release.
+
+The current V10 App Viewer origin was verified after saving the version, then
+Update publication succeeded on the existing domain. Public health/readiness,
+signed-out inventory401, owner login and inventory readback passed. Protected
+stock, purchases, users, links, inventory events, recipes and settings matched
+the pre-release fingerprints: 23 stock rows, 20 purchases, 4 users, 4 links,
+2 events, 2 recipes, 1 settings row. No QA operation was created and no WhatsApp
+message or business approval was sent during this release. Existing operation
+drafts were retained; live incoming clarification can update them independently.
+Ignored local smoke evidence: `tmp/whatsapp-release-check-20261029T061150Z.json`.
 
 ## Owner experience
 
@@ -52,15 +71,29 @@ purchase invoice enters the existing purchase flow. POS daily reports and
 customer sales receipts enter the sales review. Uncertain or unreadable
 documents ask for clarification; they never silently become purchases.
 
+If a photo's date is missing, answer `hari ini`, `kemarin`, or `YYYY-MM-DD`.
+Relative dates use restaurant time (Asia/Jakarta). The answer updates the saved
+report; other unknown facts still need clarification and the calculations still
+require the versioned confirmation before stock changes.
+
 Supported photos/screenshots: JPEG, PNG and WebP, up to 5 MiB. Text input is
 bounded to 8,000 characters and a report to 30 rows. Oversized reports and
 reviews too long to display fully are held without posting; send smaller
 sections with explicit separate coverage. PDF/XLS/CSV intake is not supported.
 Provider timeouts, bad JSON and invalid media return a useful no-write response.
 
+For latency diagnosis, enable INFO logging for `restopilot.api`. WhatsApp timing
+records contain only stage, media kind and milliseconds: sender lookup, media
+download, document reading, text enrichment, store ingestion/claim, sending and
+total processing. They omit phone numbers, event IDs, receipt contents and keys.
+The total starts after webhook validation. HTTP reuse is scoped to one webhook;
+provider retries still repeat extraction before the existing transactional
+deduplication. No live latency improvement has yet been measured.
+
 Voice uses the existing optional transcription configuration and then the same
-review pipeline. Actual provider quality and live WhatsApp delivery have not
-been exercised for this extension; tests use controlled provider responses.
+review pipeline. Automated release tests use controlled provider responses and
+do not send real WhatsApp messages. Image interpretation quality and total live
+delivery latency still require testing with the restaurant's actual documents.
 
 Extracted facts, captions and source digests are durable. Image/audio bytes are
 transient; permanent receipt-original storage/viewing is not promised.
@@ -133,7 +166,7 @@ callback/account were retained. The native V7 startup/proxy repair was not
 overwritten. GitHub synchronization and Atoms publication remain separate;
 see [the workflow guide](ATOMS_GITHUB_WORKFLOW.md).
 
-Verification completed locally: **374 Python tests passed**, with 34 skipped
+For the initial V9 release, verification completed locally: **374 Python tests passed**, with 34 skipped
 (30 opt-in local PostgreSQL tests plus four legacy live tests). All **30 local
 PostgreSQL tests passed separately**, against disposable databases restricted
 to a local socket. **25 JavaScript tests passed**. These local tests used isolated

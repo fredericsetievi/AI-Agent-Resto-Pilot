@@ -1,11 +1,13 @@
 # Stock usage, sales, and order planning
 
 Deployment status, 2026-10-29: the dashboard inventory feature and
-[WhatsApp extension](WHATSAPP_INVENTORY.md) are live as Atoms V9 on the existing
+[WhatsApp extension](WHATSAPP_INVENTORY.md) are live as Atoms V10 on the existing
 RestoPilot domain. Migration0004 was already present and verified rather than
-rerun; additive migration0005 was explicitly applied. Public health, auth,
-inventory readback and operation review/retry/cancel checks passed without
-changing stock or purchases.
+rerun; additive migration0005 was explicitly applied for V9. V10 fixes photo-date
+clarification and reuses provider connections; no migration was needed or run.
+Public health, auth and inventory readback passed with protected business data
+matching pre-release fingerprints. The earlier V9 review/retry/cancel checks
+also preserved stock and purchases.
 
 The Inventory page closes the receipt-to-stock loop. Purchases received and approved through WhatsApp or the dashboard add stock as before. These new owner tools record what happens afterwards; the server stores them in the same restaurant ledger.
 

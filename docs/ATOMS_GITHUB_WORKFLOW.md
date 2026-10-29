@@ -51,6 +51,9 @@ unrequested deployments. Collaborators use their own authorized accounts.
    external App Viewer origin for health/readiness, signed-out401, normal owner
    login and inventory readback. Localhost success alone is insufficient. Inspect
    the UI and verify that the saved version contains the intended release.
+   Read the current App Viewer origin again after a version is saved: earlier
+   preview aliases can retire. V10 used a version-specific `-v10-dev.dev.atoms.dev`
+   host after the earlier `-preview.app.atoms.dev` address stopped responding.
    Atoms normally saves/builds a version when the deployment task finishes;
    inspect its real status rather than repeatedly searching for a save tool.
 7. Use **Update** to publish that verified version on the same domain, preserving
