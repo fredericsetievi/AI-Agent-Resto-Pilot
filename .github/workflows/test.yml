@@ -2,14 +2,28 @@ name: Local demo checks
 on:
   push:
   pull_request:
+concurrency:
+  # A fast push series replaces the run for the same branch/PR instead of
+  # queueing one runner per push.
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    # The full suite takes minutes locally; a hung test must not burn the
+    # default 6-hour runner limit.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the local development version, 3.11 the Atoms runtime.
+        python-version: ['3.10', '3.11']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
           cache: pip
       - uses: actions/setup-node@v4
         with:
