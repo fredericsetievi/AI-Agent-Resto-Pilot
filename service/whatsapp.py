@@ -403,6 +403,9 @@ _SUPPLIER_DI_TAIL = re.compile(r"(?i)\bdi\s+(.{1,100})")
 # stock. The keyword plus the purchase-verb guard keep the two intents apart.
 _STOCK_QUESTION = re.compile(r"(?i)\b(?:berapa|sisa|tersisa|sisanya|stok|stock|tinggal)\b")
 _PURCHASE_INTENT = re.compile(r"(?i)\b(?:beli|belikan|beliin|catat|pesankan|pesan|order)\b")
+# Public alias: the data-QA detectors reuse the same purchase-verb guard so a
+# purchase note can never be mistaken for a question about past spending.
+PURCHASE_INTENT = _PURCHASE_INTENT
 
 
 def is_stock_question(text):

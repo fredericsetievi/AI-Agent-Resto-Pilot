@@ -39,6 +39,8 @@ from .audio import (
 )
 from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
 from .pg_store import PostgresStore
+from .data_qa import build_answer as build_data_answer
+from .data_qa import phrase_data_answer
 from .extraction import extract_purchase
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .notifications import build_alert_text, phrase_alert
@@ -371,14 +373,34 @@ def create_app(
         return extracted
 
     async def build_stock_answer(text, restaurant_id):
-        """Answer a stock question from the inventory ledger, never the model.
+        """Answer data questions (spending, prices, stock) from the ledgers.
 
+        Spending and price questions are checked first, then stock questions.
         Facts are scoped to the asking restaurant before anything reaches the
         model; with the stock flag on, the model only rephrases those facts
         and any configuration, transport, or validation problem keeps the
-        deterministic text. Returns None when the message is not a stock
-        question, leaving the purchase flow alone.
+        deterministic text. Returns None when the message is none of them,
+        leaving the purchase flow alone.
         """
+        data = store.data_facts(text, restaurant_id)
+        if data is not None:
+            if not data["facts"]:
+                return {"body": data["empty_text"]}
+            reply = build_data_answer(data["facts"])
+            if stock_llm_enabled and vision_api_key:
+                try:
+                    reply = await phrase_data_answer(
+                        data["question"],
+                        data["facts"],
+                        store.enabled_rules_text(restaurant_id),
+                        api_key=vision_api_key,
+                        model=text_llm_model,
+                        base_url=vision_base_url,
+                        client=stock_llm_http_client,
+                    )
+                except (StepFunTextError, ValueError) as exc:
+                    logger.warning("Data answer phrasing failed; keeping the deterministic reply: %s", exc)
+            return {"body": reply}
         facts = store.stock_facts(text, restaurant_id)
         if facts is None:
             return None

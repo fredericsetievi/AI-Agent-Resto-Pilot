@@ -20,6 +20,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .extraction import catalog_aliases, extract_purchase, normalize_item
+from .data_qa import is_price_question, is_spend_question, price_fact, spend_fact
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup, parse_remove_item, stock_reply, weekly_summary_reply
 
 
@@ -705,6 +706,53 @@ class Store:
         with self.transaction() as conn:
             row = conn.execute("SELECT name FROM restaurants WHERE id=?", (restaurant_id,)).fetchone()
         return row[0] if row else None
+
+    def data_facts(self, text, restaurant_id):
+        """Facts for spending and price questions, read only from the ledger.
+
+        Spend questions return the weekly summary totals; price questions
+        return per-ingredient last/previous unit prices with the computed
+        move. Detection is keyword-based with the same purchase-verb guard as
+        stock questions, so a purchase note never becomes a question. Facts
+        carry `_require` patterns that lock the exact figures into any model
+        rephrasing. Returns None when the message is neither kind.
+        """
+        if not restaurant_id:
+            return None
+        if is_price_question(text):
+            named = self._stock_ingredient_ids(text, restaurant_id)
+            if not named:
+                return None
+            catalog = self._catalog_for(restaurant_id)
+            with self.transaction() as conn:
+                history = {}
+                for row in conn.execute("SELECT body, created_at FROM purchases WHERE restaurant_id=? ORDER BY created_at, id", (restaurant_id,)):
+                    purchase = json.loads(row["body"])
+                    for item in purchase.get("items") or []:
+                        ingredient_id = item.get("ingredient_id")
+                        price = item.get("unit_price_idr")
+                        # Ledger stores prices as digit strings; accept both shapes.
+                        if isinstance(price, str) and price.isdigit():
+                            price = int(price)
+                        if ingredient_id in named and isinstance(price, int) and not isinstance(price, bool) and price > 0:
+                            history.setdefault(ingredient_id, []).append(
+                                {"unit_price_idr": price, "created_at": row["created_at"], "supplier": purchase.get("supplier")})
+            facts = []
+            for ingredient_id in named:
+                ingredient = catalog["by_id"].get(ingredient_id)
+                fact = price_fact(ingredient["name"], ingredient["unit"], history.get(ingredient_id, [])) if ingredient else None
+                if fact:
+                    facts.append(fact)
+            return {"question": str(text).strip(), "facts": facts} if facts else None
+        if is_spend_question(text):
+            with self.transaction() as conn:
+                summary = self._weekly_summary(conn, SUMMARY_WINDOW_DAYS, restaurant_id)
+            fact = spend_fact(summary, SUMMARY_WINDOW_DAYS)
+            if fact is None:
+                return {"question": str(text).strip(), "facts": [],
+                        "empty_text": f"Belum ada pembelian tercatat dalam {SUMMARY_WINDOW_DAYS} hari terakhir."}
+            return {"question": str(text).strip(), "facts": [fact]}
+        return None
 
     def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, platform="whatsapp"):
         """Persist inbound, decision/ledger, outbound and dedupe in one commit.
