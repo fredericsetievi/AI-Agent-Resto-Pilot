@@ -47,6 +47,7 @@ MAX_TRANSCRIPT_CHARS = 10_000
 MAX_RULES_PER_RESTAURANT = 20
 RULE_MAX_CHARS = 500
 PROACTIVE_COOLDOWN_HOURS = 24
+PLATFORMS = ("whatsapp", "telegram")
 SCHEMA_VERSION = "2"
 PBKDF2_ITERATIONS = 200_000
 SESSION_TTL = timedelta(days=7)
@@ -86,6 +87,14 @@ def validate_phone_number(phone):
     if not _PHONE.fullmatch(phone):
         raise DomainError("invalid_phone_number", "WhatsApp numbers use digits only, country code first (e.g. 628123456789).", 422)
     return phone
+
+
+def validate_platform(platform):
+    """A link binds one phone to one messaging platform."""
+    platform = str(platform or "whatsapp").strip().casefold()
+    if platform not in PLATFORMS:
+        raise DomainError("invalid_platform", f"Platform must be one of: {', '.join(PLATFORMS)}.", 422)
+    return platform
 
 
 def validate_username(username):
@@ -237,7 +246,7 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS restaurants (id TEXT PRIMARY KEY, name TEXT NOT NULL, address TEXT, created_at TEXT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT COLLATE NOCASE NOT NULL UNIQUE, password_hash TEXT NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','owner')), restaurant_id TEXT REFERENCES restaurants(id), created_at TEXT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, expires_at TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS whatsapp_links (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), phone TEXT NOT NULL UNIQUE, label TEXT, created_at TEXT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS whatsapp_links (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), phone TEXT NOT NULL, platform TEXT NOT NULL DEFAULT 'whatsapp', label TEXT, created_at TEXT NOT NULL, UNIQUE(phone, platform))",
                 "CREATE TABLE IF NOT EXISTS drafts (id TEXT PRIMARY KEY, version INTEGER NOT NULL CHECK(version>0), status TEXT NOT NULL, body TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
                 "CREATE TABLE IF NOT EXISTS purchases (id TEXT PRIMARY KEY, draft_id TEXT NOT NULL UNIQUE REFERENCES drafts(id), supplier TEXT, created_at TEXT NOT NULL, body TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
                 "CREATE TABLE IF NOT EXISTS inventory (restaurant_id TEXT NOT NULL DEFAULT 'demo-resto', ingredient_id TEXT NOT NULL, quantity TEXT NOT NULL, PRIMARY KEY(restaurant_id, ingredient_id))",
@@ -257,6 +266,7 @@ class Store:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(whatsapp_threads)")}
             if "pending_followup" not in columns:
                 conn.execute("ALTER TABLE whatsapp_threads ADD COLUMN pending_followup TEXT")
+            self._migrate_platform_links(conn)
             self._migrate_tenants(conn)
             self._ensure_demo_tenant(conn)
             if not conn.execute("SELECT 1 FROM metadata WHERE key='initialized'").fetchone():
@@ -266,6 +276,26 @@ class Store:
                     self._seed(conn)
                 conn.execute("INSERT INTO metadata VALUES ('initialized', ?)", (now(),))
             conn.execute("INSERT INTO metadata VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (SCHEMA_VERSION,))
+
+    def _migrate_platform_links(self, conn):
+        """v? databases keyed links by phone only: rebuild with (phone, platform).
+
+        One number may now serve WhatsApp and Telegram separately (even for
+        different restaurants); every pre-platform row was a WhatsApp number.
+        """
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(whatsapp_links)")}
+        if "platform" in columns:
+            return
+        conn.execute("ALTER TABLE whatsapp_links RENAME TO whatsapp_links_legacy")
+        conn.execute(
+            "CREATE TABLE whatsapp_links (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), "
+            "phone TEXT NOT NULL, platform TEXT NOT NULL DEFAULT 'whatsapp', label TEXT, created_at TEXT NOT NULL, UNIQUE(phone, platform))"
+        )
+        conn.execute(
+            "INSERT INTO whatsapp_links (id, restaurant_id, phone, platform, label, created_at) "
+            "SELECT id, restaurant_id, phone, 'whatsapp', label, created_at FROM whatsapp_links_legacy"
+        )
+        conn.execute("DROP TABLE whatsapp_links_legacy")
 
     def _migrate_tenants(self, conn):
         """v1 databases predate restaurants: stamp legacy rows into the demo tenant.
@@ -676,15 +706,18 @@ class Store:
             row = conn.execute("SELECT name FROM restaurants WHERE id=?", (restaurant_id,)).fetchone()
         return row[0] if row else None
 
-    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None):
+    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, platform="whatsapp"):
         """Persist inbound, decision/ledger, outbound and dedupe in one commit.
 
-        The WhatsApp allowlist is the tenant gate: a sender's phone number must
-        be linked to exactly one restaurant, and everything this message does —
-        drafts, approval, summaries — is scoped to that restaurant.
-        Unregistered senders get a polite rejection and an audit row for the
-        admin console; their message is never processed.
+        The allowlist is the tenant gate: a sender must be linked to exactly
+        one restaurant on the platform they are writing from — the same
+        digits on WhatsApp and Telegram may belong to different restaurants —
+        and everything this message does — drafts, approval, summaries — is
+        scoped to that restaurant. Unregistered senders get a polite
+        rejection and an audit row for the admin console; their message is
+        never processed.
         """
+        platform = validate_platform(platform)
         channel = channel or transport
         extracted_photo = payload.get("extracted")
         source_label = payload.get("source_label") or "Foto nota WhatsApp"
@@ -712,7 +745,7 @@ class Store:
                 if prior["fingerprint"] != fingerprint:
                     raise DomainError("event_conflict", "This message event was already used for different content or sender.")
                 return json.loads(prior["response"])
-            link = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=?", (payload["sender"],)).fetchone()
+            link = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=? AND platform=?", (payload["sender"], platform)).fetchone()
             linked = link["restaurant_id"] if link else None
             if restaurant_id is not None and linked != restaurant_id:
                 # Simulator callers may only speak as one of their own numbers.
@@ -1184,7 +1217,7 @@ class Store:
             purchase_days = [datetime.fromisoformat(row["created_at"]).astimezone(RESTAURANT_TIMEZONE).date() for row in purchases]
             return {
                 "restaurant": dict(restaurant),
-                "whatsapp_numbers": [dict(row) for row in conn.execute("SELECT phone, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))],
+                "whatsapp_numbers": [dict(row) for row in conn.execute("SELECT phone, platform, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))],
                 "mode": {"transport": "manual", "extraction": "rules", "storage": "sqlite", "identity": "session"},
                 "metrics": {"purchases_today_idr": sum(row["total_idr"] for row, day in zip(purchases, purchase_days) if day == today),
                             "purchases_yesterday_idr": sum(row["total_idr"] for row, day in zip(purchases, purchase_days) if day == today - timedelta(days=1)),
@@ -1242,18 +1275,18 @@ class Store:
 
     # ---- WhatsApp allowlist: numbers to restaurants ------------------------
 
-    def restaurant_for_sender(self, phone):
-        """The {"id", "name"} of the restaurant a WhatsApp number is linked to, or None."""
+    def restaurant_for_sender(self, phone, platform="whatsapp"):
+        """The {"id", "name"} of the restaurant a platform sender is linked to, or None."""
         with self.transaction() as conn:
             row = conn.execute(
-                "SELECT l.restaurant_id, r.name FROM whatsapp_links l JOIN restaurants r ON r.id=l.restaurant_id WHERE l.phone=?",
-                (str(phone or "").strip(),),
+                "SELECT l.restaurant_id, r.name FROM whatsapp_links l JOIN restaurants r ON r.id=l.restaurant_id WHERE l.phone=? AND l.platform=?",
+                (str(phone or "").strip(), validate_platform(platform)),
             ).fetchone()
         return {"id": row["restaurant_id"], "name": row["name"]} if row else None
 
     def linked_numbers(self, restaurant_id):
         with self.transaction() as conn:
-            return [dict(row) for row in conn.execute("SELECT phone, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))]
+            return [dict(row) for row in conn.execute("SELECT phone, platform, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))]
 
     def catalog_list(self, restaurant_id):
         """This restaurant's catalog entries, for rule parsing and alerts."""
@@ -1266,7 +1299,7 @@ class Store:
         if not row:
             raise DomainError("not_found", "Restaurant not found.", 404)
         detail = dict(row)
-        detail["whatsapp_numbers"] = [dict(item) for item in conn.execute("SELECT phone, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))]
+        detail["whatsapp_numbers"] = [dict(item) for item in conn.execute("SELECT phone, platform, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))]
         detail["users"] = [dict(item) for item in conn.execute("SELECT username, display_name, role, created_at FROM users WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))]
         detail["pending_drafts"] = conn.execute("SELECT COUNT(*) FROM drafts WHERE restaurant_id=? AND status IN ('pending_approval','needs_clarification')", (restaurant_id,)).fetchone()[0]
         detail["recorded_purchases"] = conn.execute("SELECT COUNT(*) FROM purchases WHERE restaurant_id=?", (restaurant_id,)).fetchone()[0]
@@ -1286,7 +1319,7 @@ class Store:
         def action(conn):
             if conn.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone():
                 raise DomainError("username_taken", "That owner username is already in use.", 409)
-            if phone and conn.execute("SELECT 1 FROM whatsapp_links WHERE phone=?", (phone,)).fetchone():
+            if phone and conn.execute("SELECT 1 FROM whatsapp_links WHERE phone=? AND platform='whatsapp'", (phone,)).fetchone():
                 raise DomainError("phone_already_linked", "That WhatsApp number is already linked to a restaurant.", 409)
             restaurant_id = uuid.uuid4().hex
             conn.execute("INSERT INTO restaurants (id, name, address, created_at) VALUES (?, ?, ?, ?)", (restaurant_id, name, address, now()))
@@ -1329,35 +1362,37 @@ class Store:
 
     def add_whatsapp_number(self, restaurant_id, key, payload):
         phone = validate_phone_number(payload.get("whatsapp_number"))
+        platform = validate_platform(payload.get("platform"))
         label = str(payload.get("label") or "").strip()[:100] or None
 
         def action(conn):
             if not conn.execute("SELECT 1 FROM restaurants WHERE id=?", (restaurant_id,)).fetchone():
                 raise DomainError("not_found", "Restaurant not found.", 404)
-            existing = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=?", (phone,)).fetchone()
+            existing = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=? AND platform=?", (phone, platform)).fetchone()
             if existing:
                 if existing["restaurant_id"] == restaurant_id:
-                    raise DomainError("phone_already_linked", "That WhatsApp number is already linked to this restaurant.", 409)
-                raise DomainError("phone_already_linked", "That WhatsApp number is already linked to another restaurant.", 409)
-            conn.execute("INSERT INTO whatsapp_links (id, restaurant_id, phone, label, created_at) VALUES (?, ?, ?, ?, ?)", (uuid.uuid4().hex, restaurant_id, phone, label, now()))
-            self._audit(conn, "whatsapp_number_linked", f"WhatsApp number {phone} linked to this restaurant.", restaurant_id)
+                    raise DomainError("phone_already_linked", f"That {platform} sender is already linked to this restaurant.", 409)
+                raise DomainError("phone_already_linked", f"That {platform} sender is already linked to another restaurant.", 409)
+            conn.execute("INSERT INTO whatsapp_links (id, restaurant_id, phone, platform, label, created_at) VALUES (?, ?, ?, ?, ?, ?)", (uuid.uuid4().hex, restaurant_id, phone, platform, label, now()))
+            self._audit(conn, "sender_linked", f"{platform} sender {phone} linked to this restaurant.", restaurant_id)
             return self._restaurant_detail(conn, restaurant_id)
 
-        return self._idempotent(key, f"admin:add_number:{restaurant_id}", {"whatsapp_number": phone, "label": label}, action)
+        return self._idempotent(key, f"admin:add_number:{restaurant_id}", {"whatsapp_number": phone, "platform": platform, "label": label}, action)
 
-    def remove_whatsapp_number(self, restaurant_id, phone, key):
+    def remove_whatsapp_number(self, restaurant_id, phone, key, platform="whatsapp"):
         phone = validate_phone_number(phone)
+        platform = validate_platform(platform)
 
         def action(conn):
-            changed = conn.execute("DELETE FROM whatsapp_links WHERE restaurant_id=? AND phone=?", (restaurant_id, phone)).rowcount
+            changed = conn.execute("DELETE FROM whatsapp_links WHERE restaurant_id=? AND phone=? AND platform=?", (restaurant_id, phone, platform)).rowcount
             if changed != 1:
-                raise DomainError("not_found", "That WhatsApp number is not linked to this restaurant.", 404)
+                raise DomainError("not_found", f"That {platform} sender is not linked to this restaurant.", 404)
             # Threads keep their restaurant binding; the number simply stops
             # being accepted at the gate until it is linked again.
-            self._audit(conn, "whatsapp_number_unlinked", f"WhatsApp number {phone} unlinked; its messages are no longer processed.", restaurant_id)
+            self._audit(conn, "sender_unlinked", f"{platform} sender {phone} unlinked; its messages are no longer processed.", restaurant_id)
             return self._restaurant_detail(conn, restaurant_id)
 
-        return self._idempotent(key, f"admin:remove_number:{restaurant_id}:{phone}", {}, action)
+        return self._idempotent(key, f"admin:remove_number:{restaurant_id}:{platform}:{phone}", {}, action)
 
     def reset_owner_password(self, restaurant_id, key, payload):
         username = validate_username(payload.get("username"))

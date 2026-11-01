@@ -186,20 +186,23 @@ def test_proactive_check_sends_via_telegram_then_goes_quiet(tmp_path):
     admin = TestClient(client.app, base_url="http://127.0.0.1")
     login_admin(admin)
     admin.post(f"/v1/admin/restaurants/{TENANT}/numbers", headers={"Idempotency-Key": uuid4().hex},
-               json={"whatsapp_number": "987654321", "label": "Owner chat"})
+               json={"whatsapp_number": "987654321", "platform": "telegram", "label": "Owner chat"})
 
     result = client.post("/v1/notifications/check").json()["data"]
     assert result["dry_run"] is False
-    # Both linked numbers receive it: the seeded demo number plus the chat id.
-    assert {entry["sender"] for entry in result["sent"]} == {"628123456789", "987654321"}
-    assert all(entry["channel"] == "telegram" and entry["ok"] for entry in result["sent"])
+    # Routing follows each link's platform: the seeded WhatsApp number has no
+    # Meta configuration here (recorded, not sent), the Telegram link sends.
+    by_sender = {entry["sender"]: entry for entry in result["sent"]}
+    assert set(by_sender) == {"628123456789", "987654321"}
+    assert by_sender["628123456789"]["channel"] is None and by_sender["628123456789"]["ok"] is False
+    assert by_sender["987654321"]["channel"] == "telegram" and by_sender["987654321"]["ok"] is True
     assert "Notifikasi stok rendah" in result["body"]
-    assert len(fake.calls) == 2 and {call["json"]["chat_id"] for call in fake.calls} == {"628123456789", "987654321"}
+    assert len(fake.calls) == 1 and fake.calls[0]["json"]["chat_id"] == "987654321"
 
     # The sweep just alerted everything: an immediate second check stays quiet.
     quiet = client.post("/v1/notifications/check").json()["data"]
     assert quiet["candidates"] == [] and quiet["body"] is None
-    assert len(fake.calls) == 2  # no new sends on the quiet check
+    assert len(fake.calls) == 1  # no new sends on the quiet check
 
 
 def test_a_fabricated_llm_alert_falls_back_to_the_database_text(tmp_path):

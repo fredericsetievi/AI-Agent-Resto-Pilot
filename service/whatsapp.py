@@ -388,8 +388,8 @@ HELP_REPLY = (
 # Sent to WhatsApp numbers the admin has not linked to any restaurant. Nothing
 # about the sender's message is processed, stored as a draft, or answered.
 UNREGISTERED_REPLY = (
-    "Maaf, nomor WhatsApp ini belum terdaftar di RestoPilot. "
-    "Minta admin untuk menghubungkan nomor Anda dengan resto terlebih dahulu."
+    "Maaf, nomor/chat ini belum terdaftar di RestoPilot. "
+    "Minta admin untuk menghubungkannya dengan resto terlebih dahulu."
 )
 _PAYMENT_PAID = re.compile(r"(?i)\b(?:lunas(?:\s+semua)?|paid|sudah\s+(?:bayar|dibayar)|udah\s+(?:bayar|lunas))\b")
 _PAYMENT_UNPAID = re.compile(r"(?i)\b(?:belum\s+(?:lunas|bayar|dibayar)|utang|hutang|kredit|credit)\b")

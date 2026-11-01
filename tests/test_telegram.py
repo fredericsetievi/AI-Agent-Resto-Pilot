@@ -63,8 +63,8 @@ def admin_client(tmp_path, fake=None, **kwargs):
 
 
 def link_chat_to_demo(client, chat_id=CHAT_ID):
-    """Register the chat id onto the seeded demo restaurant, like a number."""
-    response = client.post(f"/v1/admin/restaurants/{RESTAURANT['id']}/numbers", headers={"Idempotency-Key": uuid4().hex}, json={"whatsapp_number": chat_id, "label": "Owner chat"})
+    """Register the chat id onto the seeded demo restaurant, on the Telegram platform."""
+    response = client.post(f"/v1/admin/restaurants/{RESTAURANT['id']}/numbers", headers={"Idempotency-Key": uuid4().hex}, json={"whatsapp_number": chat_id, "platform": "telegram", "label": "Owner chat"})
     assert response.status_code == 200, response.text
 
 

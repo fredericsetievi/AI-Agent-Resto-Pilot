@@ -149,6 +149,7 @@ class RestaurantUpdate(Model):
 
 class WhatsAppNumber(Model):
     whatsapp_number: PhoneNumber
+    platform: Literal["whatsapp", "telegram"] = "whatsapp"
     label: ShortText | None = None
 
 
@@ -426,16 +427,17 @@ def create_app(
                 logger.warning("StepFun stock alert phrasing failed; keeping the deterministic alert: %s", exc)
         sent = []
         if not dry_run:
-            # One channel per sender: Meta when configured, else Telegram.
-            use_meta = bool(meta_access_token and meta_phone_number_id)
-            use_telegram = bool(telegram_bot_token)
-            for number in store.linked_numbers(restaurant_id):
-                phone = number["phone"]
-                channel = "whatsapp" if use_meta else "telegram" if use_telegram else None
+            # Each linked sender is reached on the platform it was linked to:
+            # the same number may appear twice, once per platform.
+            meta_ready = bool(meta_access_token and meta_phone_number_id)
+            telegram_ready = bool(telegram_bot_token)
+            for link in store.linked_numbers(restaurant_id):
+                phone, platform = link["phone"], link["platform"]
+                channel = platform if (platform == "telegram" and telegram_ready) or (platform == "whatsapp" and meta_ready) else None
                 if channel is None:
-                    logger.warning("Proactive alert for %s has no configured channel; recording only.", restaurant_id)
+                    logger.warning("Proactive alert for %s: %s link has no configured channel; recording only.", restaurant_id, platform)
                     store.record_proactive_message(restaurant_id, "proactive:" + restaurant_id, phone, "proactive", body_text, "proactive_no_channel")
-                    sent.append({"sender": phone, "channel": None, "ok": False})
+                    sent.append({"sender": phone, "platform": platform, "channel": None, "ok": False})
                     continue
                 message_id = store.record_proactive_message(restaurant_id, "proactive:" + restaurant_id, phone, "proactive", body_text, "proactive_pending")
                 try:
@@ -445,12 +447,12 @@ def create_app(
                     else:
                         await send_telegram_text(telegram_bot_token, phone, body_text, api_base=telegram_api_base, client=telegram_http_client)
                 except (MetaWhatsAppError, TelegramError, ValueError) as exc:
-                    logger.warning("Proactive send to %s failed: %s", phone, exc)
+                    logger.warning("Proactive send to %s (%s) failed: %s", phone, platform, exc)
                     await run_in_threadpool(store.set_whatsapp_message_status, message_id, "proactive_failed")
-                    sent.append({"sender": phone, "channel": channel, "ok": False})
+                    sent.append({"sender": phone, "platform": platform, "channel": channel, "ok": False})
                 else:
                     await run_in_threadpool(store.set_whatsapp_message_status, message_id, "proactive_sent")
-                    sent.append({"sender": phone, "channel": channel, "ok": True})
+                    sent.append({"sender": phone, "platform": platform, "channel": channel, "ok": True})
             store.mark_proactive_alerts(restaurant_id, candidates)
         return {"restaurant_id": restaurant_id, "candidates": candidates, "body": body_text, "sent": sent, "dry_run": bool(dry_run)}
     app.state.store = store
@@ -675,6 +677,20 @@ def create_app(
     async def notifications_check(dry_run: bool = False, actor=Depends(owner_actor)):
         return {"data": await run_proactive_check(actor["restaurant_id"], dry_run=dry_run)}
 
+    # ---- Owner-managed channel links: one phone may serve many platforms ----
+
+    @app.get("/v1/links")
+    def links_list(actor=Depends(owner_actor)):
+        return {"data": {"links": store.linked_numbers(actor["restaurant_id"])}}
+
+    @app.post("/v1/links", status_code=201)
+    def links_add(body: WhatsAppNumber, actor=Depends(owner_actor), idempotency_key=Depends(key)):
+        return {"data": store.add_whatsapp_number(actor["restaurant_id"], idempotency_key, body.model_dump())}
+
+    @app.delete("/v1/links/{phone}")
+    def links_remove(phone: str, actor=Depends(owner_actor), idempotency_key=Depends(key), platform: Literal["whatsapp", "telegram"] = "whatsapp"):
+        return {"data": store.remove_whatsapp_number(actor["restaurant_id"], phone, idempotency_key, platform=platform)}
+
     def csv_attachment(rows, filename):
         buffer = io.StringIO()
         csv.writer(buffer).writerows(rows)
@@ -733,8 +749,8 @@ def create_app(
         return {"data": store.add_whatsapp_number(restaurant_id, idempotency_key, body.model_dump())}
 
     @app.delete("/v1/admin/restaurants/{restaurant_id}/numbers/{phone}")
-    def admin_remove_number(restaurant_id: str, phone: str, actor=Depends(admin_actor), idempotency_key=Depends(key)):
-        return {"data": store.remove_whatsapp_number(restaurant_id, phone, idempotency_key)}
+    def admin_remove_number(restaurant_id: str, phone: str, actor=Depends(admin_actor), idempotency_key=Depends(key), platform: Literal["whatsapp", "telegram"] = "whatsapp"):
+        return {"data": store.remove_whatsapp_number(restaurant_id, phone, idempotency_key, platform=platform)}
 
     @app.post("/v1/admin/restaurants/{restaurant_id}/reset-owner-password")
     def admin_reset_owner_password(restaurant_id: str, body: OwnerPasswordReset, actor=Depends(admin_actor), idempotency_key=Depends(key)):
@@ -876,6 +892,7 @@ def create_app(
                 channel=LIVE + ":" + meta_phone_number_id,
                 outbound_status=OUTBOUND_PENDING,
                 restaurant_id=restaurant_id,
+                platform="whatsapp",
             )
             outbound = result["messages"][-1]
             claimed = await run_in_threadpool(
@@ -947,9 +964,9 @@ def create_app(
         bot_channel = "telegram:" + bot_id_from_token(telegram_bot_token)
         for message in messages:
             payload = {key: message[key] for key in ("sender", "text", "event_id", "num_media")}
-            # The same allowlist as WhatsApp: an unregistered Telegram chat
-            # costs nothing to process and learns nothing.
-            sender_restaurant = await run_in_threadpool(store.restaurant_for_sender, message["sender"])
+            # The same allowlist as WhatsApp, scoped to the Telegram platform:
+            # the same digits may belong to another restaurant on WhatsApp.
+            sender_restaurant = await run_in_threadpool(store.restaurant_for_sender, message["sender"], "telegram")
             restaurant_id = sender_restaurant["id"] if sender_restaurant else None
             if message.get("media_kind") == "image" and vision_api_key and sender_restaurant and message.get("media_id"):
                 try:
@@ -1010,6 +1027,7 @@ def create_app(
                 channel=bot_channel,
                 outbound_status=TG_OUTBOUND_PENDING,
                 restaurant_id=restaurant_id,
+                platform="telegram",
             )
             outbound = result["messages"][-1]
             claimed = await run_in_threadpool(

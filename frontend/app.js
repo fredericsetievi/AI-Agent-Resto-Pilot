@@ -7,9 +7,9 @@ const rupiah = value => value == null ? '—' : `Rp${new Intl.NumberFormat('id-I
 const number = value => value == null ? '—' : new Intl.NumberFormat('id-ID', {maximumFractionDigits: 6}).format(Number(value));
 const date = value => value ? new Intl.DateTimeFormat('en-GB', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jakarta'}).format(new Date(value)) + ' WIB' : '';
 const icons = {cabai:'🌶',telur:'🥚',beras:'🌾',minyak:'🫙',bawang:'🧅'};
-const titles = {overview:['Your kitchen, in view.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for.','Approved purchases and their source records. Payment status is separate.'],inventory:['Know what came in.','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],rules:['Peraturan asisten resto Anda.','Aturan khusus per resto — asisten menaatinya, resto lain tidak terpengaruh.'],activity:['The story behind each record.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['A WhatsApp flow you can rehearse.','A persistent local conversation, from purchase note to owner decision.']};
+const titles = {overview:['Your kitchen, in view.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for.','Approved purchases and their source records. Payment status is separate.'],inventory:['Know what came in.','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],rules:['Peraturan asisten resto Anda.','Aturan khusus per resto — asisten menaatinya, resto lain tidak terpengaruh.'],links:['Hubungkan nomor/chat resto Anda.','Satu nomor bisa aktif di WhatsApp dan Telegram sekaligus — per resto.'],activity:['The story behind each record.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['A WhatsApp flow you can rehearse.','A persistent local conversation, from purchase note to owner decision.']};
 let WHATSAPP_SENDER = '';
-const state = {user:null, data:null, adminList:null, adminSelected:null, adminRejected:[], adminForms:{}, draft:null, page:'overview', dirty:false, busy:false, online:false, intakeKey:null, decisions:new Map(), mutationKeys:new Map(), refreshId:0, inlineDecisions:new Set(), whatsappMessages:[], whatsappDraft:null, whatsappResult:null, whatsappLoading:false, whatsappError:'', whatsappLoaded:false, whatsappPending:null, whatsappSending:false, whatsappNumber:'', rules:[], rulesLoaded:false, rulesBusy:false};
+const state = {user:null, data:null, adminList:null, adminSelected:null, adminRejected:[], adminForms:{}, draft:null, page:'overview', dirty:false, busy:false, online:false, intakeKey:null, decisions:new Map(), mutationKeys:new Map(), refreshId:0, inlineDecisions:new Set(), whatsappMessages:[], whatsappDraft:null, whatsappResult:null, whatsappLoading:false, whatsappError:'', whatsappLoaded:false, whatsappPending:null, whatsappSending:false, whatsappNumber:'', rules:[], rulesLoaded:false, rulesBusy:false, links:[], linksLoaded:false, linksBusy:false};
 
 async function api(path, {method='GET', body, key, timeout=15000} = {}) {
   const controller = new AbortController();
@@ -55,7 +55,7 @@ function renderAdminList() {
 function renderAdminDetail() {
   const resto=(state.adminList || []).find(item => item.id===state.adminSelected);
   if(!resto){location.hash='#admin';return;}
-  const numbers=resto.whatsapp_numbers.map(number => `<div class="number-row"><code>${e(number.phone)}</code><span>${e(number.label || '')}</span><span class="spacer"></span><button class="text-button danger" data-admin-action="remove-number" data-phone="${e(number.phone)}">Hapus</button></div>`).join('');
+  const numbers=resto.whatsapp_numbers.map(number => `<div class="number-row"><code>${e(number.phone)}</code><span class="badge ${number.platform==='telegram'?'amber':'green'}">${e(number.platform || 'whatsapp')}</span><span>${e(number.label || '')}</span><span class="spacer"></span><button class="text-button danger" data-admin-action="remove-number" data-phone="${e(number.phone)}" data-platform="${e(number.platform || 'whatsapp')}">Hapus</button></div>`).join('');
   const owners=resto.users.map(user => `<div class="number-row"><code>${e(user.username)}</code><span>${e(user.display_name)} · owner</span></div>`).join('');
   $('#content').innerHTML=`<button class="text-button" data-back-to="admin">← Semua resto</button><div class="admin-grid"><div class="column"><section class="panel"><div class="panel-heading"><div><h2>${e(resto.name)}</h2><p>${e(resto.address || 'Alamat belum diisi')}</p></div><button class="button mini" data-admin-action="edit-resto">Ubah info</button></div><div class="admin-list kv-list"><div><span>ID</span><span class="inline-id">${e(resto.id)}</span></div><div><span>Dibuat</span><span>${e(date(resto.created_at))}</span></div><div><span>Pembelian tercatat</span><span>${resto.recorded_purchases}</span></div><div><span>Draf menunggu</span><span>${resto.pending_drafts}</span></div></div></section><section class="panel"><div class="panel-heading"><div><h2>Nomor WhatsApp terhubung</h2><p>Hanya nomor di sini yang dapat mengirim pesan dan diproses sistem.</p></div><button class="button mini primary" data-admin-action="add-number">+ Nomor</button></div><div class="admin-list">${numbers || '<div class="empty">Belum ada nomor terhubung.</div>'}</div></section><section class="panel"><div class="panel-heading"><div><h2>Login pemilik</h2></div><button class="button mini" data-admin-action="reset-password">Reset password</button></div><div class="admin-list">${owners}</div></section></div><div class="column"><div class="readonly-note"><span aria-hidden="true">👁</span> Dashboard di bawah hanya-baca. Persetujuan pembelian tetap keputusan pemilik resto.</div><section class="panel" id="admin-overview-panel"><div class="loading-state"><span class="spinner"></span> Loading dashboard…</div></section></div></div><dialog id="admin-dialog" class="review-dialog"><div id="admin-dialog-content"></div></dialog>`;
   refreshAdminOverview();
@@ -86,10 +86,11 @@ async function adminAction(action, button) {
   try {
     if(action==='new-resto')return adminDialogForm('Resto baru', `<label for="f-name">Nama resto</label><input id="f-name" maxlength="200" required><label for="f-address">Alamat <span class="muted">(opsional)</span></label><input id="f-address" maxlength="200"><div class="form-grid"><div><label for="f-user">Username owner</label><input id="f-user" maxlength="50" required></div><div><label for="f-pass">Password owner</label><input id="f-pass" type="password" maxlength="200" required></div><div><label for="f-phone">Nomor WhatsApp pertama</label><input id="f-phone" placeholder="6281234567890"></div><div><label for="f-label">Label nomor</label><input id="f-label" maxlength="100"></div></div>`, 'create-resto');
     if(action==='edit-resto')return adminDialogForm('Ubah info resto', `<label for="f-name">Nama resto</label><input id="f-name" value="${e(resto.name)}" maxlength="200" required><label for="f-address">Alamat</label><input id="f-address" value="${e(resto.address || '')}" maxlength="200">`, 'update-resto');
-    if(action==='add-number')return adminDialogForm('Tambah nomor WhatsApp', `<label for="f-phone">Nomor (digit, kode negara di depan)</label><input id="f-phone" placeholder="6281234567890" required><label for="f-label">Label <span class="muted">(opsional)</span></label><input id="f-label" maxlength="100">`, 'add-number');
+    if(action==='add-number')return adminDialogForm('Hubungkan nomor/chat', `<label for="f-phone">Nomor / chat ID (digit, kode negara di depan)</label><input id="f-phone" placeholder="6281234567890 atau chat ID Telegram" required><label for="f-platform">Platform</label><select id="f-platform"><option value="whatsapp">WhatsApp</option><option value="telegram">Telegram</option></select><label for="f-label">Label <span class="muted">(opsional)</span></label><input id="f-label" maxlength="100">`, 'add-number');
     if(action==='remove-number'){
-      const response=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers/${encodeURIComponent(button.dataset.phone)}`,{method:'DELETE',key:crypto.randomUUID()});
-      replaceRestoInList(response);renderAdmin();toast('Nomor dihapus. Pesan dari nomor itu tidak lagi diproses.');return;
+      const platform=button.dataset.platform || 'whatsapp';
+      const response=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers/${encodeURIComponent(button.dataset.phone)}?platform=${encodeURIComponent(platform)}`,{method:'DELETE',key:crypto.randomUUID()});
+      replaceRestoInList(response);renderAdmin();toast('Koneksi dihapus. Pesan dari situ tidak lagi diproses.');return;
     }
     if(action==='reset-password')return adminDialogForm('Reset password owner', `<label for="f-user">Username owner</label><input id="f-user" value="${e(resto && resto.users[0] ? resto.users[0].username : '')}" maxlength="50" required><label for="f-pass">Password baru</label><input id="f-pass" type="password" maxlength="200" required>`, 'reset-password');
   } catch(error) { toast(error.message); }
@@ -106,7 +107,7 @@ document.addEventListener('submit',async event => {
     let detail;
     if(action==='create-resto')detail=await api('/v1/admin/restaurants',{method:'POST',body:{name:value('name'),address:value('address'),owner_username:value('user'),owner_password:value('pass'),whatsapp_number:value('phone'),number_label:value('label')}});
     else if(action==='update-resto')detail=await api(`/v1/admin/restaurants/${state.adminSelected}`,{method:'PATCH',body:{name:value('name'),address:value('address')}});
-    else if(action==='add-number')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers`,{method:'POST',body:{whatsapp_number:value('phone'),label:value('label')}});
+    else if(action==='add-number')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers`,{method:'POST',body:{whatsapp_number:value('phone'),platform:value('platform'),label:value('label')}});
     else if(action==='reset-password')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/reset-owner-password`,{method:'POST',body:{username:value('user'),new_password:value('pass')}});
     else return;
     replaceRestoInList(detail);
@@ -165,6 +166,7 @@ function renderIdentity() {
   $('#nav-approvals').hidden = isAdmin;
   $('#nav-whatsapp').hidden = isAdmin;
   $('#nav-rules').hidden = isAdmin;
+  $('#nav-links').hidden = isAdmin;
   $('#workspace-sub').textContent = isAdmin ? 'Semua resto' : 'Restaurant workspace';
 }
 function toast(message) { $('#toast').textContent=message; $('#toast').hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(() => $('#toast').hidden=true, 5500); }
@@ -297,9 +299,34 @@ function render() {
   if (page==='activity') html=`<section class="panel">${panelHeading('Activity history','Includes synthetic setup records. All new actions are persisted.')}${activityRows(state.data.activity)}</section>`;
   if (page==='whatsapp') html=whatsappPage();
   if (page==='rules') html=rulesPage();
+  if (page==='links') html=linksPage();
   $('#content').innerHTML=html;
   if(page==='whatsapp' && !state.whatsappLoaded && !state.whatsappLoading)loadWhatsAppMessages();
   if(page==='rules' && !state.rulesLoaded && !state.rulesBusy)loadRules();
+  if(page==='links' && !state.linksLoaded && !state.linksBusy)loadLinks();
+}
+
+function linksPage() {
+  const rows=state.links.map(link=>`<div class="admin-row"><div><code>${e(link.phone)}</code><small> · ${e(date(link.created_at))}${link.label?` · ${e(link.label)}`:''}</small></div><span class="badge ${link.platform==='telegram'?'amber':'green'}">${e(link.platform)}</span><span class="spacer"></span><button class="button mini" data-link-delete="${e(link.phone)}" data-link-platform="${e(link.platform)}">Putuskan</button></div>`).join('');
+  return `<section class="panel"><div class="panel-heading"><div><h2>Koneksi chat resto ini</h2><p>Hubungkan nomor/chat ke platform yang dipakai owner. Satu nomor boleh aktif di dua platform sekaligus; chat dari platform lain tidak diproses.</p></div></div><form id="links-form" class="whatsapp-composer"><label class="sr-only" for="links-phone">Nomor atau chat ID</label><input id="links-phone" placeholder="628123456789 atau chat ID Telegram" maxlength="15" required><label class="sr-only" for="links-platform">Platform</label><select id="links-platform" aria-label="Platform"><option value="whatsapp">WhatsApp</option><option value="telegram">Telegram</option></select><label class="sr-only" for="links-label">Label</label><input id="links-label" placeholder="Label (opsional)" maxlength="100"><button class="button primary" type="submit" ${state.linksBusy?'disabled':''}>Hubungkan</button></form><div id="links-error" class="notice error" role="alert" hidden></div><div class="admin-list">${rows || '<div class="empty"><strong>Belum ada koneksi.</strong>Hubungkan nomor WhatsApp atau chat Telegram agar pesan resto ini diproses.</div>'}</div><div class="panel-note">Notifikasi proaktif dikirim ke setiap koneksi sesuai platformnya masing-masing.</div></section>`;
+}
+async function loadLinks() {
+  if(state.linksBusy)return;state.linksBusy=true;
+  try { const data=await api('/v1/links'); state.links=data.links||[]; state.linksLoaded=true; if(state.page==='links')render(); }
+  catch(error) { toast('Gagal memuat koneksi: '+error.message); }
+  finally { state.linksBusy=false; }
+}
+async function addLink(phone, platform, label) {
+  if(state.linksBusy)return;state.linksBusy=true;showError('links-error','');
+  try { await api('/v1/links',{method:'POST',body:{whatsapp_number:phone,platform,label:label||null},key:crypto.randomUUID()}); state.linksLoaded=false; await loadLinks(); }
+  catch(error) { showError('links-error',error.message); }
+  finally { state.linksBusy=false; const button=document.querySelector('#links-form button[type="submit"]'); if(button)button.disabled=false; }
+}
+async function removeLink(phone, platform) {
+  if(state.linksBusy)return;state.linksBusy=true;
+  try { await api('/v1/links/'+encodeURIComponent(phone)+'?platform='+encodeURIComponent(platform),{method:'DELETE',key:crypto.randomUUID()}); state.linksLoaded=false; await loadLinks(); }
+  catch(error) { toast('Gagal memutus koneksi: '+error.message); }
+  finally { state.linksBusy=false; }
 }
 
 function rulesPage() {
@@ -490,6 +517,7 @@ document.addEventListener('click',event => {
   if(button.dataset.adminAction)adminAction(button.dataset.adminAction,button);
   if(button.dataset.ruleDelete)deleteRule(button.dataset.ruleDelete);
   if(button.dataset.ruleToggle)toggleRule(button.dataset.ruleToggle);
+  if(button.dataset.linkDelete)removeLink(button.dataset.linkDelete,button.dataset.linkPlatform);
 });
 document.addEventListener('submit',async event=>{
   if(event.target.id==='rules-form'){
@@ -497,6 +525,13 @@ document.addEventListener('submit',async event=>{
     const text=$('#rules-text').value.trim();if(!text)return;
     const button=document.querySelector('#rules-form button[type="submit"]');if(button)button.disabled=true;
     $('#rules-text').value='';await addRule(text);
+  }
+  if(event.target.id==='links-form'){
+    event.preventDefault();
+    const phone=$('#links-phone').value.trim();if(!phone)return;
+    const platform=$('#links-platform').value,label=$('#links-label').value.trim();
+    const button=document.querySelector('#links-form button[type="submit"]');if(button)button.disabled=true;
+    $('#links-phone').value='';$('#links-label').value='';await addLink(phone,platform,label);
   }
 });
 document.addEventListener('submit',event=>{if(event.target.id==='whatsapp-form'){event.preventDefault();sendWhatsAppMessage($('#whatsapp-text').value);}});
