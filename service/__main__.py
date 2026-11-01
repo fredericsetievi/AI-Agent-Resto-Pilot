@@ -35,6 +35,7 @@ SUPPORTED_ENV_KEYS = {
     "AUDIO_ASR_API_KEY",
     "AUDIO_ASR_MODEL",
     "LLM_STOCK_ANSWER",
+    "LLM_INTENT",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
     "TELEGRAM_API_BASE",
@@ -96,6 +97,7 @@ def main():
     custom_asr = bool(asr_api_key and asr_base_url)
     asr_model_setting = (asr_model_override if custom_asr else None) or setting("STEPFUN_ASR_MODEL")
     stock_llm_enabled = vision_api_key and (setting("LLM_STOCK_ANSWER") or "").strip().casefold() in {"1", "true", "yes", "on"}
+    intent_llm_enabled = vision_api_key and (setting("LLM_INTENT") or "").strip().casefold() in {"1", "true", "yes", "on"}
     telegram_settings = {
         "telegram_bot_token": setting("TELEGRAM_BOT_TOKEN"),
         "telegram_webhook_secret": setting("TELEGRAM_WEBHOOK_SECRET"),
@@ -128,6 +130,10 @@ def main():
         print(f"StepFun stock phrasing: enabled (model {text_llm_model or 'default'}; numbers stay from the database)")
     else:
         print("StepFun stock phrasing: disabled (set STEPFUN_API_KEY and LLM_STOCK_ANSWER=1; deterministic replies stay on)")
+    if intent_llm_enabled:
+        print(f"Intent routing: enabled (model {text_llm_model or 'default'}; exact commands stay first, purchases never routed)")
+    else:
+        print("Intent routing: disabled (set STEPFUN_API_KEY and LLM_INTENT=1)")
     uvicorn.run(
         create_app(
             str(args.db),
@@ -144,6 +150,7 @@ def main():
             text_llm_enabled=bool(text_llm_enabled),
             text_llm_model=text_llm_model,
             stock_llm_enabled=bool(stock_llm_enabled),
+            intent_llm_enabled=bool(intent_llm_enabled),
             proactive_check_interval_seconds=proactive_hours * 3600,
             **meta_settings,
             **telegram_settings,

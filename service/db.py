@@ -41,8 +41,8 @@ RESTAURANT_TIMEZONE = ZoneInfo("Asia/Jakarta")
 SUMMARY_COMMANDS = ("ringkas", "ringkasan", "summary")
 # Casual confirmations owners actually type; anything ambiguous falls through
 # to normal message handling instead of guessing.
-APPROVE_COMMANDS = frozenset({"ya", "y", "ya benar", "ok", "oke", "betul", "setuju", "sip", "approve"})
-REJECT_COMMANDS = frozenset({"batal", "cancel", "tidak", "jangan"})
+APPROVE_COMMANDS = frozenset({"ya", "y", "ya benar", "ya semua", "ok", "oke", "ok semua", "oke semua", "betul", "setuju", "setuju semua", "sip", "approve", "approved", "acc", "yes", "iya", "gas", "gaskan", "lanjut"})
+REJECT_COMMANDS = frozenset({"batal", "batalin", "cancel", "tidak", "tidak jadi", "gajadi", "gak jadi", "nggak jadi", "jangan", "no"})
 SUMMARY_WINDOW_DAYS = 7
 MAX_TRANSCRIPT_CHARS = 10_000
 MAX_RULES_PER_RESTAURANT = 20
@@ -783,6 +783,12 @@ class Store:
         extracted_text = payload.get("extracted_text")
         if not isinstance(extracted_text, dict) or not isinstance(extracted_text.get("items"), list) or not isinstance(extracted_text.get("warnings"), list):
             extracted_text = None
+        # A bounded intent route (off by default) may carry an approve/reject/
+        # summary hint for chatty messages the exact commands did not match;
+        # exact commands always win and every precondition is still enforced.
+        intent_hint = payload.get("intent_hint")
+        if intent_hint not in ("approve", "reject", "summary"):
+            intent_hint = None
         payload = {"sender": payload["sender"], "text": payload["text"], "event_id": payload.get("event_id"), "num_media": payload.get("num_media", 0)}
         event_id = payload["event_id"] or "sim:" + key
         fingerprint = hashlib.sha256(encode({"sender": payload["sender"], "text": payload["text"], "num_media": payload["num_media"]}).encode()).hexdigest()
@@ -857,11 +863,11 @@ class Store:
                         details.append(f"Penjual: {purchase['supplier']}{suffix}")
                     reply = "Oke, catatan diperbarui. " + " ".join(details) if details else FOLLOWUP_ACK
                     result["action"] = "purchase_updated"
-            elif command in APPROVE_COMMANDS or command in REJECT_COMMANDS:
+            elif command in APPROVE_COMMANDS or command in REJECT_COMMANDS or intent_hint in ("approve", "reject"):
                 if not draft:
                     reply = "Tidak ada draf aktif untuk nomor ini. Kirim rincian pembelian terlebih dahulu; YA tidak mencatat pembelian lain."
                     result["action"] = "no_active_draft"
-                elif command in REJECT_COMMANDS:
+                elif command in REJECT_COMMANDS or (intent_hint == "reject" and command not in APPROVE_COMMANDS):
                     draft = self._decide(conn, draft, {"expected_version": draft["version"], "decision": "reject", "received": False}, tenant)
                     thread.update(active_draft_id=None, active_version=None)
                     reply = f"Draf {draft['id'][:8]} dibatalkan. Pembelian dan stok tidak berubah."
@@ -884,7 +890,7 @@ class Store:
                     thread["pending_followup"] = draft["purchase_id"]
                     reply = confirmation + "\n" + PAYMENT_FOLLOWUP_PROMPT
                     result.update(action="approved", purchase_id=draft["purchase_id"])
-            elif command in SUMMARY_COMMANDS:
+            elif command in SUMMARY_COMMANDS or intent_hint == "summary":
                 # A read-only report: never creates or disturbs an active draft.
                 summary = self._weekly_summary(conn, SUMMARY_WINDOW_DAYS, tenant)
                 reply = weekly_summary_reply(summary, SUMMARY_WINDOW_DAYS)

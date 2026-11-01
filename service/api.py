@@ -42,6 +42,7 @@ from .pg_store import PostgresStore
 from .data_qa import build_answer as build_data_answer
 from .data_qa import phrase_data_answer
 from .extraction import extract_purchase
+from .intent_llm import classify_intent
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .notifications import build_alert_text, phrase_alert
 from .rules import effective_directives
@@ -249,6 +250,8 @@ def create_app(
     stock_llm_enabled=False,
     stock_llm_http_client=None,
     kitchen_filter_enabled=True,
+    intent_llm_enabled=False,
+    intent_llm_http_client=None,
     telegram_bot_token=None,
     telegram_webhook_secret=None,
     telegram_api_base=TELEGRAM_DEFAULT_API_BASE,
@@ -324,6 +327,34 @@ def create_app(
             logger.warning("StepFun text rescue failed; keeping the rules result: %s", exc)
             return extracted
         return rescued if rescued["items"] else extracted
+
+    def _no_purchase_signal(extracted):
+        """True when extraction read no usable purchase line from the message."""
+        items = extracted.get("items") or []
+        return all(item.get("ingredient_id") is None and item.get("quantity") is None and item.get("line_total_idr") is None for item in items)
+
+    async def maybe_intent_hint(text, extracted):
+        """Route a chatty message to approve/reject/summary when the words missed.
+
+        Strictly bounded: fires only with the flag on and only when extraction
+        found no purchase signal (a purchase note can never be reinterpreted);
+        an unclear answer, an error, or a disabled flag returns None and the
+        existing behavior stands untouched.
+        """
+        if not intent_llm_enabled or not vision_api_key or not _no_purchase_signal(extracted):
+            return None
+        try:
+            intent = await classify_intent(
+                text,
+                api_key=vision_api_key,
+                model=text_llm_model,
+                base_url=vision_base_url,
+                client=intent_llm_http_client,
+            )
+        except (StepFunTextError, ValueError) as exc:
+            logger.warning("Intent routing failed; keeping the default flow: %s", exc)
+            return None
+        return intent if intent in ("approve", "reject", "summary") else None
 
     async def filter_kitchen_items(extracted, restaurant_id):
         """Mark non-kitchen goods (odol, sikat gigi, sabun, ...) in an extraction.
@@ -671,8 +702,12 @@ def create_app(
             # inventory; the purchase extraction is skipped entirely for it.
             payload["stock_answer"] = await build_stock_answer(payload["text"], actor["restaurant_id"])
             if payload["stock_answer"] is None:
-                payload["extracted_text"] = await filter_kitchen_items(
+                extracted = await filter_kitchen_items(
                     await extract_text(payload["text"], actor["restaurant_name"]), actor["restaurant_id"])
+                hint = await maybe_intent_hint(payload["text"], extracted)
+                if hint:
+                    payload["intent_hint"] = hint
+                payload["extracted_text"] = extracted
         return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"])}
 
     # ---- Per-restaurant agent rules and proactive checks -------------------
@@ -893,8 +928,12 @@ def create_app(
                         client=vision_http_client,
                     )
                     if payload["transcript"].strip():
-                        payload["extracted_text"] = await filter_kitchen_items(
+                        extracted = await filter_kitchen_items(
                             await extract_text(payload["transcript"], sender_restaurant["name"]), restaurant_id)
+                        hint = await maybe_intent_hint(payload["transcript"], extracted)
+                        if hint:
+                            payload["intent_hint"] = hint
+                        payload["extracted_text"] = extracted
                 except (MetaWhatsAppError, StepFunAudioError) as exc:
                     logger.warning("WhatsApp voice intake failed: %s", exc)
             elif not message.get("media_kind") and payload["text"].strip() and sender_restaurant:
@@ -904,8 +943,12 @@ def create_app(
                 # restaurant inventory before any of that.
                 payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
                 if payload["stock_answer"] is None:
-                    payload["extracted_text"] = await filter_kitchen_items(
+                    extracted = await filter_kitchen_items(
                         await extract_text(payload["text"], sender_restaurant["name"]), restaurant_id)
+                    hint = await maybe_intent_hint(payload["text"], extracted)
+                    if hint:
+                        payload["intent_hint"] = hint
+                    payload["extracted_text"] = extracted
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),
@@ -1030,8 +1073,12 @@ def create_app(
                         client=vision_http_client,
                     )
                     if payload["transcript"].strip():
-                        payload["extracted_text"] = await filter_kitchen_items(
+                        extracted = await filter_kitchen_items(
                             await extract_text(payload["transcript"], sender_restaurant["name"]), restaurant_id)
+                        hint = await maybe_intent_hint(payload["transcript"], extracted)
+                        if hint:
+                            payload["intent_hint"] = hint
+                        payload["extracted_text"] = extracted
                 except (TelegramError, StepFunAudioError) as exc:
                     logger.warning("Telegram voice intake failed: %s", exc)
             elif not message.get("media_kind") and payload["text"].strip() and sender_restaurant:
@@ -1039,8 +1086,12 @@ def create_app(
                 # as WhatsApp text; only the transport differs.
                 payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
                 if payload["stock_answer"] is None:
-                    payload["extracted_text"] = await filter_kitchen_items(
+                    extracted = await filter_kitchen_items(
                         await extract_text(payload["text"], sender_restaurant["name"]), restaurant_id)
+                    hint = await maybe_intent_hint(payload["text"], extracted)
+                    if hint:
+                        payload["intent_hint"] = hint
+                    payload["extracted_text"] = extracted
             result = await run_in_threadpool(
                 store.whatsapp_ingest,
                 "telegram:" + bot_channel + ":" + message["event_id"],
