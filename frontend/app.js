@@ -7,9 +7,9 @@ const rupiah = value => value == null ? '—' : `Rp${new Intl.NumberFormat('id-I
 const number = value => value == null ? '—' : new Intl.NumberFormat('id-ID', {maximumFractionDigits: 6}).format(Number(value));
 const date = value => value ? new Intl.DateTimeFormat('en-GB', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jakarta'}).format(new Date(value)) + ' WIB' : '';
 const icons = {cabai:'🌶',telur:'🥚',beras:'🌾',minyak:'🫙',bawang:'🧅'};
-const titles = {overview:['Your kitchen, in view.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for.','Approved purchases and their source records. Payment status is separate.'],inventory:['Know what came in.','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],activity:['The story behind each record.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['A WhatsApp flow you can rehearse.','A persistent local conversation, from purchase note to owner decision.']};
+const titles = {overview:['Your kitchen, in view.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for.','Approved purchases and their source records. Payment status is separate.'],inventory:['Know what came in.','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],rules:['Peraturan asisten resto Anda.','Aturan khusus per resto — asisten menaatinya, resto lain tidak terpengaruh.'],activity:['The story behind each record.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['A WhatsApp flow you can rehearse.','A persistent local conversation, from purchase note to owner decision.']};
 let WHATSAPP_SENDER = '';
-const state = {user:null, data:null, adminList:null, adminSelected:null, adminRejected:[], adminForms:{}, draft:null, page:'overview', dirty:false, busy:false, online:false, intakeKey:null, decisions:new Map(), mutationKeys:new Map(), refreshId:0, inlineDecisions:new Set(), whatsappMessages:[], whatsappDraft:null, whatsappResult:null, whatsappLoading:false, whatsappError:'', whatsappLoaded:false, whatsappPending:null, whatsappSending:false, whatsappNumber:''};
+const state = {user:null, data:null, adminList:null, adminSelected:null, adminRejected:[], adminForms:{}, draft:null, page:'overview', dirty:false, busy:false, online:false, intakeKey:null, decisions:new Map(), mutationKeys:new Map(), refreshId:0, inlineDecisions:new Set(), whatsappMessages:[], whatsappDraft:null, whatsappResult:null, whatsappLoading:false, whatsappError:'', whatsappLoaded:false, whatsappPending:null, whatsappSending:false, whatsappNumber:'', rules:[], rulesLoaded:false, rulesBusy:false};
 
 async function api(path, {method='GET', body, key, timeout=15000} = {}) {
   const controller = new AbortController();
@@ -164,6 +164,7 @@ function renderIdentity() {
   $('#nav-admin').hidden = !isAdmin;
   $('#nav-approvals').hidden = isAdmin;
   $('#nav-whatsapp').hidden = isAdmin;
+  $('#nav-rules').hidden = isAdmin;
   $('#workspace-sub').textContent = isAdmin ? 'Semua resto' : 'Restaurant workspace';
 }
 function toast(message) { $('#toast').textContent=message; $('#toast').hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(() => $('#toast').hidden=true, 5500); }
@@ -295,8 +296,39 @@ function render() {
   if (page==='inventory') html=`<section class="panel">${panelHeading('Estimated inventory','Approved received quantities only. No consumption or physical-count adjustments yet.')}${inventoryRows(state.data.inventory)}<div class="panel-note">Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.</div></section>`;
   if (page==='activity') html=`<section class="panel">${panelHeading('Activity history','Includes synthetic setup records. All new actions are persisted.')}${activityRows(state.data.activity)}</section>`;
   if (page==='whatsapp') html=whatsappPage();
+  if (page==='rules') html=rulesPage();
   $('#content').innerHTML=html;
   if(page==='whatsapp' && !state.whatsappLoaded && !state.whatsappLoading)loadWhatsAppMessages();
+  if(page==='rules' && !state.rulesLoaded && !state.rulesBusy)loadRules();
+}
+
+function rulesPage() {
+  const rows=state.rules.map(rule=>`<div class="admin-row"><div><p>${e(rule.rule)}</p><small>${rule.enabled?'Aktif':'Nonaktif'} · ${e(date(rule.created_at))}</small></div><span class="spacer"></span><button class="button mini" data-rule-toggle="${e(rule.id)}">${rule.enabled?'Nonaktifkan':'Aktifkan'}</button><button class="button mini" data-rule-delete="${e(rule.id)}">Hapus</button></div>`).join('');
+  return `<section class="panel"><div class="panel-heading"><div><h2>Peraturan asisten</h2><p>Aturan ini hanya berlaku untuk resto ini. Contoh: "kabari kalau cabai di bawah 3 kg" mengubah ambang notifikasi, "jangan ingatkan stok telur" mematikan notifikasi telur, dan catatan lain diikuti asisten sebagai konteks gaya notifikasi.</p></div></div><form id="rules-form" class="whatsapp-composer"><label class="sr-only" for="rules-text">Tulis peraturan baru</label><textarea id="rules-text" rows="2" maxlength="500" required placeholder="Contoh: kabari kalau cabai di bawah 3 kg"></textarea><button class="button primary" type="submit" ${state.rulesBusy?'disabled':''}>Tambah peraturan</button></form><div id="rules-error" class="notice error" role="alert" hidden></div><div class="admin-list">${rows || '<div class="empty"><strong>Belum ada peraturan.</strong>Tanpa peraturan, asisten memakai ambang default tiap bahan.</div>'}</div><div class="panel-note">Asisten memeriksa stok secara berkala dan mengirim notifikasi stok rendah ke nomor/chat yang terhubung. Semua angka selalu dibaca dari database.</div></section>`;
+}
+async function loadRules() {
+  if(state.rulesBusy)return;state.rulesBusy=true;
+  try { const data=await api('/v1/rules'); state.rules=data.rules||[]; state.rulesLoaded=true; if(state.page==='rules')render(); }
+  catch(error) { toast('Gagal memuat peraturan: '+error.message); }
+  finally { state.rulesBusy=false; }
+}
+async function addRule(text) {
+  if(state.rulesBusy)return;state.rulesBusy=true;showError('rules-error','');
+  try { await api('/v1/rules',{method:'POST',body:{rule:text}}); state.rulesLoaded=false; await loadRules(); }
+  catch(error) { showError('rules-error',error.message); }
+  finally { state.rulesBusy=false; const button=document.querySelector('#rules-form button[type="submit"]'); if(button)button.disabled=false; }
+}
+async function toggleRule(id) {
+  const rule=state.rules.find(item=>item.id===id); if(!rule||state.rulesBusy)return;state.rulesBusy=true;
+  try { await api('/v1/rules/'+encodeURIComponent(id),{method:'PATCH',body:{enabled:!rule.enabled}}); state.rulesLoaded=false; await loadRules(); }
+  catch(error) { toast('Gagal mengubah peraturan: '+error.message); }
+  finally { state.rulesBusy=false; }
+}
+async function deleteRule(id) {
+  if(state.rulesBusy)return;state.rulesBusy=true;
+  try { await api('/v1/rules/'+encodeURIComponent(id),{method:'DELETE'}); state.rulesLoaded=false; await loadRules(); }
+  catch(error) { toast('Gagal menghapus peraturan: '+error.message); }
+  finally { state.rulesBusy=false; }
 }
 async function refresh() {
   // Admins have no restaurant of their own: refresh their console views
@@ -456,6 +488,16 @@ document.addEventListener('click',event => {
   if(button.dataset.openResto){state.adminSelected=button.dataset.openResto;location.hash='#admin-detail';window.scrollTo(0,0);}
   if(button.dataset.backTo){location.hash='#'+button.dataset.backTo;}
   if(button.dataset.adminAction)adminAction(button.dataset.adminAction,button);
+  if(button.dataset.ruleDelete)deleteRule(button.dataset.ruleDelete);
+  if(button.dataset.ruleToggle)toggleRule(button.dataset.ruleToggle);
+});
+document.addEventListener('submit',async event=>{
+  if(event.target.id==='rules-form'){
+    event.preventDefault();
+    const text=$('#rules-text').value.trim();if(!text)return;
+    const button=document.querySelector('#rules-form button[type="submit"]');if(button)button.disabled=true;
+    $('#rules-text').value='';await addRule(text);
+  }
 });
 document.addEventListener('submit',event=>{if(event.target.id==='whatsapp-form'){event.preventDefault();sendWhatsAppMessage($('#whatsapp-text').value);}});
 $('#review-dialog').addEventListener('cancel',event => {if(state.busy)event.preventDefault();});

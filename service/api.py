@@ -9,6 +9,8 @@ are rejected before any processing.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import csv
 import hashlib
 import io
@@ -39,6 +41,8 @@ from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, SESSION_TTL, Sto
 from .pg_store import PostgresStore
 from .extraction import extract_purchase
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
+from .notifications import build_alert_text, phrase_alert
+from .rules import effective_directives
 from .text_llm import StepFunTextError, extract_message
 from .stock_llm import phrase_stock_answer
 from .telegram import (
@@ -193,6 +197,15 @@ class ImageIntake(Model):
     source_label: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] = "Foto nota"
 
 
+class RuleCreate(Model):
+    rule: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+
+
+class RulePatch(Model):
+    rule: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)] | None = None
+    enabled: StrictBool | None = None
+
+
 def error(code, message, status):
     return JSONResponse({"error": {"code": code, "message": message}}, status_code=status)
 
@@ -237,8 +250,33 @@ def create_app(
     telegram_webhook_secret=None,
     telegram_api_base=TELEGRAM_DEFAULT_API_BASE,
     telegram_http_client=None,
+    proactive_check_interval_seconds=None,
 ):
-    app = FastAPI(title="RestoPilot local demo", version="0.2.0", description="Session login with resto owner and platform admin roles, per-restaurant tenant isolation, WhatsApp allowlist, rules extraction and SQLite.")
+    # The proactive loop closes over store/run_proactive_check by name; both
+    # are bound below before any request (or lifespan call) can run.
+    @contextlib.asynccontextmanager
+    async def _lifespan(_app):
+        task = None
+        if proactive_check_interval_seconds and proactive_check_interval_seconds > 0:
+            async def proactive_loop():
+                while True:
+                    await asyncio.sleep(proactive_check_interval_seconds)
+                    for resto in await run_in_threadpool(store.list_restaurants):
+                        try:
+                            await run_proactive_check(resto["id"])
+                        except Exception as exc:  # noqa: BLE001 - one resto must not stop the sweep
+                            logger.warning("Proactive check failed for %s: %s", resto["id"], exc)
+            task = asyncio.create_task(proactive_loop())
+            logger.info("Proactive low-stock checks scheduled every %s seconds.", proactive_check_interval_seconds)
+        try:
+            yield
+        finally:
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    app = FastAPI(title="RestoPilot local demo", version="0.2.0", description="Session login with resto owner and platform admin roles, per-restaurant tenant isolation, WhatsApp allowlist, rules extraction and SQLite.", lifespan=_lifespan)
     # The authority is Supabase Postgres when configured; the local SQLite
     # file stays as an offline/demo fallback so the app still boots without it.
     store = None
@@ -358,6 +396,63 @@ def create_app(
             except (StepFunTextError, ValueError) as exc:
                 logger.warning("StepFun stock phrasing failed; keeping the deterministic reply: %s", exc)
         return {"body": reply}
+
+    async def run_proactive_check(restaurant_id, *, dry_run=False):
+        """One proactive sweep for one restaurant: rules in, alert out.
+
+        The owner's enabled rules are parsed deterministically (threshold
+        overrides and mutes); candidates that survive the cooldown become one
+        alert text built from the database first, optionally rephrased by the
+        model under strict number validation. With dry_run nothing is sent,
+        recorded, or marked as alerted.
+        """
+        catalog = store.catalog_list(restaurant_id)
+        overrides, muted = effective_directives(store.list_rules(restaurant_id), catalog)
+        candidates = [item for item in store.low_stock_candidates(restaurant_id, overrides) if item["ingredient_id"] not in muted]
+        if not candidates:
+            return {"restaurant_id": restaurant_id, "candidates": [], "body": None, "sent": [], "dry_run": bool(dry_run)}
+        body_text = build_alert_text(candidates)
+        if stock_llm_enabled and vision_api_key:
+            try:
+                body_text = await phrase_alert(
+                    candidates,
+                    store.enabled_rules_text(restaurant_id),
+                    api_key=vision_api_key,
+                    model=text_llm_model,
+                    base_url=vision_base_url,
+                    client=stock_llm_http_client,
+                )
+            except (StepFunTextError, ValueError) as exc:
+                logger.warning("StepFun stock alert phrasing failed; keeping the deterministic alert: %s", exc)
+        sent = []
+        if not dry_run:
+            # One channel per sender: Meta when configured, else Telegram.
+            use_meta = bool(meta_access_token and meta_phone_number_id)
+            use_telegram = bool(telegram_bot_token)
+            for number in store.linked_numbers(restaurant_id):
+                phone = number["phone"]
+                channel = "whatsapp" if use_meta else "telegram" if use_telegram else None
+                if channel is None:
+                    logger.warning("Proactive alert for %s has no configured channel; recording only.", restaurant_id)
+                    store.record_proactive_message(restaurant_id, "proactive:" + restaurant_id, phone, "proactive", body_text, "proactive_no_channel")
+                    sent.append({"sender": phone, "channel": None, "ok": False})
+                    continue
+                message_id = store.record_proactive_message(restaurant_id, "proactive:" + restaurant_id, phone, "proactive", body_text, "proactive_pending")
+                try:
+                    if channel == "whatsapp":
+                        await send_text(
+                            meta_access_token, meta_phone_number_id, meta_graph_api_version, phone, body_text, client=meta_http_client)
+                    else:
+                        await send_telegram_text(telegram_bot_token, phone, body_text, api_base=telegram_api_base, client=telegram_http_client)
+                except (MetaWhatsAppError, TelegramError, ValueError) as exc:
+                    logger.warning("Proactive send to %s failed: %s", phone, exc)
+                    await run_in_threadpool(store.set_whatsapp_message_status, message_id, "proactive_failed")
+                    sent.append({"sender": phone, "channel": channel, "ok": False})
+                else:
+                    await run_in_threadpool(store.set_whatsapp_message_status, message_id, "proactive_sent")
+                    sent.append({"sender": phone, "channel": channel, "ok": True})
+            store.mark_proactive_alerts(restaurant_id, candidates)
+        return {"restaurant_id": restaurant_id, "candidates": candidates, "body": body_text, "sent": sent, "dry_run": bool(dry_run)}
     app.state.store = store
     configured_origin = public_origin(public_base_url)
     meta_waba_id = validate_meta_id(meta_waba_id, "META_WABA_ID") if meta_waba_id else None
@@ -555,6 +650,30 @@ def create_app(
                 payload["extracted_text"] = await filter_kitchen_items(
                     await extract_text(payload["text"], actor["restaurant_name"]), actor["restaurant_id"])
         return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"])}
+
+    # ---- Per-restaurant agent rules and proactive checks -------------------
+
+    @app.get("/v1/rules")
+    def rules_list(actor=Depends(owner_actor)):
+        return {"data": {"rules": store.list_rules(actor["restaurant_id"])}}
+
+    @app.post("/v1/rules", status_code=201)
+    def rules_add(body: RuleCreate, actor=Depends(owner_actor)):
+        return {"data": store.add_rule(actor["restaurant_id"], body.rule)}
+
+    @app.patch("/v1/rules/{rule_id}")
+    def rules_edit(rule_id: str, body: RulePatch, actor=Depends(owner_actor)):
+        if body.rule is None and body.enabled is None:
+            raise DomainError("rule_no_change", "Provide a rule text or an enabled flag.", 422)
+        return {"data": store.set_rule(actor["restaurant_id"], rule_id, rule_text=body.rule, enabled=body.enabled)}
+
+    @app.delete("/v1/rules/{rule_id}")
+    def rules_delete(rule_id: str, actor=Depends(owner_actor)):
+        return {"data": store.delete_rule(actor["restaurant_id"], rule_id)}
+
+    @app.post("/v1/notifications/check")
+    async def notifications_check(dry_run: bool = False, actor=Depends(owner_actor)):
+        return {"data": await run_proactive_check(actor["restaurant_id"], dry_run=dry_run)}
 
     def csv_attachment(rows, filename):
         buffer = io.StringIO()

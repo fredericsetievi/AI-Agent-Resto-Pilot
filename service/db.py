@@ -44,6 +44,9 @@ APPROVE_COMMANDS = frozenset({"ya", "y", "ya benar", "ok", "oke", "betul", "setu
 REJECT_COMMANDS = frozenset({"batal", "cancel", "tidak", "jangan"})
 SUMMARY_WINDOW_DAYS = 7
 MAX_TRANSCRIPT_CHARS = 10_000
+MAX_RULES_PER_RESTAURANT = 20
+RULE_MAX_CHARS = 500
+PROACTIVE_COOLDOWN_HOURS = 24
 SCHEMA_VERSION = "2"
 PBKDF2_ITERATIONS = 200_000
 SESSION_TTL = timedelta(days=7)
@@ -245,6 +248,8 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS whatsapp_messages (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES whatsapp_threads(id), direction TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, transport TEXT NOT NULL, status TEXT NOT NULL, draft_id TEXT REFERENCES drafts(id))",
                 "CREATE TABLE IF NOT EXISTS whatsapp_events (channel TEXT NOT NULL, event_id TEXT NOT NULL, thread_id TEXT NOT NULL REFERENCES whatsapp_threads(id), fingerprint TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY(channel, event_id))",
                 "CREATE TABLE IF NOT EXISTS custom_ingredients (id TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL, reorder_threshold TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
+                "CREATE TABLE IF NOT EXISTS restaurant_rules (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), rule TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS proactive_alerts (restaurant_id TEXT NOT NULL, ingredient_id TEXT NOT NULL, last_alerted_at TEXT NOT NULL, last_quantity TEXT NOT NULL, PRIMARY KEY(restaurant_id, ingredient_id))",
             ):
                 conn.execute(statement)
             # Databases created before the follow-up state existed keep their
@@ -937,6 +942,113 @@ class Store:
                 })
             return rows
 
+    # ---- Per-restaurant agent rules and proactive low-stock alerts --------
+
+    def add_rule(self, restaurant_id, rule):
+        text = str(rule or "").strip()
+        if not text:
+            raise DomainError("rule_empty", "The rule text is empty.", 422)
+        if len(text) > RULE_MAX_CHARS:
+            raise DomainError("rule_too_long", f"One rule is capped at {RULE_MAX_CHARS} characters.", 422)
+        with self.transaction() as conn:
+            count = conn.execute("SELECT COUNT(*) AS c FROM restaurant_rules WHERE restaurant_id=?", (restaurant_id,)).fetchone()["c"]
+            if count >= MAX_RULES_PER_RESTAURANT:
+                raise DomainError("rule_limit", f"A restaurant holds at most {MAX_RULES_PER_RESTAURANT} rules; remove one first.", 422)
+            rule_id = uuid.uuid4().hex
+            created = now()
+            conn.execute("INSERT INTO restaurant_rules VALUES (?, ?, ?, 1, ?)", (rule_id, restaurant_id, text, created))
+            self._audit(conn, "rule_added", f"Rule added: {text[:120]}", restaurant_id)
+        return {"id": rule_id, "restaurant_id": restaurant_id, "rule": text, "enabled": True, "created_at": created}
+
+    def list_rules(self, restaurant_id):
+        with self.transaction() as conn:
+            rows = conn.execute("SELECT id, restaurant_id, rule, enabled, created_at FROM restaurant_rules WHERE restaurant_id=? ORDER BY created_at, id", (restaurant_id,)).fetchall()
+        return [{"id": row["id"], "restaurant_id": row["restaurant_id"], "rule": row["rule"], "enabled": bool(row["enabled"]), "created_at": row["created_at"]} for row in rows]
+
+    def set_rule(self, restaurant_id, rule_id, *, rule_text=None, enabled=None):
+        with self.transaction() as conn:
+            row = conn.execute("SELECT id FROM restaurant_rules WHERE id=? AND restaurant_id=?", (rule_id, restaurant_id)).fetchone()
+            if not row:
+                raise DomainError("rule_not_found", "Rule was not found for this restaurant.", 404)
+            if rule_text is not None:
+                text = str(rule_text).strip()
+                if not text:
+                    raise DomainError("rule_empty", "The rule text is empty.", 422)
+                if len(text) > RULE_MAX_CHARS:
+                    raise DomainError("rule_too_long", f"One rule is capped at {RULE_MAX_CHARS} characters.", 422)
+                conn.execute("UPDATE restaurant_rules SET rule=? WHERE id=?", (text, rule_id))
+                self._audit(conn, "rule_edited", f"Rule edited: {text[:120]}", restaurant_id)
+            if enabled is not None:
+                conn.execute("UPDATE restaurant_rules SET enabled=? WHERE id=?", (1 if enabled else 0, rule_id))
+                self._audit(conn, "rule_toggled", f"Rule {'enabled' if enabled else 'disabled'}.", restaurant_id)
+            row = conn.execute("SELECT id, rule, enabled, created_at FROM restaurant_rules WHERE id=?", (rule_id,)).fetchone()
+        return {"id": row["id"], "restaurant_id": restaurant_id, "rule": row["rule"], "enabled": bool(row["enabled"]), "created_at": row["created_at"]}
+
+    def delete_rule(self, restaurant_id, rule_id):
+        with self.transaction() as conn:
+            row = conn.execute("SELECT rule FROM restaurant_rules WHERE id=? AND restaurant_id=?", (rule_id, restaurant_id)).fetchone()
+            if not row:
+                raise DomainError("rule_not_found", "Rule was not found for this restaurant.", 404)
+            conn.execute("DELETE FROM restaurant_rules WHERE id=?", (rule_id,))
+            self._audit(conn, "rule_removed", f"Rule removed: {row['rule'][:120]}", restaurant_id)
+        return {"ok": True}
+
+    def enabled_rules_text(self, restaurant_id):
+        """Enabled rules as one block of text, for LLM prompt context."""
+        rules = [entry["rule"] for entry in self.list_rules(restaurant_id) if entry["enabled"]]
+        return "\n".join(f"- {rule}" for rule in rules)
+
+    def low_stock_candidates(self, restaurant_id, overrides=None, cooldown_hours=PROACTIVE_COOLDOWN_HOURS):
+        """Ingredients below their effective threshold, filtered by the alert cooldown.
+
+        The effective threshold is the rule override when the owner wrote one
+        for that ingredient, else the catalog reorder threshold. An item is a
+        candidate when it was never alerted, or its quantity changed since the
+        last alert and the cooldown has elapsed — a steady low stock must not
+        re-alert on every check.
+        """
+        overrides = overrides or {}
+        catalog = self._catalog_for(restaurant_id)
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)).isoformat()
+        with self.transaction() as conn:
+            previously = {row["ingredient_id"]: row for row in conn.execute(
+                "SELECT ingredient_id, last_alerted_at, last_quantity FROM proactive_alerts WHERE restaurant_id=?", (restaurant_id,))}
+            candidates = []
+            for ingredient in catalog["list"]:
+                threshold = overrides.get(ingredient["id"], ingredient["reorder_threshold"])
+                row = conn.execute("SELECT quantity FROM inventory WHERE restaurant_id=? AND ingredient_id=?", (restaurant_id, ingredient["id"])).fetchone()
+                quantity = row[0] if row else "0"
+                if not Decimal(quantity) < Decimal(threshold):
+                    continue
+                previous = previously.get(ingredient["id"])
+                if previous and previous["last_alerted_at"] >= cutoff:
+                    continue  # alerted inside the cooldown window; stay quiet
+                if previous and previous["last_quantity"] == quantity:
+                    continue  # nothing changed since the owner last heard about it
+                candidates.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
+                                   "unit": ingredient["unit"], "threshold": threshold, "reorder_threshold": ingredient["reorder_threshold"],
+                                   "low_stock": True})
+        return candidates
+
+    def mark_proactive_alerts(self, restaurant_id, candidates):
+        with self.transaction() as conn:
+            for item in candidates:
+                conn.execute(
+                    "INSERT INTO proactive_alerts (restaurant_id, ingredient_id, last_alerted_at, last_quantity) VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(restaurant_id, ingredient_id) DO UPDATE SET last_alerted_at=excluded.last_alerted_at, last_quantity=excluded.last_quantity",
+                    (restaurant_id, item["ingredient_id"], now(), item["quantity"]))
+                self._audit(conn, "proactive_alert", f"Proactive low-stock alert sent for {item['name']} at {item['quantity']} {item['unit']}.", restaurant_id)
+
+    def record_proactive_message(self, restaurant_id, channel, sender, transport, body, status):
+        """Ledger one proactive push so the dashboard shows what the agent sent."""
+        with self.transaction() as conn:
+            thread = self._whatsapp_thread(conn, sender, channel, transport, restaurant_id=restaurant_id, create=True)
+            message_id = uuid.uuid4().hex
+            conn.execute("INSERT INTO whatsapp_messages VALUES (?, ?, 'outbound', ?, ?, ?, ?, NULL)",
+                         (message_id, thread["id"], body, now(), transport, status))
+            self._audit(conn, "proactive_message", f"Proactive message queued for {sender}.", restaurant_id)
+        return message_id
+
     def export_stock(self, restaurant_id=None):
         """Catalog stock rows with the most recent recorded unit price per ingredient."""
         catalog = self._catalog_for(restaurant_id)
@@ -1142,6 +1254,10 @@ class Store:
     def linked_numbers(self, restaurant_id):
         with self.transaction() as conn:
             return [dict(row) for row in conn.execute("SELECT phone, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))]
+
+    def catalog_list(self, restaurant_id):
+        """This restaurant's catalog entries, for rule parsing and alerts."""
+        return [dict(item) for item in self._catalog_for(restaurant_id)["list"]]
 
     # ---- Admin console: restaurants and their WhatsApp numbers -------------
 

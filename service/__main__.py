@@ -38,6 +38,7 @@ SUPPORTED_ENV_KEYS = {
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
     "TELEGRAM_API_BASE",
+    "PROACTIVE_CHECK_HOURS",
 }
 
 
@@ -101,12 +102,19 @@ def main():
         "telegram_api_base": setting("TELEGRAM_API_BASE") or None,
     }
     telegram_configured = bool(telegram_settings["telegram_bot_token"] and telegram_settings["telegram_webhook_secret"])
+    try:
+        proactive_hours = float(setting("PROACTIVE_CHECK_HOURS", "6"))
+    except ValueError:
+        raise SystemExit("PROACTIVE_CHECK_HOURS must be a number of hours (0 disables the proactive checks).")
+    if proactive_hours < 0:
+        raise SystemExit("PROACTIVE_CHECK_HOURS must not be negative.")
     print("RestoPilot: session login, owner/admin roles, Supabase storage, WhatsApp allowlist.")
     print("Stock Q&A: from the linked restaurant's inventory (tenant-isolated).")
     print(f"Open http://127.0.0.1:{args.port} · Database: {args.db}")
     print("Demo logins: admin / admin123 (platform admin) · owner / owner123 (Warung Bu Sari)")
     print("Meta WhatsApp Cloud API: configured" if meta_configured else "Meta WhatsApp Cloud API: disabled (see .env.example)")
     print("Telegram bot: configured" if telegram_configured else "Telegram bot: disabled (set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET)")
+    print(f"Proactive low-stock checks: every {proactive_hours:g} hour(s)" if proactive_hours > 0 else "Proactive low-stock checks: disabled (PROACTIVE_CHECK_HOURS=0)")
     print("StepFun Vision: configured" if vision_api_key else "StepFun Vision: disabled (set STEPFUN_API_KEY)")
     if text_llm_enabled:
         print(f"StepFun text rescue: enabled (model {text_llm_model or 'default'}; rules stay first)")
@@ -136,6 +144,7 @@ def main():
             text_llm_enabled=bool(text_llm_enabled),
             text_llm_model=text_llm_model,
             stock_llm_enabled=bool(stock_llm_enabled),
+            proactive_check_interval_seconds=proactive_hours * 3600,
             **meta_settings,
             **telegram_settings,
         ),
