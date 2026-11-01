@@ -41,6 +41,22 @@ from .extraction import extract_purchase
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .text_llm import StepFunTextError, extract_message
 from .stock_llm import phrase_stock_answer
+from .telegram import (
+    DEFAULT_API_BASE as TELEGRAM_DEFAULT_API_BASE,
+    OUTBOUND_PENDING as TG_OUTBOUND_PENDING,
+    OUTBOUND_SENDING as TG_OUTBOUND_SENDING,
+    OUTBOUND_SENT as TG_OUTBOUND_SENT,
+    TELEGRAM_WEBHOOK_PATH,
+    TRANSPORT as TG_TRANSPORT,
+    TelegramError,
+    bot_id_from_token,
+    download_file as download_telegram_file,
+    matches_secret as matches_telegram_secret,
+    parse_update as parse_telegram_update,
+    send_text as send_telegram_text,
+    validate_bot_token as validate_telegram_token,
+    validate_secret_token as validate_telegram_secret,
+)
 from .vision import (
     DEFAULT_BASE_URL as VISION_DEFAULT_BASE_URL,
     DEFAULT_MODEL as VISION_DEFAULT_MODEL,
@@ -217,6 +233,10 @@ def create_app(
     stock_llm_enabled=False,
     stock_llm_http_client=None,
     kitchen_filter_enabled=True,
+    telegram_bot_token=None,
+    telegram_webhook_secret=None,
+    telegram_api_base=TELEGRAM_DEFAULT_API_BASE,
+    telegram_http_client=None,
 ):
     app = FastAPI(title="RestoPilot local demo", version="0.2.0", description="Session login with resto owner and platform admin roles, per-restaurant tenant isolation, WhatsApp allowlist, rules extraction and SQLite.")
     # The authority is Supabase Postgres when configured; the local SQLite
@@ -344,6 +364,10 @@ def create_app(
     meta_phone_number_id = validate_meta_id(meta_phone_number_id, "META_PHONE_NUMBER_ID") if meta_phone_number_id else None
     meta_verify_token = validate_verify_token(meta_verify_token) if meta_verify_token else None
     meta_graph_api_version = validate_graph_version(meta_graph_api_version)
+    # Telegram is optional: with no token the webhook route answers 503 and
+    # the WhatsApp-only deployment is unchanged.
+    telegram_bot_token = validate_telegram_token(telegram_bot_token) if telegram_bot_token else None
+    telegram_webhook_secret = validate_telegram_secret(telegram_webhook_secret) if telegram_webhook_secret else None
     vision_model = validate_vision_model(vision_model) if vision_model else VISION_DEFAULT_MODEL
     vision_base_url = validate_vision_base_url(vision_base_url) if vision_base_url else VISION_DEFAULT_BASE_URL
     # ASR may run on its own provider (AUDIO_ASR_*); without an override it
@@ -776,6 +800,122 @@ def create_app(
                     status = exc.status if isinstance(exc, MetaWhatsAppError) else 500
                     raise DomainError("meta_send_failed", str(exc), status)
             await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], OUTBOUND_SENT)
+        return {"ok": True}
+
+    @app.post(TELEGRAM_WEBHOOK_PATH)
+    async def telegram_webhook(request: Request):
+        if not (telegram_bot_token and telegram_webhook_secret):
+            raise DomainError("telegram_not_configured", "Set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET before accepting Telegram updates.", 503)
+        if request.url.query:
+            raise DomainError("invalid_webhook_url", "Configure the webhook without query parameters.", 400)
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+            raise DomainError("invalid_content_type", "Telegram webhook requires JSON.", 415)
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > 65536:
+                raise DomainError("webhook_too_large", "Webhook payload exceeds 64 KiB.", 413)
+        # Telegram authenticates the hook with a shared secret header instead
+        # of a body signature; the comparison is constant-time either way.
+        if not matches_telegram_secret(request.headers.get("x-telegram-bot-api-secret-token", ""), telegram_webhook_secret):
+            raise DomainError("invalid_telegram_secret", "Telegram webhook secret mismatch.", 403)
+        try:
+            messages = parse_telegram_update(bytes(raw))
+        except TelegramError as exc:
+            logger.warning("Rejected Telegram webhook: %s", exc)
+            raise DomainError("invalid_telegram_update", str(exc), exc.status)
+
+        bot_channel = "telegram:" + bot_id_from_token(telegram_bot_token)
+        for message in messages:
+            payload = {key: message[key] for key in ("sender", "text", "event_id", "num_media")}
+            # The same allowlist as WhatsApp: an unregistered Telegram chat
+            # costs nothing to process and learns nothing.
+            sender_restaurant = await run_in_threadpool(store.restaurant_for_sender, message["sender"])
+            restaurant_id = sender_restaurant["id"] if sender_restaurant else None
+            if message.get("media_kind") == "image" and vision_api_key and sender_restaurant and message.get("media_id"):
+                try:
+                    photo, _media_type = await download_telegram_file(
+                        telegram_bot_token,
+                        message["media_id"],
+                        api_base=telegram_api_base,
+                        client=telegram_http_client,
+                    )
+                    payload["extracted"] = await filter_kitchen_items(
+                        await extract_invoice(
+                            photo,
+                            media_type="image/jpeg",
+                            restaurant=sender_restaurant["name"],
+                            api_key=vision_api_key,
+                            model=vision_model,
+                            base_url=vision_base_url,
+                            client=vision_http_client,
+                        ),
+                        restaurant_id,
+                    )
+                    payload["source_label"] = "Foto nota Telegram"
+                except (TelegramError, StepFunVisionError) as exc:
+                    logger.warning("Telegram photo intake failed: %s", exc)
+            elif message.get("media_kind") == "audio" and asr_api_key and sender_restaurant and message.get("media_id"):
+                try:
+                    audio, _mime = await download_telegram_file(
+                        telegram_bot_token,
+                        message["media_id"],
+                        api_base=telegram_api_base,
+                        client=telegram_http_client,
+                    )
+                    payload["transcript"] = await transcribe_audio(
+                        audio,
+                        "audio/ogg",
+                        api_key=asr_api_key,
+                        model=asr_model,
+                        base_url=asr_base_url,
+                        client=vision_http_client,
+                    )
+                    if payload["transcript"].strip():
+                        payload["extracted_text"] = await filter_kitchen_items(
+                            await extract_text(payload["transcript"], sender_restaurant["name"]), restaurant_id)
+                except (TelegramError, StepFunAudioError) as exc:
+                    logger.warning("Telegram voice intake failed: %s", exc)
+            elif not message.get("media_kind") and payload["text"].strip() and sender_restaurant:
+                # Text walks the exact same rules-then-rescue-then-stock path
+                # as WhatsApp text; only the transport differs.
+                payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
+                if payload["stock_answer"] is None:
+                    payload["extracted_text"] = await filter_kitchen_items(
+                        await extract_text(payload["text"], sender_restaurant["name"]), restaurant_id)
+            result = await run_in_threadpool(
+                store.whatsapp_ingest,
+                "telegram:" + bot_channel + ":" + message["event_id"],
+                payload,
+                transport=TG_TRANSPORT,
+                channel=bot_channel,
+                outbound_status=TG_OUTBOUND_PENDING,
+                restaurant_id=restaurant_id,
+            )
+            outbound = result["messages"][-1]
+            claimed = await run_in_threadpool(
+                store.claim_whatsapp_message,
+                outbound["id"],
+                TG_OUTBOUND_PENDING,
+                TG_OUTBOUND_SENDING,
+            )
+            if not claimed:
+                # A Telegram retry of an update already answered; the stored
+                # response replays but the bot must not double-send.
+                continue
+            try:
+                await send_telegram_text(
+                    telegram_bot_token,
+                    message["sender"],
+                    outbound["body"],
+                    api_base=telegram_api_base,
+                    client=telegram_http_client,
+                )
+            except (TelegramError, ValueError) as exc:
+                await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], TG_OUTBOUND_PENDING)
+                status = exc.status if isinstance(exc, TelegramError) else 500
+                raise DomainError("telegram_send_failed", str(exc), status)
+            await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], TG_OUTBOUND_SENT)
         return {"ok": True}
 
     frontend = Path(__file__).resolve().parent.parent / "frontend"

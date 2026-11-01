@@ -35,6 +35,9 @@ SUPPORTED_ENV_KEYS = {
     "AUDIO_ASR_API_KEY",
     "AUDIO_ASR_MODEL",
     "LLM_STOCK_ANSWER",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_WEBHOOK_SECRET",
+    "TELEGRAM_API_BASE",
 }
 
 
@@ -92,11 +95,18 @@ def main():
     custom_asr = bool(asr_api_key and asr_base_url)
     asr_model_setting = (asr_model_override if custom_asr else None) or setting("STEPFUN_ASR_MODEL")
     stock_llm_enabled = vision_api_key and (setting("LLM_STOCK_ANSWER") or "").strip().casefold() in {"1", "true", "yes", "on"}
+    telegram_settings = {
+        "telegram_bot_token": setting("TELEGRAM_BOT_TOKEN"),
+        "telegram_webhook_secret": setting("TELEGRAM_WEBHOOK_SECRET"),
+        "telegram_api_base": setting("TELEGRAM_API_BASE") or None,
+    }
+    telegram_configured = bool(telegram_settings["telegram_bot_token"] and telegram_settings["telegram_webhook_secret"])
     print("RestoPilot: session login, owner/admin roles, Supabase storage, WhatsApp allowlist.")
     print("Stock Q&A: from the linked restaurant's inventory (tenant-isolated).")
     print(f"Open http://127.0.0.1:{args.port} · Database: {args.db}")
     print("Demo logins: admin / admin123 (platform admin) · owner / owner123 (Warung Bu Sari)")
     print("Meta WhatsApp Cloud API: configured" if meta_configured else "Meta WhatsApp Cloud API: disabled (see .env.example)")
+    print("Telegram bot: configured" if telegram_configured else "Telegram bot: disabled (set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET)")
     print("StepFun Vision: configured" if vision_api_key else "StepFun Vision: disabled (set STEPFUN_API_KEY)")
     if text_llm_enabled:
         print(f"StepFun text rescue: enabled (model {text_llm_model or 'default'}; rules stay first)")
@@ -127,6 +137,7 @@ def main():
             text_llm_model=text_llm_model,
             stock_llm_enabled=bool(stock_llm_enabled),
             **meta_settings,
+            **telegram_settings,
         ),
         host="127.0.0.1",
         port=args.port,
