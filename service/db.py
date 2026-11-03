@@ -1551,6 +1551,31 @@ class Store:
                 if draft["id"] in sources:
                     draft["source"] = sources[draft["id"]]
             purchase_days = [datetime.fromisoformat(row["created_at"]).astimezone(RESTAURANT_TIMEZONE).date() for row in purchases]
+            # Dashboard charts, computed from the same ledger rows above:
+            # WIB daily purchase totals for 14 days, and the top ingredients
+            # by recorded spend over the trailing 30 days.
+            today_wib = datetime.now(RESTAURANT_TIMEZONE).date()
+            daily_totals = {}
+            ingredient_totals = {}
+            cutoff_30 = datetime.now(timezone.utc) - timedelta(days=30)
+            for purchase in purchases:
+                created = datetime.fromisoformat(purchase["created_at"]).astimezone(RESTAURANT_TIMEZONE)
+                day = created.date()
+                total = purchase.get("total_idr")
+                if isinstance(total, int) and not isinstance(total, bool) and 0 < total <= 1_000_000_000_000:
+                    daily_totals[day] = daily_totals.get(day, 0) + total
+                if created >= cutoff_30:
+                    for item in purchase.get("items") or []:
+                        amount = item.get("line_total_idr")
+                        if isinstance(amount, int) and not isinstance(amount, bool) and 0 < amount <= 1_000_000_000_000:
+                            key = item.get("ingredient_id") or "unknown"
+                            ingredient_totals[key] = ingredient_totals.get(key, 0) + amount
+            daily_spend = [{"date": (today_wib - timedelta(days=back)).isoformat(),
+                            "total_idr": daily_totals.get(today_wib - timedelta(days=back), 0)}
+                           for back in range(13, -1, -1)]
+            ingredient_spend = [{"name": (catalog["by_id"].get(key) or {}).get("name") or str(key), "total_idr": total}
+                                for key, total in sorted(ingredient_totals.items(), key=lambda pair: pair[1], reverse=True)[:7]]
+            charts = {"daily_spend": daily_spend, "ingredient_spend": ingredient_spend}
             return {
                 "restaurant": dict(restaurant),
                 "whatsapp_numbers": [dict(row) for row in conn.execute("SELECT phone, platform, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))],
@@ -1561,6 +1586,7 @@ class Store:
                             "low_stock_count": sum(row["low_stock"] for row in inventory), "recorded_purchases": len(purchases)},
                 "drafts": drafts, "purchases": purchases, "inventory": inventory,
                 "stock_counts": self.recent_stock_counts(restaurant_id, limit=5, conn=conn),
+                "charts": charts,
                 "activity": [dict(row) for row in conn.execute("SELECT * FROM activity WHERE restaurant_id=? ORDER BY created_at DESC, id DESC LIMIT 100", (restaurant_id,))],
                 "ingredients": catalog["list"],
             }

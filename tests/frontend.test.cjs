@@ -202,3 +202,27 @@ test('review editor prefills mapped names and leaves new rows blank',()=>{
   assert.ok(!html.includes('<select'));
   assert.ok(!html.includes('value="Unmatched item"'));
 });
+
+test('daily spend chart scales bars to the max and labels dates', () => {
+  const {run} = harness();
+  const html = run(`dailySpendChart([{date:'2026-11-01', total_idr: 50000},{date:'2026-11-02', total_idr: 100000}])`);
+  assert.match(html, /height:50%/);
+  assert.match(html, /height:100%/);
+  assert.match(html, /title="2026-11-02 · Rp100\.000"/);
+  assert.match(html, /2026-11-01/);
+});
+
+test('ingredient spend chart lists names with amounts', () => {
+  const {run} = harness();
+  const html = run(`ingredientSpendChart([{name:'Cabai merah', total_idr: 100000},{name:'Bawang merah', total_idr: 50000}])`);
+  assert.match(html, /Cabai merah/);
+  assert.match(html, /Rp100\.000/);
+  assert.match(html, /width:100%/);
+  assert.match(html, /width:50%/);
+});
+
+test('empty chart data renders a friendly empty state', () => {
+  const {run} = harness();
+  assert.match(run(`dailySpendChart([])`), /Belum ada data grafik/);
+  assert.match(run(`ingredientSpendChart(null)`), /Belum ada data grafik/);
+});

@@ -368,3 +368,21 @@ def test_incomplete_or_invalid_drafts_do_not_claim_partial_totals(client):
     assert omitted_clause["total_idr"] is None
     empty = client.post("/v1/intake", headers=headers(), json={"text": "nanti beli beras 5 kg 70rb"}).json()["data"]
     assert empty["total_idr"] is None
+
+
+def test_overview_charts_aggregate_seed_ledger(client):
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    wib = ZoneInfo("Asia/Jakarta")
+    today = datetime.now(wib).date()
+    charts = overview(client)["charts"]
+    daily = {entry["date"]: entry["total_idr"] for entry in charts["daily_spend"]}
+    assert len(charts["daily_spend"]) == 14
+    # Seed: cabai 129.000 three days ago, telur 430.000 two days ago (WIB dates).
+    assert daily[(today - dt.timedelta(days=2)).isoformat()] == 430000
+    assert daily[(today - dt.timedelta(days=3)).isoformat()] == 129000
+    assert daily[(today - dt.timedelta(days=1)).isoformat()] == 0
+    ranked = charts["ingredient_spend"]
+    assert [item["name"] for item in ranked][:2] == ["Telur ayam", "Cabai merah"]
+    assert ranked[0]["total_idr"] == 430000
