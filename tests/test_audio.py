@@ -72,6 +72,15 @@ def test_transcribe_posts_multipart_and_returns_the_text():
     assert call["files"]["file"] == ("voice.ogg", OGG, "audio/ogg")
 
 
+def test_transcribe_forwards_language_and_vocabulary_prompt():
+    client = FakeAudioClient()
+    client.responses.append(FakeResponse(body={"text": "beli telur dua kilo lima puluh ribu"}))
+    run_transcribe(client=client, language="id", prompt="Nota belanja warung: telur, beras, cabai, kg, ikat, rb.")
+    call = client.calls[0]
+    assert call["data"]["language"] == "id"
+    assert call["data"]["prompt"] == "Nota belanja warung: telur, beras, cabai, kg, ikat, rb."
+
+
 def test_transcribe_rejects_a_provider_error_without_leaking_the_key():
     client = FakeAudioClient()
     client.responses.append(FakeResponse(status_code=401, body={"error": {"message": "bad key"}}))

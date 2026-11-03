@@ -72,8 +72,12 @@ def _check_audio(raw, mime):
     return raw
 
 
-async def transcribe_audio(data, mime, *, api_key, model=DEFAULT_ASR_MODEL, base_url=DEFAULT_BASE_URL, language=None, client=None):
-    """Send one WhatsApp voice note to StepFun ASR and return its transcript."""
+async def transcribe_audio(data, mime, *, api_key, model=DEFAULT_ASR_MODEL, base_url=DEFAULT_BASE_URL, language=None, prompt=None, client=None):
+    """Send one WhatsApp voice note to the configured ASR provider and return its transcript.
+
+    Works with any OpenAI-compatible transcription endpoint (StepFun, Groq's
+    Whisper large-v3, etc.). ``prompt`` is the optional vocabulary-biasing hint
+    (e.g. warung ingredient terms) that OpenAI-compatible APIs accept."""
     if not api_key or not api_key.strip():
         raise StepFunAudioError("StepFun speech recognition is not configured.", 503)
     base_url = validate_base_url(base_url)
@@ -88,7 +92,9 @@ async def transcribe_audio(data, mime, *, api_key, model=DEFAULT_ASR_MODEL, base
                 base_url + "/audio/transcriptions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 files={"file": (_MEDIA_FILENAMES.get(mime, "voice"), data, mime)},
-                data={"model": model, "response_format": "json", **({"language": language} if language else {})},
+                data={"model": model, "response_format": "json",
+                      **({"language": language} if language else {}),
+                      **({"prompt": prompt} if prompt else {})},
             )
         except httpx.HTTPError:
             raise StepFunAudioError("StepFun speech recognition could not be reached; try again.")

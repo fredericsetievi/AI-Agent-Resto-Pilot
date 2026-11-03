@@ -276,6 +276,7 @@ def create_app(
     asr_api_key=None,
     asr_base_url=None,
     asr_language=None,
+    asr_prompt=None,
     tts_model=None,
     tts_voice=None,
     text_llm_enabled=False,
@@ -897,7 +898,7 @@ def create_app(
                     payload["operation_source"]["digest"] = hashlib.sha256(audio).hexdigest()
                     payload["transcript"] = await _timed_whatsapp("document_read", timing_kind, transcribe_audio(
                         audio, mime, api_key=asr_api_key, model=asr_model,
-                        base_url=asr_base_url, language=asr_language,
+                        base_url=asr_base_url, language=asr_language, prompt=asr_prompt,
                         client=await get_vision_client(),
                     ))
                     if payload["transcript"].strip():

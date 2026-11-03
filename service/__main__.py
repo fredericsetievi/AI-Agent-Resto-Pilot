@@ -39,6 +39,7 @@ SUPPORTED_ENV_KEYS = {
     "AUDIO_ASR_API_KEY",
     "AUDIO_ASR_MODEL",
     "AUDIO_ASR_LANGUAGE",
+    "AUDIO_ASR_PROMPT",
     "LLM_STOCK_ANSWER",
 }
 
@@ -95,6 +96,7 @@ def main():
     asr_base_url = setting("AUDIO_ASR_BASE_URL")
     asr_model_override = setting("AUDIO_ASR_MODEL")
     asr_language = (setting("AUDIO_ASR_LANGUAGE") or "").strip() or None
+    asr_prompt = (setting("AUDIO_ASR_PROMPT") or "").strip() or None
     custom_asr = bool(asr_api_key and asr_base_url)
     asr_model_setting = (asr_model_override if custom_asr else None) or setting("STEPFUN_ASR_MODEL")
     stock_llm_enabled = vision_api_key and (setting("LLM_STOCK_ANSWER") or "").strip().casefold() in {"1", "true", "yes", "on"}
@@ -128,6 +130,7 @@ def main():
             asr_api_key=asr_api_key,
             asr_base_url=asr_base_url,
             asr_language=asr_language,
+            asr_prompt=asr_prompt,
             tts_model=setting("STEPFUN_TTS_MODEL"),
             tts_voice=setting("STEPFUN_TTS_VOICE"),
             text_llm_enabled=bool(text_llm_enabled),
