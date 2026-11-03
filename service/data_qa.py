@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -52,17 +54,141 @@ def is_price_question(text):
     return bool(PRICE_MARKER.search(text))
 
 
-def spend_fact(summary, days):
-    """One spend fact from the weekly summary; empty when nothing was recorded."""
-    if not summary.get("purchase_count"):
+# --- Time windows (v2): bounded Indonesian phrases, day boundaries in WIB ------
+
+_TZ = ZoneInfo("Asia/Jakarta")
+_N_DAYS = re.compile(r"(?i)(\d{1,4})\s*hari(?:\s*(?:terakhir|ke\s*belakangeng)? )?")
+
+
+def parse_window(text, *, default_days=7):
+    """Resolve one time window from bounded Indonesian phrases.
+
+    Returns {"start", "end", "label", "days"} where start/end are ISO strings
+    in the restaurant timezone (None = unbounded). Day boundaries follow
+    Asia/Jakarta like every other timestamp the app prints. Unrecognised
+    text falls back to the classic trailing window.
+    """
+    t = str(text or "").casefold()
+    now = datetime.now(_TZ)
+
+    def day_start(offset_days=0):
+        date = (now + timedelta(days=offset_days)).date()
+        return datetime(date.year, date.month, date.day, tzinfo=_TZ)
+
+    def iso(dt):
+        return dt.isoformat() if dt else None
+
+    days = None
+    if "bulan lalu" in t:
+        first_this = day_start(0).replace(day=1)
+        start = (first_this - timedelta(days=1)).replace(day=1)
+        return {"start": iso(start), "end": iso(first_this), "label": "bulan lalu", "days": None}
+    if "bulan ini" in t:
+        return {"start": iso(day_start(0).replace(day=1)), "end": None, "label": "bulan ini", "days": None}
+    if "kemarin" in t:
+        return {"start": iso(day_start(-1)), "end": iso(day_start(0)), "label": "kemarin", "days": 1}
+    if "hari ini" in t:
+        return {"start": iso(day_start(0)), "end": None, "label": "hari ini", "days": 1}
+    if "minggu lalu" in t:
+        return {"start": iso(day_start(-14)), "end": iso(day_start(-7)), "label": "minggu lalu", "days": 7}
+    days_match = _N_DAYS.search(t)
+    if days_match:
+        days = int(days_match.group(1))
+        if 1 <= days <= 3650:
+            return {"start": iso(now - timedelta(days=days)), "end": None, "label": f"{days} hari terakhir", "days": days}
+    if "minggu ini" in t:
+        return {"start": iso(now - timedelta(days=default_days)), "end": None, "label": f"{default_days} hari terakhir", "days": default_days}
+    if "semua" in t or "seluruh" in t or "sejak awal" in t:
+        return {"start": None, "end": None, "label": "semua waktu", "days": None}
+    return {"start": iso(now - timedelta(days=default_days)), "end": None, "label": f"{default_days} hari terakhir", "days": default_days}
+
+
+def find_windows(text, limit=2):
+    """Every distinct window phrase in the text, in the order it appears —
+    used to pair two periods for a comparison ("minggu ini vs minggu lalu")."""
+    t = str(text or "").casefold()
+    found = []
+    for phrase in ("bulan lalu", "bulan ini", "kemarin", "hari ini", "minggu lalu", "minggu ini"):
+        if phrase in t and (not found or phrase != found[-1]["_phrase"]):
+            window = parse_window(phrase)
+            window["_phrase"] = phrase
+            window["_position"] = t.index(phrase)
+            found.append(window)
+    match = _N_DAYS.search(t)
+    if match and not any(w["label"] == f"{int(match.group(1))} hari terakhir" for w in found):
+        window = parse_window(match.group(0))
+        window["_phrase"] = match.group(0)
+        window["_position"] = match.start()
+        found.append(window)
+    found.sort(key=lambda window: window["_position"])
+    for window in found:
+        window.pop("_phrase", None)
+        window.pop("_position", None)
+    return found[:limit]
+
+
+def is_compare_question(text):
+    return bool(re.search(r"(?i)\bvs\b|dibanding|banding", str(text or ""))) and bool(SPEND_MARKER.search(str(text or "")))
+
+
+def is_rank_question(text):
+    return bool(re.search(r"(?i)paling\s*(?:banyak|besar)|terbesar|paling\s*mahal\s*(?:pengeluaran)?", str(text or ""))) and bool(SPEND_MARKER.search(str(text or "")))
+
+
+def is_average_question(text):
+    return bool(re.search(r"(?i)rata[-\s]?rata", str(text or ""))) and bool(SPEND_MARKER.search(str(text or "")))
+
+
+def spend_fact(total_idr, purchase_count, label, top=None):
+    """One spend total for a labelled time window; empty when nothing recorded."""
+    if not purchase_count:
         return None
-    fact = {"kind": "spend", "days": days, "total_idr": summary["total_spend_idr"],
-            "purchase_count": summary["purchase_count"], "_require": [money_pattern(summary["total_spend_idr"])]}
-    top = summary.get("top_item")
+    fact = {"kind": "spend", "label": label, "total_idr": total_idr,
+            "purchase_count": purchase_count, "_require": [money_pattern(total_idr)]}
     if top:
         fact["top_item"] = top
         fact["_require"].append(re.escape(str(top["name"])))
     return fact
+
+
+def ingredient_spend_fact(name, total_idr, count, label):
+    """Spend for one named ingredient inside a time window."""
+    return {"kind": "spend_ingredient", "name": name, "label": label, "total_idr": total_idr,
+            "purchase_count": count, "_require": [re.escape(name), money_pattern(total_idr)]}
+
+
+def compare_fact(a_total, a_label, a_count, b_total, b_label, b_count):
+    """Two windows side by side, with the percentage move of the first."""
+    fact = {"kind": "spend_compare", "label_a": a_label, "label_b": b_label,
+            "total_a": a_total, "total_b": b_total, "count_a": a_count, "count_b": b_count,
+            "_require": [money_pattern(a_total), money_pattern(b_total)]}
+    if b_total > 0 and a_total != b_total:
+        change = round((a_total - b_total) / b_total * 100, 1)
+        fact["change_percent"] = f"{change:.1f}"
+        fact["_require"].append(percent_pattern(fact["change_percent"]))
+    return fact
+
+
+def rank_fact(label, ranked):
+    """Top ingredients by recorded spend; ranked is [(name, total)] descending."""
+    fact = {"kind": "rank", "label": label,
+            "items": [{"name": name, "total_idr": total} for name, total in ranked],
+            "_require": []}
+    for name, total in ranked:
+        fact["_require"].append(re.escape(name))
+        fact["_require"].append(money_pattern(total))
+    return fact
+
+
+def average_fact(total_idr, weeks, label):
+    """Total divided by whole weeks inside the window (minimum one).
+
+    The locked figure is the average itself — the reply must present the
+    average, never the raw total.
+    """
+    average = int(total_idr / weeks + 0.5)
+    return {"kind": "average", "label": label, "total_idr": total_idr, "weeks": weeks, "average_idr": average,
+            "_require": [money_pattern(average), re.escape(f"{weeks} minggu")]}
 
 
 def price_fact(name, unit, history):
@@ -90,11 +216,30 @@ def build_answer(facts, days=None):
         return "Belum ada data untuk dijawab."
     if facts[0]["kind"] == "spend":
         fact = facts[0]
-        parts = [f"Pengeluaran {fact['days']} hari terakhir: Rp{format_idr(fact['total_idr'])} dari {fact['purchase_count']} pembelian."]
+        parts = [f"Pengeluaran {fact['label']}: Rp{format_idr(fact['total_idr'])} dari {fact['purchase_count']} pembelian."]
         top = fact.get("top_item")
         if top:
             parts.append(f"Terbanyak: {top['name']} {top['quantity']} {top['unit']}.")
         return " ".join(parts)
+    if facts[0]["kind"] == "spend_ingredient":
+        fact = facts[0]
+        return f"Pengeluaran {fact['label']} untuk {fact['name']}: Rp{format_idr(fact['total_idr'])} (dari {fact['purchase_count']} catatan)."
+    if facts[0]["kind"] == "spend_compare":
+        fact = facts[0]
+        head = f"Pengeluaran {fact['label_a']}: Rp{format_idr(fact['total_a'])} ({fact['count_a']} pembelian) vs {fact['label_b']}: Rp{format_idr(fact['total_b'])} ({fact['count_b']})."
+        change = fact.get("change_percent")
+        if change:
+            direction = "naik" if float(change) > 0 else "turun"
+            magnitude = f"{abs(float(change)):.1f}".replace(".", ",")
+            head += f" Selisih {direction} {magnitude}%."
+        return head
+    if facts[0]["kind"] == "rank":
+        fact = facts[0]
+        listing = "; ".join(f"{position}. {item['name']} Rp{format_idr(item['total_idr'])}" for position, item in enumerate(fact["items"], 1))
+        return f"Pengeluaran terbesar {fact['label']}: {listing}."
+    if facts[0]["kind"] == "average":
+        fact = facts[0]
+        return f"Rata-rata per minggu ({fact['label']}): Rp{format_idr(fact['average_idr'])} (dari {fact['weeks']} minggu)."
     lines = []
     for fact in facts:
         head = f"Harga terakhir {fact['name']}: Rp{format_idr(fact['last_price_idr'])}/{fact['unit']}"

@@ -112,7 +112,7 @@ def test_questions_without_a_match_stay_none(tmp_path):
 
 
 def test_build_answer_spend_and_price():
-    spend = build_answer([{"kind": "spend", "days": 7, "total_idr": 559000, "purchase_count": 2,
+    spend = build_answer([{"kind": "spend", "label": "7 hari terakhir", "total_idr": 559000, "purchase_count": 2,
                            "top_item": {"name": "Telur ayam", "quantity": "10", "unit": "kg"}}])
     assert spend == "Pengeluaran 7 hari terakhir: Rp559.000 dari 2 pembelian. Terbanyak: Telur ayam 10 kg."
     price = build_answer([{"kind": "price", "name": "Cabai merah", "unit": "kg", "last_price_idr": 50000,

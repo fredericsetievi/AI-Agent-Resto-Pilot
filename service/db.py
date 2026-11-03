@@ -20,7 +20,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .extraction import catalog_aliases, extract_purchase, normalize_item
-from .data_qa import is_price_question, is_spend_question, price_fact, spend_fact
+from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_item, stock_reply, weekly_summary_reply
 
 
@@ -113,6 +113,12 @@ def validate_password(password):
     if not 8 <= len(password) <= 200:
         raise DomainError("invalid_password", "Passwords use 8-200 characters.", 422)
     return password
+
+
+def agg_spend(aggregate, window):
+    """Join a spend aggregate with its window label for the fact builders."""
+    aggregate["label"] = window["label"]
+    return aggregate
 
 
 def now():
@@ -751,14 +757,101 @@ class Store:
                     facts.append(fact)
             return {"question": str(text).strip(), "facts": facts} if facts else None
         if is_spend_question(text):
-            with self.transaction() as conn:
-                summary = self._weekly_summary(conn, SUMMARY_WINDOW_DAYS, restaurant_id)
-            fact = spend_fact(summary, SUMMARY_WINDOW_DAYS)
-            if fact is None:
-                return {"question": str(text).strip(), "facts": [],
-                        "empty_text": f"Belum ada pembelian tercatat dalam {SUMMARY_WINDOW_DAYS} hari terakhir."}
-            return {"question": str(text).strip(), "facts": [fact]}
+            return self._spend_answer_facts(text, restaurant_id)
         return None
+
+    def _spend_aggregate(self, conn, restaurant_id, start=None, end=None):
+        """Sum recorded line totals and a per-ingredient breakdown in a range.
+
+        start/end are ISO strings from the window parser; the ledger stores
+        UTC timestamps, and both sides are timezone-aware so comparisons are
+        exact. Per-ingredient rows also count the purchases mentioning them.
+        """
+        start_dt = datetime.fromisoformat(start) if start else None
+        end_dt = datetime.fromisoformat(end) if end else None
+        total, count, first = 0, 0, None
+        per_ingredient = {}
+        for row in conn.execute("SELECT body, created_at FROM purchases WHERE restaurant_id=? ORDER BY created_at, id", (restaurant_id,)):
+            created = datetime.fromisoformat(row["created_at"])
+            if start_dt and created < start_dt:
+                continue
+            if end_dt and created >= end_dt:
+                continue
+            if first is None:
+                first = created
+            count += 1
+            for item in json.loads(row["body"]).get("items") or []:
+                amount = item.get("line_total_idr")
+                if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+                    continue
+                total += amount
+                key = item.get("ingredient_id") or "unknown"
+                entry = per_ingredient.setdefault(key, {"total": 0, "quantity": Decimal(0), "unit": item.get("unit"), "count": 0})
+                entry["total"] += amount
+                entry["count"] += 1
+                try:
+                    entry["quantity"] += Decimal(str(item.get("canonical_quantity") or item.get("quantity") or 0))
+                except InvalidOperation:
+                    pass
+        return {"total_idr": total, "purchase_count": count, "per_ingredient": per_ingredient, "first_created_at": first}
+
+    def _spend_answer_facts(self, text, restaurant_id):
+        """Facts for every spending question shape (windows, per item, ranks...).
+
+        Routing is keyword-based and conservative: comparisons need two named
+        windows, rankings and averages default to the classic trailing week
+        unless a window is named, and per-ingredient answers need a catalog
+        match. Every figure comes from _spend_aggregate.
+        """
+        windows = find_windows(text, limit=2)
+        with self.transaction() as conn:
+            if is_compare_question(text) and len(windows) >= 2:
+                first, second = agg_spend(self._spend_aggregate(conn, restaurant_id, windows[0].get("start"), windows[0].get("end")), windows[0]), agg_spend(self._spend_aggregate(conn, restaurant_id, windows[1].get("start"), windows[1].get("end")), windows[1])
+                if first["purchase_count"] == 0 and second["purchase_count"] == 0:
+                    return {"question": str(text).strip(), "facts": [], "empty_text": f"Belum ada pembelian tercatat untuk {windows[0]['label']} maupun {windows[1]['label']}."}
+                return {"question": str(text).strip(), "facts": [compare_fact(
+                    first["total_idr"], first["label"], first["purchase_count"],
+                    second["total_idr"], second["label"], second["purchase_count"])]}
+            window = windows[0] if windows else parse_window(text)
+            label = window["label"]
+            catalog = self._catalog_for(restaurant_id)["by_id"]
+            if is_average_question(text):
+                # "Rata-rata per minggu" without a named window means the
+                # whole recorded history, not just the trailing week.
+                window = windows[0] if windows else parse_window("semua waktu")
+            agg = self._spend_aggregate(conn, restaurant_id, window.get("start"), window.get("end"))
+            if is_average_question(text):
+                if window.get("days"):
+                    weeks = max(1, round(window["days"] / 7))
+                elif agg["first_created_at"]:
+                    spanned = (datetime.now(timezone.utc) - agg["first_created_at"]).days / 7
+                    weeks = max(1, round(spanned + 0.499))
+                else:
+                    return {"question": str(text).strip(), "facts": [], "empty_text": "Belum ada pembelian tercatat untuk menghitung rata-rata."}
+                return {"question": str(text).strip(), "facts": [average_fact(agg["total_idr"], weeks, label)]}
+            if is_rank_question(text):
+                ranked = sorted(
+                    ((catalog.get(key, {}).get("name") or str(key), entry["total"]) for key, entry in agg["per_ingredient"].items()),
+                    key=lambda pair: pair[1], reverse=True)[:3]
+                if not ranked:
+                    return {"question": str(text).strip(), "facts": [], "empty_text": f"Belum ada pembelian tercatat {label}."}
+                return {"question": str(text).strip(), "facts": [rank_fact(label, ranked)]}
+            named = self._stock_ingredient_ids(text, restaurant_id)
+            if named:
+                ingredient_id = named[0]
+                entry = agg["per_ingredient"].get(ingredient_id)
+                if not entry or entry["total"] == 0:
+                    return {"question": str(text).strip(), "facts": [], "empty_text": f"Belum ada pembelian {catalog.get(ingredient_id, {}).get('name') or ingredient_id} tercatat {label}."}
+                return {"question": str(text).strip(), "facts": [ingredient_spend_fact(
+                    catalog.get(ingredient_id, {}).get("name") or ingredient_id, entry["total"], entry["count"], label)]}
+            if agg["purchase_count"] == 0:
+                return {"question": str(text).strip(), "facts": [], "empty_text": f"Belum ada pembelian tercatat dalam {label}."}
+            ranked = sorted(
+                ((catalog.get(key, {}).get("name") or str(key), entry) for key, entry in agg["per_ingredient"].items()),
+                key=lambda pair: pair[1]["total"], reverse=True)
+            top_name, top_entry = ranked[0]
+            top = {"name": top_name, "quantity": format(top_entry["quantity"].normalize(), "f"), "unit": top_entry["unit"] or ""}
+            return {"question": str(text).strip(), "facts": [spend_fact(agg["total_idr"], agg["purchase_count"], label, top=top)]}
 
     def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, platform="whatsapp"):
         """Persist inbound, decision/ledger, outbound and dedupe in one commit.
