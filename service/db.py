@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 from .extraction import catalog_aliases, extract_purchase, normalize_item
 from .data_qa import is_price_question, is_spend_question, price_fact, spend_fact
-from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup, parse_remove_item, stock_reply, weekly_summary_reply
+from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_item, stock_reply, weekly_summary_reply
 
 
 CATALOG = [
@@ -49,6 +49,9 @@ MAX_RULES_PER_RESTAURANT = 20
 RULE_MAX_CHARS = 500
 PROACTIVE_COOLDOWN_HOURS = 24
 PLATFORMS = ("whatsapp", "telegram")
+# A physical stock count is stated with one of these markers; everything
+# after the marker is parsed as plain item clauses ("cabai 2 kg").
+_OPNAME_MARKER = re.compile(r"(?i)(?:stok\s*opname|opname|stok\s*fisik|stok\s*aktual|hitung\s*fisik|catat\s*stok)")
 SCHEMA_VERSION = "2"
 PBKDF2_ITERATIONS = 200_000
 SESSION_TTL = timedelta(days=7)
@@ -254,12 +257,13 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS movements (id TEXT PRIMARY KEY, purchase_id TEXT REFERENCES purchases(id), ingredient_id TEXT NOT NULL, quantity TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto', UNIQUE(purchase_id, ingredient_id))",
                 "CREATE TABLE IF NOT EXISTS activity (id TEXT PRIMARY KEY, event TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT)",
                 "CREATE TABLE IF NOT EXISTS idempotency (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS whatsapp_threads (id TEXT PRIMARY KEY, channel TEXT NOT NULL, sender TEXT NOT NULL, transport TEXT NOT NULL, active_draft_id TEXT REFERENCES drafts(id), active_version INTEGER, pending_followup TEXT, restaurant_id TEXT REFERENCES restaurants(id), UNIQUE(channel, sender))",
+                "CREATE TABLE IF NOT EXISTS whatsapp_threads (id TEXT PRIMARY KEY, channel TEXT NOT NULL, sender TEXT NOT NULL, transport TEXT NOT NULL, active_draft_id TEXT REFERENCES drafts(id), active_version INTEGER, pending_followup TEXT, pending_opname_id TEXT, restaurant_id TEXT REFERENCES restaurants(id), UNIQUE(channel, sender))",
                 "CREATE TABLE IF NOT EXISTS whatsapp_messages (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES whatsapp_threads(id), direction TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, transport TEXT NOT NULL, status TEXT NOT NULL, draft_id TEXT REFERENCES drafts(id))",
                 "CREATE TABLE IF NOT EXISTS whatsapp_events (channel TEXT NOT NULL, event_id TEXT NOT NULL, thread_id TEXT NOT NULL REFERENCES whatsapp_threads(id), fingerprint TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY(channel, event_id))",
                 "CREATE TABLE IF NOT EXISTS custom_ingredients (id TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL, reorder_threshold TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
                 "CREATE TABLE IF NOT EXISTS restaurant_rules (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), rule TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS proactive_alerts (restaurant_id TEXT NOT NULL, ingredient_id TEXT NOT NULL, last_alerted_at TEXT NOT NULL, last_quantity TEXT NOT NULL, PRIMARY KEY(restaurant_id, ingredient_id))",
+                "CREATE TABLE IF NOT EXISTS stock_counts (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), ingredient_id TEXT NOT NULL, estimated_quantity TEXT NOT NULL, counted_quantity TEXT NOT NULL, delta TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, applied_at TEXT)",
             ):
                 conn.execute(statement)
             # Databases created before the follow-up state existed keep their
@@ -267,6 +271,8 @@ class Store:
             columns = {row[1] for row in conn.execute("PRAGMA table_info(whatsapp_threads)")}
             if "pending_followup" not in columns:
                 conn.execute("ALTER TABLE whatsapp_threads ADD COLUMN pending_followup TEXT")
+            if "pending_opname_id" not in columns:
+                conn.execute("ALTER TABLE whatsapp_threads ADD COLUMN pending_opname_id TEXT")
             self._migrate_platform_links(conn)
             self._migrate_tenants(conn)
             self._ensure_demo_tenant(conn)
@@ -780,6 +786,9 @@ class Store:
         stock_answer = payload.get("stock_answer")
         if not isinstance(stock_answer, dict) or not isinstance(stock_answer.get("body"), str) or not stock_answer["body"].strip():
             stock_answer = None
+        opname_answer = payload.get("opname_answer")
+        if not isinstance(opname_answer, dict) or not isinstance(opname_answer.get("body"), str) or not opname_answer["body"].strip():
+            opname_answer = None
         extracted_text = payload.get("extracted_text")
         if not isinstance(extracted_text, dict) or not isinstance(extracted_text.get("items"), list) or not isinstance(extracted_text.get("warnings"), list):
             extracted_text = None
@@ -864,7 +873,23 @@ class Store:
                     reply = "Oke, catatan diperbarui. " + " ".join(details) if details else FOLLOWUP_ACK
                     result["action"] = "purchase_updated"
             elif command in APPROVE_COMMANDS or command in REJECT_COMMANDS or intent_hint in ("approve", "reject"):
-                if not draft:
+                if not draft and thread.get("pending_opname_id"):
+                    # A physical count proposal is waiting: YA applies the
+                    # counted quantities, BATAL cancels — the store enforces
+                    # the same way it does for purchase drafts.
+                    group_id = thread["pending_opname_id"]
+                    if command in REJECT_COMMANDS or (intent_hint == "reject" and command not in APPROVE_COMMANDS):
+                        self.cancel_opname(conn, tenant, group_id)
+                        thread["pending_opname_id"] = None
+                        reply = "Usulan stok opname dibatalkan. Stok sistem tidak berubah."
+                        result["action"] = "opname_cancelled"
+                    else:
+                        applied = self.apply_opname(conn, tenant, group_id)
+                        thread["pending_opname_id"] = None
+                        reply = "Stok opname diterapkan: " + "; ".join(
+                            f"{item['name']} {item['estimated_quantity']} → {item['counted_quantity']} {item['unit']}" for item in applied) + "."
+                        result["action"] = "opname_applied"
+                elif not draft:
                     reply = "Tidak ada draf aktif untuk nomor ini. Kirim rincian pembelian terlebih dahulu; YA tidak mencatat pembelian lain."
                     result["action"] = "no_active_draft"
                 elif command in REJECT_COMMANDS or (intent_hint == "reject" and command not in APPROVE_COMMANDS):
@@ -929,6 +954,23 @@ class Store:
                     self._audit(conn, "draft_item_removed", f"Non-kitchen item '{removed.get('raw_name')}' removed from draft {draft['id'][:8]}.", tenant)
                     reply = f"Item '{removed.get('raw_name')}' dihapus dari draf.\n" + draft_reply(draft, names)
                     result["action"] = "item_removed"
+            elif tenant and not draft and (opname := self.parse_opname(payload["text"], tenant, conn=conn)):
+                # A physical stock count proposal. Parsed deterministically
+                # against the ledger; the API may have pre-phrased the reply
+                # with locked figures, but the proposal itself is re-derived
+                # here so the stored state can never diverge from the parse.
+                previous_group = thread.get("pending_opname_id")
+                if previous_group:
+                    self._set_opname_status(conn, tenant, previous_group, "cancelled")
+                group_id = self.create_opname_proposal(conn, tenant, opname["items"])
+                thread["pending_opname_id"] = group_id
+                prephrased = opname_answer or {}
+                prephrased_ids = [item.get("ingredient_id") for item in prephrased.get("items") or []]
+                if prephrased.get("body") and prephrased_ids == [item["ingredient_id"] for item in opname["items"]]:
+                    reply = prephrased["body"]
+                else:
+                    reply = opname_reply(opname["items"], opname["invalid"])
+                result["action"] = "opname_proposed"
             elif stock_answer:
                 # A stock question answered from inventory facts before the
                 # ingest; read-only like the summary, so an active draft
@@ -952,7 +994,7 @@ class Store:
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
-            conn.execute("UPDATE whatsapp_threads SET active_draft_id=?, active_version=?, pending_followup=? WHERE id=?", (thread["active_draft_id"], thread["active_version"], thread.get("pending_followup"), thread["id"]))
+            conn.execute("UPDATE whatsapp_threads SET active_draft_id=?, active_version=?, pending_followup=?, pending_opname_id=? WHERE id=?", (thread["active_draft_id"], thread["active_version"], thread.get("pending_followup"), thread.get("pending_opname_id"), thread["id"]))
             draft_id = draft["id"] if draft else None
             if extracted_photo:
                 inbound_body = f"[Foto nota] {source_label}"
@@ -1136,6 +1178,114 @@ class Store:
             self._audit(conn, "proactive_message", f"Proactive message queued for {sender}.", restaurant_id)
         return message_id
 
+    # ---- Physical stock count (stok opname) via chat -----------------------
+
+    def parse_opname(self, text, restaurant_id, conn=None):
+        """Parse a physical stock count message against the current ledger.
+
+        Deterministic on purpose: the counted quantities come from the
+        owner's own words and every comparison figure comes from the
+        inventory table. Returns {"items", "invalid"} — items carry the
+        estimated (database) and counted quantities with their delta — or
+        None when the message carries no opname marker at all. Items missing
+        a readable quantity or catalog match land in "invalid" with the
+        reason; nothing is guessed. Pass an open connection when called
+        inside another transaction (the ingest branch does).
+        """
+        if not restaurant_id:
+            return None
+        candidate = str(text or "").strip()
+        if not candidate or not _OPNAME_MARKER.search(candidate):
+            return None
+        remainder = _OPNAME_MARKER.sub(" ", candidate)
+        # The rules parser takes one item per line; an opname listing several
+        # ingredients ("cabai 2 kg dan bawang 1 kg") becomes one line each.
+        remainder = re.sub(r"(?i)(?:\s+dan\s+|\s*,\s*)", "\n", remainder)
+        extracted = extract_purchase(remainder)
+        catalog = self._catalog_for(restaurant_id)
+        if conn is None:
+            with self.transaction() as own_conn:
+                return self._parse_opname(own_conn, restaurant_id, catalog, extracted)
+        return self._parse_opname(conn, restaurant_id, catalog, extracted)
+
+    def _parse_opname(self, conn, restaurant_id, catalog, extracted):
+        items, invalid = [], []
+        for item in extracted["items"]:
+            name = str(item.get("raw_name") or "").strip()
+            if not item.get("quantity"):
+                invalid.append({"raw_name": name, "reason": "jumlah tidak terbaca"})
+                continue
+            if not item.get("ingredient_id") or item["ingredient_id"] not in catalog["by_id"]:
+                invalid.append({"raw_name": name, "reason": "bahan tidak ada di katalog"})
+                continue
+            row = conn.execute("SELECT quantity FROM inventory WHERE restaurant_id=? AND ingredient_id=?", (restaurant_id, item["ingredient_id"])).fetchone()
+            estimated = row[0] if row else "0"
+            counted = decimal_string(item["quantity"])
+            items.append({"ingredient_id": item["ingredient_id"], "name": catalog["by_id"][item["ingredient_id"]]["name"],
+                          "unit": item.get("unit") or catalog["by_id"][item["ingredient_id"]]["unit"],
+                          "estimated_quantity": estimated, "counted_quantity": counted,
+                          "delta": decimal_string(Decimal(counted) - Decimal(estimated))})
+        if not items and not invalid:
+            return None
+        return {"items": items, "invalid": invalid}
+
+    def create_opname_proposal(self, conn, restaurant_id, items):
+        """File pending stock_counts rows for one proposal group."""
+        group_id = uuid.uuid4().hex
+        created = now()
+        for item in items:
+            conn.execute(
+                "INSERT INTO stock_counts (id, group_id, restaurant_id, ingredient_id, estimated_quantity, counted_quantity, delta, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (uuid.uuid4().hex, group_id, restaurant_id, item["ingredient_id"], item["estimated_quantity"], item["counted_quantity"], item["delta"], created))
+        self._audit(conn, "opname_proposed", f"Stock count proposed: " + ", ".join(f"{item['name']} → {item['counted_quantity']} {item['unit']}" for item in items), restaurant_id)
+        return group_id
+
+    def _set_opname_status(self, conn, restaurant_id, group_id, status):
+        conn.execute("UPDATE stock_counts SET status=? WHERE group_id=? AND restaurant_id=? AND status='pending'", (status, group_id, restaurant_id))
+
+    def cancel_opname(self, conn, restaurant_id, group_id):
+        self._set_opname_status(conn, restaurant_id, group_id, "cancelled")
+        self._audit(conn, "opname_cancelled", "Stock count proposal cancelled.", restaurant_id)
+
+    def apply_opname(self, conn, restaurant_id, group_id):
+        """Set each counted inventory quantity and record the signed delta.
+
+        The correction movement carries no purchase id — it is a physical
+        count correction, not stock arriving. Returns the applied rows for
+        the confirmation reply.
+        """
+        rows = conn.execute(
+            "SELECT ingredient_id, estimated_quantity, counted_quantity, delta FROM stock_counts "
+            "WHERE group_id=? AND restaurant_id=? AND status='pending'", (group_id, restaurant_id)).fetchall()
+        applied = []
+        for row in rows:
+            conn.execute("UPDATE inventory SET quantity=? WHERE restaurant_id=? AND ingredient_id=?", (row["counted_quantity"], restaurant_id, row["ingredient_id"]))
+            conn.execute(
+                "INSERT INTO movements (id, purchase_id, ingredient_id, quantity, created_at, restaurant_id) VALUES (?, NULL, ?, ?, ?, ?)",
+                (uuid.uuid4().hex, row["ingredient_id"], row["delta"], now(), restaurant_id))
+            entry = self._catalog_for(restaurant_id)["by_id"].get(row["ingredient_id"]) or {}
+            applied.append({"ingredient_id": row["ingredient_id"], "name": entry.get("name") or row["ingredient_id"],
+                            "unit": entry.get("unit") or "", "estimated_quantity": row["estimated_quantity"],
+                            "counted_quantity": row["counted_quantity"], "delta": row["delta"]})
+        self._set_opname_status(conn, restaurant_id, group_id, "applied")
+        self._audit(conn, "opname_applied", "Stock count applied: " + ", ".join(f"{item['name']} → {item['counted_quantity']} {item['unit']}" for item in applied), restaurant_id)
+        return applied
+
+    def recent_stock_counts(self, restaurant_id, limit=10, conn=None):
+        """Applied physical counts, newest first, for the dashboard."""
+        if conn is None:
+            with self.transaction() as own:
+                return self.recent_stock_counts(restaurant_id, limit, conn=own)
+        rows = conn.execute(
+            "SELECT c.group_id, c.ingredient_id, c.estimated_quantity, c.counted_quantity, c.delta, c.applied_at "
+            "FROM stock_counts c WHERE c.restaurant_id=? AND c.status='applied' ORDER BY c.applied_at DESC, c.rowid DESC LIMIT ?",
+            (restaurant_id, limit)).fetchall()
+        catalog = self._catalog_for(restaurant_id)["by_id"]
+        return [{"ingredient_id": row["ingredient_id"], "name": (catalog.get(row["ingredient_id"]) or {}).get("name") or row["ingredient_id"],
+                 "estimated_quantity": row["estimated_quantity"], "counted_quantity": row["counted_quantity"],
+                 "delta": row["delta"], "applied_at": row["applied_at"]} for row in rows]
+
     def export_stock(self, restaurant_id=None):
         """Catalog stock rows with the most recent recorded unit price per ingredient."""
         catalog = self._catalog_for(restaurant_id)
@@ -1278,6 +1428,7 @@ class Store:
                             "pending_approvals": sum(row["status"] in ("pending_approval", "needs_clarification") for row in drafts),
                             "low_stock_count": sum(row["low_stock"] for row in inventory), "recorded_purchases": len(purchases)},
                 "drafts": drafts, "purchases": purchases, "inventory": inventory,
+                "stock_counts": self.recent_stock_counts(restaurant_id, limit=5, conn=conn),
                 "activity": [dict(row) for row in conn.execute("SELECT * FROM activity WHERE restaurant_id=? ORDER BY created_at DESC, id DESC LIMIT 100", (restaurant_id,))],
                 "ingredients": catalog["list"],
             }

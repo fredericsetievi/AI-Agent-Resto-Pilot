@@ -186,3 +186,68 @@ async def phrase_data_answer(question, facts, rules_text, *, api_key, model=DEFA
         status = 429 if response.status_code == 429 else 502
         raise StepFunTextError(f"The data answer model rejected the request (HTTP {response.status_code}).", status)
     return validate_data_reply(_answer_text(response), facts)
+
+
+async def phrase_opname_answer(items, *, api_key, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL, client=None):
+    """Reword a physical stock count confirmation with the figures locked.
+
+    Each item requires the ingredient name and both quantities (system
+    record and physical count) to appear with their unit; validate_data_reply
+    also rejects any other quantity-like figure the reply invents. Callers
+    keep the deterministic opname_reply on StepFunTextError.
+    """
+    if not api_key or not api_key.strip():
+        raise StepFunTextError("The opname phrasing model is not configured.", 503)
+    if not items:
+        raise StepFunTextError("No stock count items to phrase.", 400)
+    facts = []
+    for item in items:
+        unit = re.escape(str(item.get("unit") or ""))
+        facts.append({
+            "name": item["name"], "estimated": item["estimated_quantity"],
+            "counted": item["counted_quantity"], "delta": item["delta"], "unit": item["unit"],
+            "_require": [
+                re.escape(item["name"]),
+                rf"(?<![0-9]){re.escape(str(item['estimated_quantity']))}\s?{unit}",
+                rf"(?<![0-9]){re.escape(str(item['counted_quantity']))}\s?{unit}",
+            ],
+        })
+    base_url = validate_base_url(base_url)
+    payload = {
+        "model": model,
+        "temperature": 0,
+        "messages": [{
+            "role": "user",
+            "content": (
+                "You confirm a physical stock count (stok opname) to a small restaurant owner "
+                "over WhatsApp in casual Indonesian. You get the exact comparison just read "
+                "from the database: the recorded quantity versus the owner's counted quantity. "
+                "Reply with the confirmation text only.\n\n"
+                "Hard rules, in priority order:\n"
+                "1. Use ONLY the quantities, units, and ingredient names in the facts. Never "
+                "compute, convert, round, or invent any number.\n"
+                "2. Every estimated and counted quantity must appear exactly as written with "
+                "its unit (\"3 kg\" stays \"3 kg\").\n"
+                "3. Ask the owner to confirm applying the correction (balas YA), or to review "
+                "it in the dashboard. Keep the reply under 400 characters.\n\n"
+                f"Count comparison (JSON):\n{json.dumps(facts, ensure_ascii=False)}"
+            ),
+        }],
+    }
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=60.0, follow_redirects=False)
+    try:
+        response = await client.post(
+            base_url + "/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+        )
+    except httpx.HTTPError:
+        raise StepFunTextError("The opname phrasing model could not be reached; the deterministic text is kept.")
+    finally:
+        if owns_client:
+            await client.aclose()
+    if response.status_code != 200:
+        status = 429 if response.status_code == 429 else 502
+        raise StepFunTextError(f"The opname phrasing model rejected the request (HTTP {response.status_code}).", status)
+    return validate_data_reply(_answer_text(response), facts)

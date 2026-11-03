@@ -464,6 +464,26 @@ def stock_reply(facts):
     return "\n".join(lines)
 
 
+def opname_reply(items, invalid):
+    """Format a physical stock count proposal, printing only ledger figures."""
+    if items:
+        lines = ["Usulan stok opname:"]
+        for item in items:
+            lines.append(
+                f"• {item['name']}: catatan sistem {item['estimated_quantity']} {item['unit']} "
+                f"→ hitung fisik {item['counted_quantity']} {item['unit']} (selisih {item['delta']} {item['unit']})"
+            )
+        for bad in invalid:
+            lines.append(f"• {bad['raw_name'] or '(tidak terbaca)'}: {bad['reason']} — dilewati.")
+        lines.append("Balas YA untuk terapkan, BATAL untuk batal.")
+    else:
+        lines = ["Permintaan stok opname belum bisa dibaca:"]
+        for bad in invalid:
+            lines.append(f"• {bad['raw_name'] or '(tidak terbaca)'}: {bad['reason']}.")
+        lines.append("Format: 'stok opname <bahan> <jumlah>' — contoh 'stok opname cabai 2 kg'.")
+    return "\n".join(lines)
+
+
 # Raw extraction warnings are admin-facing English; the owner-facing reply
 # already covers unmapped items, so only flag "other" problems generically and
 # keep line-level detail on the dashboard.

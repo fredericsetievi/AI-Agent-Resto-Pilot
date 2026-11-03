@@ -40,7 +40,7 @@ from .audio import (
 from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
 from .pg_store import PostgresStore
 from .data_qa import build_answer as build_data_answer
-from .data_qa import phrase_data_answer
+from .data_qa import phrase_data_answer, phrase_opname_answer
 from .extraction import extract_purchase
 from .intent_llm import classify_intent
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
@@ -89,6 +89,7 @@ from .whatsapp import (
     parse_webhook,
     stock_reply,
     public_origin,
+    opname_reply,
     send_audio_message,
     send_text,
     upload_audio,
@@ -451,6 +452,31 @@ def create_app(
                 logger.warning("StepFun stock phrasing failed; keeping the deterministic reply: %s", exc)
         return {"body": reply}
 
+    async def build_opname_answer(text, restaurant_id):
+        """Pre-phrase a physical stock count proposal; the store re-derives it.
+
+        The parse itself is deterministic (see Store.parse_opname); this only
+        lets the model reword the confirmation, and validate_data_reply keeps
+        every ledger figure verbatim. Returns None when the message is not an
+        opname, so the stock/data/purchase paths run unchanged.
+        """
+        parsed = store.parse_opname(text, restaurant_id)
+        if parsed is None:
+            return None
+        reply = opname_reply(parsed["items"], parsed["invalid"])
+        if parsed["items"] and stock_llm_enabled and vision_api_key and not parsed["invalid"]:
+            try:
+                reply = await phrase_opname_answer(
+                    parsed["items"],
+                    api_key=vision_api_key,
+                    model=text_llm_model,
+                    base_url=vision_base_url,
+                    client=stock_llm_http_client,
+                )
+            except (StepFunTextError, ValueError) as exc:
+                logger.warning("Opname phrasing failed; keeping the deterministic text: %s", exc)
+        return {"body": reply, "items": parsed["items"]}
+
     async def run_proactive_check(restaurant_id, *, dry_run=False):
         """One proactive sweep for one restaurant: rules in, alert out.
 
@@ -698,10 +724,12 @@ def create_app(
             raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
         payload = body.model_dump()
         if payload["text"].strip():
-            # A stock question is answered read-only from the restaurant's own
-            # inventory; the purchase extraction is skipped entirely for it.
-            payload["stock_answer"] = await build_stock_answer(payload["text"], actor["restaurant_id"])
-            if payload["stock_answer"] is None:
+            # A physical stock count takes priority over stock/data questions;
+            # both are read-only pre-ingest lookups with the ledger as source.
+            payload["opname_answer"] = await build_opname_answer(payload["text"], actor["restaurant_id"])
+            if payload["opname_answer"] is None:
+                payload["stock_answer"] = await build_stock_answer(payload["text"], actor["restaurant_id"])
+            if payload["opname_answer"] is None and payload["stock_answer"] is None:
                 extracted = await filter_kitchen_items(
                     await extract_text(payload["text"], actor["restaurant_name"]), actor["restaurant_id"])
                 hint = await maybe_intent_hint(payload["text"], extracted)
@@ -711,6 +739,10 @@ def create_app(
         return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"])}
 
     # ---- Per-restaurant agent rules and proactive checks -------------------
+
+    @app.get("/v1/stock-counts")
+    def stock_counts_list(actor=Depends(owner_actor)):
+        return {"data": {"counts": store.recent_stock_counts(actor["restaurant_id"])}}
 
     @app.get("/v1/rules")
     def rules_list(actor=Depends(owner_actor)):
@@ -941,8 +973,10 @@ def create_app(
                 # sentences reach the draft flow; commands skip the model. A
                 # stock question is answered read-only from the sender's own
                 # restaurant inventory before any of that.
-                payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
-                if payload["stock_answer"] is None:
+                payload["opname_answer"] = await build_opname_answer(payload["text"], restaurant_id)
+                if payload["opname_answer"] is None:
+                    payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
+                if payload["opname_answer"] is None and payload["stock_answer"] is None:
                     extracted = await filter_kitchen_items(
                         await extract_text(payload["text"], sender_restaurant["name"]), restaurant_id)
                     hint = await maybe_intent_hint(payload["text"], extracted)
@@ -1084,8 +1118,10 @@ def create_app(
             elif not message.get("media_kind") and payload["text"].strip() and sender_restaurant:
                 # Text walks the exact same rules-then-rescue-then-stock path
                 # as WhatsApp text; only the transport differs.
-                payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
-                if payload["stock_answer"] is None:
+                payload["opname_answer"] = await build_opname_answer(payload["text"], restaurant_id)
+                if payload["opname_answer"] is None:
+                    payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
+                if payload["opname_answer"] is None and payload["stock_answer"] is None:
                     extracted = await filter_kitchen_items(
                         await extract_text(payload["text"], sender_restaurant["name"]), restaurant_id)
                     hint = await maybe_intent_hint(payload["text"], extracted)
