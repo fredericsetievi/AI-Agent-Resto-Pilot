@@ -483,20 +483,28 @@ function readPhoto(file) {
 $('#intake-form').addEventListener('submit',async event => {
   event.preventDefault();const button=$('button[type="submit"]',event.target);if(button.disabled)return;
   const photos=[...$('#purchase-photo').files];
+  const pdfs=photos.filter(photo=>photo.type==='application/pdf' || photo.name.toLowerCase().endsWith('.pdf'));
+  const images=photos.filter(photo=>!pdfs.includes(photo));
   const supplier=$('#purchase-supplier').value.trim() || null;
   const text=$('#purchase-text').value.trim();
-  if(photos.length && text){showError('intake-error','Use either photos or a typed message, not both.');return;}
-  if(!photos.length && !text){showError('intake-error','Choose a photo or type a purchase message first.');return;}
-  for(const photo of photos){
+  if(photos.length && text){showError('intake-error','Use either files or a typed message, not both.');return;}
+  if(!photos.length && !text){showError('intake-error','Choose a file or type a purchase message first.');return;}
+  if(pdfs.length && images.length){showError('intake-error','Send photos and PDFs separately — each becomes its own draft.');return;}
+  for(const photo of images){
     if(!PHOTO_TYPES.includes(photo.type)){showError('intake-error','Use JPEG, PNG, or WEBP photos.');return;}
     if(photo.size > MAX_PHOTO_BYTES){showError('intake-error','A photo is over 5 MB. Take smaller photos.');return;}
   }
-  if(photos.length > 5){showError('intake-error','Send at most 5 photos at once — the rest can follow in another draft.');return;}
+  for(const pdf of pdfs){
+    if(pdf.size > 10 * 1024 * 1024){showError('intake-error','A PDF is over 10 MB.');return;}
+  }
+  if(photos.length > 5){showError('intake-error','Send at most 5 files at once — the rest can follow in another draft.');return;}
   const fingerprint=photos.length ? photos.map(photo=>`${photo.name}:${photo.size}:${photo.lastModified}`).join('|')+`:${supplier || ''}` : JSON.stringify({text,supplier});
   if(state.intakeKey?.fingerprint!==fingerprint)state.intakeKey={fingerprint,key:crypto.randomUUID()};
   button.disabled=true;button.textContent=photos.length>1?'Reading photos…':photos.length?'Reading photo…':'Preparing…';showError('intake-error','');
   try {
-    const draft=photos.length === 1
+    const draft=pdfs.length === 1
+      ? await api('/v1/intake/pdf',{method:'POST',body:{pdf_base64:await readPhoto(pdfs[0]),supplier},key:state.intakeKey.key,timeout:180000})
+      : photos.length === 1
       ? await api('/v1/intake/image',{method:'POST',body:{image_base64:await readPhoto(photos[0]),media_type:photos[0].type,supplier},key:state.intakeKey.key,timeout:90000})
       : photos.length > 1
       ? await api('/v1/intake/images',{method:'POST',body:{images:await Promise.all(photos.map(async photo=>({image_base64:await readPhoto(photo),media_type:photo.type}))),supplier},key:state.intakeKey.key,timeout:180000})

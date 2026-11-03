@@ -29,6 +29,7 @@ OUTBOUND_SENDING = "telegram_sending"
 OUTBOUND_SENT = "telegram_sent"
 DEFAULT_API_BASE = "https://api.telegram.org"
 MAX_MEDIA_BYTES = 5 * 1024 * 1024
+MAX_PDF_BYTES = 10 * 1024 * 1024
 MAX_TEXT_CHARS = 4000  # Telegram rejects messages over 4096 characters.
 
 _TOKEN = re.compile(r"^\d{5,16}:[A-Za-z0-9_-]{25,64}$")
@@ -110,6 +111,9 @@ def parse_update(raw):
     elif isinstance(message.get("audio"), dict):
         media_id = message["audio"].get("file_id")
         text, num_media, media_kind = "", 1, "audio"
+    elif isinstance(message.get("document"), dict) and message["document"].get("mime_type") == "application/pdf":
+        media_id = message["document"].get("file_id")
+        text, num_media, media_kind = "", 1, "pdf"
     elif not text:
         text, num_media = "", 1
     if media_id is not None and (not isinstance(media_id, str) or not _MEDIA_ID.fullmatch(media_id)):
@@ -153,7 +157,7 @@ async def send_text(token, chat_id, text, *, api_base=DEFAULT_API_BASE, client=N
         raise TelegramError("Telegram reported the reply as failed.")
 
 
-async def download_file(token, file_id, *, api_base=DEFAULT_API_BASE, client=None):
+async def download_file(token, file_id, *, api_base=DEFAULT_API_BASE, client=None, max_bytes=None):
     """Resolve one file_id through getFile and return (bytes, None).
 
     Telegram serves media in two hops: the getFile metadata carries a
@@ -189,8 +193,9 @@ async def download_file(token, file_id, *, api_base=DEFAULT_API_BASE, client=Non
         if download.status_code != 200:
             raise TelegramError(f"Telegram media download failed (HTTP {download.status_code}).")
         raw = download.content
-        if not raw or len(raw) > MAX_MEDIA_BYTES:
-            raise TelegramError(f"Telegram media is empty or exceeds {MAX_MEDIA_BYTES // (1024 * 1024)} MiB.")
+        cap = max_bytes or MAX_MEDIA_BYTES
+        if not raw or len(raw) > cap:
+            raise TelegramError(f"Telegram media is empty or exceeds {cap // (1024 * 1024)} MiB.")
         return raw, None
     finally:
         if owns_client:

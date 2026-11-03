@@ -43,8 +43,8 @@
       <label for="purchase-text">Purchase message</label>
       <textarea id="purchase-text" name="text" rows="4" maxlength="4000" placeholder="beli cabai 3 kg 150rb"></textarea>
       <div class="examples"><span>Try:</span><button type="button" data-example="beli cabai 3 kg 150rb">Cabai · 3 kg</button><button type="button" data-example="beli beras">Missing details</button><button type="button" data-example="beli cabai 500 g Rp25.000">Grams → kg</button></div>
-      <label for="purchase-photo">Or photograph the supplier nota <span class="muted">(JPEG, PNG, or WEBP, max 5 MB each — up to 5 photos become one draft)</span></label>
-      <input id="purchase-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+      <label for="purchase-photo">Or attach the supplier nota <span class="muted">(JPEG, PNG, WEBP, or PDF — up to 5 files become one draft)</span></label>
+      <input id="purchase-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" multiple>
       <label for="purchase-supplier">Supplier <span class="muted">(optional)</span></label>
       <input id="purchase-supplier" name="supplier" maxlength="100" placeholder="e.g. Pasar Pagi">
       <p class="field-help">For several items, use one line per item. A photo is read by StepFun vision; anything it cannot read stays blank for you to fill in. Voice notes are not supported yet.</p>

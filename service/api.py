@@ -10,6 +10,7 @@ are rejected before any processing.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import csv
 import hashlib
@@ -45,11 +46,13 @@ from .extraction import extract_purchase
 from .intent_llm import classify_intent
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .notifications import build_alert_text, phrase_alert
+from .pdfpages import PdfRenderError, render_pdf_pages
 from .rules import effective_directives
 from .text_llm import StepFunTextError, extract_message
 from .stock_llm import phrase_stock_answer
 from .telegram import (
     DEFAULT_API_BASE as TELEGRAM_DEFAULT_API_BASE,
+    MAX_PDF_BYTES as TG_MAX_PDF_BYTES,
     OUTBOUND_PENDING as TG_OUTBOUND_PENDING,
     OUTBOUND_SENDING as TG_OUTBOUND_SENDING,
     OUTBOUND_SENT as TG_OUTBOUND_SENT,
@@ -82,6 +85,7 @@ from .whatsapp import (
     MetaWhatsAppError,
     download_audio,
     download_image,
+    download_pdf,
     matches_public_host,
     matches_verify_token,
     meta_event_key,
@@ -209,6 +213,10 @@ class ImagePart(Model):
 class IntakeImages(Model):
     """Up to five nota photos submitted together as one purchase draft."""
     images: Annotated[list[ImagePart], Field(min_length=1, max_length=5)]
+    supplier: ShortText | None = None
+
+class PdfIntake(Model):
+    pdf_base64: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=14_000_000)]
     supplier: ShortText | None = None
 
 
@@ -744,6 +752,42 @@ def create_app(
         payload = {"text": f"Gabungan {len(body.images)} foto nota", "supplier": supplier}
         return {"data": await run_in_threadpool(store.intake, idempotency_key, payload, merged, actor["restaurant_id"])}
 
+    @app.post("/v1/intake/pdf", status_code=201)
+    async def intake_pdf(body: PdfIntake, actor=Depends(owner_actor), idempotency_key=Depends(key)):
+        """A PDF nota: rendered to images locally, read page by page, one draft."""
+        if not vision_api_key:
+            raise DomainError("vision_not_configured", "Set STEPFUN_API_KEY before reading invoice PDFs.", 503)
+        try:
+            pdf_bytes = base64.b64decode(body.pdf_base64, validate=True)
+        except Exception:
+            raise DomainError("invalid_request", "pdf_base64 is not valid base64.", 422)
+        try:
+            pages = render_pdf_pages(pdf_bytes)
+        except PdfRenderError as exc:
+            raise DomainError("pdf_invalid", str(exc), 422)
+        merged = {"items": [], "warnings": []}
+        supplier = body.supplier
+        for page in pages:
+            try:
+                extracted = await extract_invoice(
+                    page,
+                    media_type="image/jpeg",
+                    restaurant=actor["restaurant_name"],
+                    api_key=vision_api_key,
+                    model=vision_model,
+                    base_url=vision_base_url,
+                    client=vision_http_client,
+                )
+            except StepFunVisionError as exc:
+                logger.warning("StepFun vision PDF intake failed: %s", exc)
+                raise DomainError("vision_failed", str(exc), exc.status)
+            merged["items"].extend(extracted.get("items") or [])
+            merged["warnings"].extend(extracted.get("warnings") or [])
+            supplier = supplier or extracted.get("supplier")
+        merged = await filter_kitchen_items(merged, actor["restaurant_id"])
+        payload = {"text": f"Nota PDF ({len(pages)} halaman)", "supplier": supplier}
+        return {"data": await run_in_threadpool(store.intake, idempotency_key, payload, merged, actor["restaurant_id"])}
+
     @app.patch("/v1/drafts/{draft_id}")
     def edit(draft_id: str, body: Edit, actor=Depends(owner_actor), idempotency_key=Depends(key)):
         return {"data": store.edit(draft_id, idempotency_key, body.model_dump(), actor["restaurant_id"])}
@@ -981,6 +1025,41 @@ def create_app(
                 except (MetaWhatsAppError, StepFunVisionError) as exc:
                     # A failed read falls back to the safe media reply; no draft.
                     logger.warning("WhatsApp photo intake failed: %s", exc)
+            elif message.get("media_kind") == "pdf" and vision_api_key and sender_restaurant and message.get("media_id"):
+                # A PDF nota: rendered to images locally, read page by page,
+                # merged into one draft.
+                try:
+                    pdf_bytes = await download_pdf(
+                        message["media_id"],
+                        meta_access_token,
+                        meta_graph_api_version,
+                        client=meta_http_client,
+                    )
+                    pages = render_pdf_pages(pdf_bytes)
+                    merged = {"items": [], "warnings": []}
+                    supplier = None
+                    for page in pages:
+                        extracted = await filter_kitchen_items(
+                            await extract_invoice(
+                                page,
+                                media_type="image/jpeg",
+                                restaurant=sender_restaurant["name"],
+                                api_key=vision_api_key,
+                                model=vision_model,
+                                base_url=vision_base_url,
+                                client=vision_http_client,
+                            ),
+                            restaurant_id,
+                        )
+                        merged["items"].extend(extracted.get("items") or [])
+                        merged["warnings"].extend(extracted.get("warnings") or [])
+                        supplier = supplier or extracted.get("supplier")
+                    if supplier:
+                        merged["supplier"] = supplier
+                    payload["extracted"] = merged
+                    payload["source_label"] = f"PDF nota WhatsApp ({len(pages)} halaman)"
+                except (PdfRenderError, MetaWhatsAppError, StepFunVisionError) as exc:
+                    logger.warning("WhatsApp PDF intake failed: %s", exc)
             elif message.get("media_kind") == "audio" and vision_api_key and sender_restaurant:
                 # A voice note is transcribed and then parsed like typed text;
                 # a failed read falls back to the safe media reply; no draft.
@@ -1153,7 +1232,43 @@ def create_app(
                     old_task.cancel()
                 entry["task"] = asyncio.create_task(_flush_group_later(group_key))
                 continue
-            if message.get("media_kind") == "image" and vision_api_key and sender_restaurant and message.get("media_id"):
+            if message.get("media_kind") == "pdf" and vision_api_key and sender_restaurant and message.get("media_id"):
+                # A PDF nota: render pages locally, read each with vision,
+                # merge the line items into one draft.
+                try:
+                    pdf_bytes, _mime = await download_telegram_file(
+                        telegram_bot_token,
+                        message["media_id"],
+                        api_base=telegram_api_base,
+                        client=telegram_http_client,
+                        max_bytes=TG_MAX_PDF_BYTES,
+                    )
+                    pages = render_pdf_pages(pdf_bytes)
+                    merged = {"items": [], "warnings": []}
+                    supplier = None
+                    for page in pages:
+                        extracted = await filter_kitchen_items(
+                            await extract_invoice(
+                                page,
+                                media_type="image/jpeg",
+                                restaurant=sender_restaurant["name"],
+                                api_key=vision_api_key,
+                                model=vision_model,
+                                base_url=vision_base_url,
+                                client=vision_http_client,
+                            ),
+                            restaurant_id,
+                        )
+                        merged["items"].extend(extracted.get("items") or [])
+                        merged["warnings"].extend(extracted.get("warnings") or [])
+                        supplier = supplier or extracted.get("supplier")
+                    if supplier:
+                        merged["supplier"] = supplier
+                    payload["extracted"] = merged
+                    payload["source_label"] = f"PDF nota Telegram ({len(pages)} halaman)"
+                except (TelegramError, PdfRenderError, StepFunVisionError) as exc:
+                    logger.warning("Telegram PDF intake failed: %s", exc)
+            elif message.get("media_kind") == "image" and vision_api_key and sender_restaurant and message.get("media_id"):
                 try:
                     photo, _media_type = await download_telegram_file(
                         telegram_bot_token,

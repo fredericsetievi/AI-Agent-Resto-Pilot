@@ -183,6 +183,14 @@ def _normalize_message(message):
         if not isinstance(media_id, str) or not _MEDIA_ID.fullmatch(media_id):
             raise MetaWhatsAppError("Invalid Meta WhatsApp audio message.", 400)
         text, num_media, media_kind = "", 1, "audio"
+    elif (message.get("type") == "document" and isinstance(message.get("document"), dict)
+          and message["document"].get("mime_type") == "application/pdf"):
+        document = message["document"]
+        media_id = document.get("id")
+        if isinstance(media_id, str) and _MEDIA_ID.fullmatch(media_id):
+            text, num_media, media_id, media_kind = "", 1, media_id, "pdf"
+        else:
+            text, num_media, media_id, media_kind = "", 1, None, None
     else:
         text, num_media, media_id, media_kind = "", 1, None, None
     return {"sender": sender, "text": text, "event_id": message_id, "num_media": num_media, "media_id": media_id, "media_kind": media_kind}
@@ -248,6 +256,23 @@ async def download_image(media_id, access_token, graph_version, *, client=None):
         allowed_types=IMAGE_MEDIA_TYPES,
         label="image",
         cap=MAX_MEDIA_BYTES,
+        client=client,
+    )
+
+
+MAX_PDF_BYTES = 10 * 1024 * 1024
+PDF_MEDIA_TYPES = ("application/pdf",)
+
+
+async def download_pdf(media_id, access_token, graph_version, *, client=None):
+    """Fetch one PDF document within a 10 MB cap (nota PDF from suppliers)."""
+    return await _download_media(
+        media_id,
+        access_token,
+        graph_version,
+        allowed_types=PDF_MEDIA_TYPES,
+        label="PDF",
+        cap=MAX_PDF_BYTES,
         client=client,
     )
 
