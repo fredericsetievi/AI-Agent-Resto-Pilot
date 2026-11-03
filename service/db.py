@@ -1365,6 +1365,45 @@ class Store:
         self._audit(conn, "opname_applied", "Stock count applied: " + ", ".join(f"{item['name']} → {item['counted_quantity']} {item['unit']}" for item in applied), restaurant_id)
         return applied
 
+    def record_stock_count(self, restaurant_id, ingredient_id, counted_quantity, note=None):
+        """Apply a physical stock count correction from the dashboard.
+
+        Same ledger effects as the chat flow: inventory set to the counted
+        value, a signed correction movement without a purchase id, a stock
+        count row in the applied history, and an audit entry.
+        """
+        catalog = self._catalog_for(restaurant_id)
+        entry = catalog["by_id"].get(ingredient_id)
+        if not entry:
+            raise DomainError("ingredient_not_found", "Bahan tidak ada di katalog resto ini.", 404)
+        counted_text = str(counted_quantity or "").strip().replace(",", ".")
+        try:
+            counted = Decimal(counted_text)
+        except InvalidOperation:
+            raise DomainError("invalid_quantity", "Hasil hitung fisik harus berupa angka, contoh: 2,5", 422)
+        if counted < 0 or counted > 1000000:
+            raise DomainError("invalid_quantity", "Hasil hitung fisik harus antara 0 dan 1.000.000.", 422)
+        counted = decimal_string(counted)
+        with self.transaction() as conn:
+            row = conn.execute("SELECT quantity FROM inventory WHERE restaurant_id=? AND ingredient_id=?", (restaurant_id, ingredient_id)).fetchone()
+            estimated = row[0] if row else "0"
+            delta = decimal_string(Decimal(counted) - Decimal(estimated))
+            group_id = uuid.uuid4().hex
+            applied_at = now()
+            conn.execute(
+                "INSERT INTO stock_counts (id, group_id, restaurant_id, ingredient_id, estimated_quantity, counted_quantity, delta, status, created_at, applied_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'applied', ?, ?)",
+                (uuid.uuid4().hex, group_id, restaurant_id, ingredient_id, estimated, counted, delta, applied_at, applied_at))
+            conn.execute("UPDATE inventory SET quantity=? WHERE restaurant_id=? AND ingredient_id=?", (counted, restaurant_id, ingredient_id))
+            conn.execute(
+                "INSERT INTO movements (id, purchase_id, ingredient_id, quantity, created_at, restaurant_id) VALUES (?, NULL, ?, ?, ?, ?)",
+                (uuid.uuid4().hex, ingredient_id, delta, applied_at, restaurant_id))
+            audit_note = f" Stock count note: {note[:200]}" if note and str(note).strip() else ""
+            self._audit(conn, "opname_applied", f"Dashboard stock count: {entry['name']} {estimated} → {counted} {entry['unit']}.{audit_note}", restaurant_id)
+        return {"ingredient_id": ingredient_id, "name": entry["name"], "unit": entry["unit"],
+                "estimated_quantity": estimated, "counted_quantity": counted, "delta": delta,
+                "applied_at": applied_at, "note": (str(note).strip() or None) if note else None}
+
     def recent_stock_counts(self, restaurant_id, limit=10, conn=None):
         """Applied physical counts, newest first, for the dashboard."""
         if conn is None:

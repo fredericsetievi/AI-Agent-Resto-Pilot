@@ -180,3 +180,50 @@ def test_history_reaches_the_dashboard(tmp_path):
     assert counts[0]["estimated_quantity"] == "3" and counts[0]["counted_quantity"] == "2"
     overview = client.get("/v1/overview").json()["data"]
     assert overview["stock_counts"] == counts[:5]
+
+
+# --- Dashboard stock count form -------------------------------------------------
+
+
+def test_dashboard_stock_count_applies_and_records(tmp_path):
+    client = owner_client(tmp_path)
+    response = client.post("/v1/stock-counts", headers={"Idempotency-Key": uuid4().hex},
+                           json={"ingredient_id": "cabai", "counted_quantity": "2,5", "note": "hitung fisik pagi"})
+    assert response.status_code == 201, response.text
+    record = response.json()["data"]
+    assert record["estimated_quantity"] == "3" and record["counted_quantity"] == "2.5"
+    assert record["delta"] == "-0.5"
+    store = client.app.state.store
+    assert inventory_quantity(store) == "2.5"
+    with store.transaction() as conn:
+        movement = conn.execute("SELECT quantity FROM movements WHERE restaurant_id=? AND ingredient_id='cabai' AND purchase_id IS NULL", (TENANT,)).fetchone()
+        assert movement["quantity"] == "-0.5"
+    counts = client.get("/v1/stock-counts").json()["data"]["counts"]
+    assert counts and counts[0]["counted_quantity"] == "2.5"
+    overview = client.get("/v1/overview").json()["data"]
+    assert overview["stock_counts"] == counts[:5]
+
+
+def test_dashboard_stock_count_validations(tmp_path):
+    client = owner_client(tmp_path)
+    unknown = client.post("/v1/stock-counts", headers={"Idempotency-Key": uuid4().hex},
+                          json={"ingredient_id": "bukan-bahan", "counted_quantity": "1"})
+    assert unknown.status_code == 404
+    negative = client.post("/v1/stock-counts", headers={"Idempotency-Key": uuid4().hex},
+                           json={"ingredient_id": "cabai", "counted_quantity": "-1"})
+    assert negative.status_code == 422
+    not_number = client.post("/v1/stock-counts", headers={"Idempotency-Key": uuid4().hex},
+                             json={"ingredient_id": "cabai", "counted_quantity": "banyak"})
+    assert not_number.status_code == 422
+    # Nothing changed by the failed attempts.
+    assert inventory_quantity(client.app.state.store) == "3"
+
+
+def test_zero_delta_dashboard_count_is_still_recorded(tmp_path):
+    client = owner_client(tmp_path)
+    # Counted exactly what the system says: recorded as physical evidence, no change.
+    response = client.post("/v1/stock-counts", headers={"Idempotency-Key": uuid4().hex},
+                           json={"ingredient_id": "cabai", "counted_quantity": "3"})
+    assert response.status_code == 201, response.text
+    assert response.json()["data"]["delta"] == "0"
+    assert inventory_quantity(client.app.state.store) == "3"

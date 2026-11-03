@@ -219,6 +219,11 @@ class PdfIntake(Model):
     pdf_base64: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=14_000_000)]
     supplier: ShortText | None = None
 
+class StockCountCreate(Model):
+    ingredient_id: ShortText
+    counted_quantity: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
+    note: ShortText | None = None
+
 
 class RuleCreate(Model):
     rule: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
@@ -827,6 +832,12 @@ def create_app(
     @app.get("/v1/stock-counts")
     def stock_counts_list(actor=Depends(owner_actor)):
         return {"data": {"counts": store.recent_stock_counts(actor["restaurant_id"])}}
+
+    @app.post("/v1/stock-counts", status_code=201)
+    def stock_count_apply(body: StockCountCreate, actor=Depends(owner_actor), idempotency_key=Depends(key)):
+        """Apply a dashboard physical stock count correction for one ingredient."""
+        return {"data": store.record_stock_count(actor["restaurant_id"], body.ingredient_id,
+                                                 body.counted_quantity, body.note)}
 
     @app.get("/v1/rules")
     def rules_list(actor=Depends(owner_actor)):

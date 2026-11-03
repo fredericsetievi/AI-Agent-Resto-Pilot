@@ -9,7 +9,7 @@ const date = value => value ? new Intl.DateTimeFormat('en-GB', {day:'numeric',mo
 const icons = {cabai:'🌶',telur:'🥚',beras:'🌾',minyak:'🫙',bawang:'🧅'};
 const titles = {overview:['Your kitchen, in view.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for.','Approved purchases and their source records. Payment status is separate.'],inventory:['Know what came in.','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],rules:['Peraturan asisten resto Anda.','Aturan khusus per resto — asisten menaatinya, resto lain tidak terpengaruh.'],links:['Hubungkan nomor/chat resto Anda.','Satu nomor bisa aktif di WhatsApp dan Telegram sekaligus — per resto.'],activity:['The story behind each record.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['A WhatsApp flow you can rehearse.','A persistent local conversation, from purchase note to owner decision.']};
 let WHATSAPP_SENDER = '';
-const state = {user:null, data:null, adminList:null, adminSelected:null, adminRejected:[], adminForms:{}, draft:null, page:'overview', dirty:false, busy:false, online:false, intakeKey:null, decisions:new Map(), mutationKeys:new Map(), refreshId:0, inlineDecisions:new Set(), whatsappMessages:[], whatsappDraft:null, whatsappResult:null, whatsappLoading:false, whatsappError:'', whatsappLoaded:false, whatsappPending:null, whatsappSending:false, whatsappNumber:'', rules:[], rulesLoaded:false, rulesBusy:false, links:[], linksLoaded:false, linksBusy:false};
+const state = {user:null, data:null, adminList:null, adminSelected:null, adminRejected:[], adminForms:{}, draft:null, page:'overview', dirty:false, busy:false, online:false, intakeKey:null, decisions:new Map(), mutationKeys:new Map(), refreshId:0, inlineDecisions:new Set(), whatsappMessages:[], whatsappDraft:null, whatsappResult:null, whatsappLoading:false, whatsappError:'', whatsappLoaded:false, whatsappPending:null, whatsappSending:false, whatsappNumber:'', rules:[], rulesLoaded:false, rulesBusy:false, links:[], linksLoaded:false, linksBusy:false, opnameBusy:false};
 
 async function api(path, {method='GET', body, key, timeout=15000} = {}) {
   const controller = new AbortController();
@@ -295,7 +295,7 @@ function render() {
   if (page==='overview') html=overview();
   if (page==='approvals') html=`<section class="panel">${panelHeading('Review queue',`${pendingDrafts().length} drafts waiting for your decision`)}<div class="full-list">${pendingDrafts().map(draftCard).join('') || '<div class="empty"><strong>All clear.</strong>Every draft has a decision.</div>'}</div></section>`;
   if (page==='purchases') html=`<p class="subtle-note">Includes synthetic opening purchases used to demonstrate price comparisons. Recording a purchase does not mark a supplier as paid.</p><section class="panel">${panelHeading('Purchase history')}${purchaseTable(state.data.purchases)}</section>`;
-  if (page==='inventory') html=`<section class="panel">${panelHeading('Estimated inventory','Approved received quantities only. Correct the numbers with a stock opname over chat: "stok opname cabai 2 kg".')}${inventoryRows(state.data.inventory)}<div class="panel-note">Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.</div></section>` + (state.data.stock_counts?.length ? `<section class="panel">${panelHeading('Riwayat stok opname','Koreksi stok fisik yang diterapkan lewat chat. Semua angka dari database.')}${state.data.stock_counts.map(item=>`<div class="number-row"><code>${e(item.name)}</code><span>${e(item.estimated_quantity)} → ${e(item.counted_quantity)} (selisih ${e(item.delta)})</span><span class="spacer"></span><small>${e(date(item.applied_at))}</small></div>`).join('')}</section>` : '');
+  if (page==='inventory') html=`<section class="panel">${panelHeading('Estimated inventory','Approved received quantities only. Correct the numbers with a stock opname over chat or with the form below.')}${inventoryRows(state.data.inventory)}<div class="panel-note">Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.</div></section>` + opnameFormPanel() + (state.data.stock_counts?.length ? `<section class="panel">${panelHeading('Riwayat stok opname','Koreksi stok fisik dari chat dan dashboard. Semua angka dari database.')}${state.data.stock_counts.map(item=>`<div class="number-row"><code>${e(item.name)}</code><span>${e(item.estimated_quantity)} → ${e(item.counted_quantity)} (selisih ${e(item.delta)})</span><span class="spacer"></span><small>${e(date(item.applied_at))}</small></div>`).join('')}</section>` : '');
   if (page==='activity') html=`<section class="panel">${panelHeading('Activity history','Includes synthetic setup records. All new actions are persisted.')}${activityRows(state.data.activity)}</section>`;
   if (page==='whatsapp') html=whatsappPage();
   if (page==='rules') html=rulesPage();
@@ -329,6 +329,18 @@ async function removeLink(phone, platform) {
   finally { state.linksBusy=false; }
 }
 
+function opnameFormPanel() {
+  const options=(state.data?.inventory || []).map(item=>`<option value="${e(item.ingredient_id)}">${e(item.name)} — sistem: ${e(number(item.quantity))} ${e(item.unit)}</option>`).join('');
+  return `<section class="panel"><div class="panel-heading"><div><h2>Catat stok opname</h2><p>Hitung fisik satu bahan, lalu koreksi stok sistem. Tercatat di riwayat dengan selisihnya.</p></div></div><form id="opname-form" class="whatsapp-composer"><label class="sr-only" for="opname-ingredient">Bahan</label><select id="opname-ingredient" aria-label="Bahan">${options}</select><label class="sr-only" for="opname-counted">Hasil hitung fisik</label><input id="opname-counted" placeholder="Hasil hitung fisik, contoh: 2,5" maxlength="40" required><label class="sr-only" for="opname-note">Catatan</label><input id="opname-note" placeholder="Catatan (opsional)" maxlength="200"><button class="button primary" type="submit" ${state.opnameBusy?'disabled':''}>Terapkan</button></form><div id="opname-error" class="notice error" role="alert" hidden></div><div class="panel-note">Stok sistem langsung disamakan dengan hasil hitung fisik, dengan catatan selisih di riwayat.</div></section>`;
+}
+async function applyOpname() {
+  if(state.opnameBusy)return;state.opnameBusy=true;showError('opname-error','');
+  const ingredient=$('#opname-ingredient').value, counted=$('#opname-counted').value.trim(), note=$('#opname-note').value.trim() || null;
+  const button=document.querySelector('#opname-form button[type="submit"]');if(button)button.disabled=true;
+  try { await api('/v1/stock-counts',{method:'POST',body:{ingredient_id:ingredient,counted_quantity:counted,note},key:crypto.randomUUID()}); state.data=null; await refresh(); toast('Stok opname diterapkan.'); }
+  catch(error) { showError('opname-error',error.message); }
+  finally { state.opnameBusy=false; const b=document.querySelector('#opname-form button[type="submit"]'); if(b)b.disabled=false; }
+}
 function rulesPage() {
   const rows=state.rules.map(rule=>`<div class="admin-row"><div><p>${e(rule.rule)}</p><small>${rule.enabled?'Aktif':'Nonaktif'} · ${e(date(rule.created_at))}</small></div><span class="spacer"></span><button class="button mini" data-rule-toggle="${e(rule.id)}">${rule.enabled?'Nonaktifkan':'Aktifkan'}</button><button class="button mini" data-rule-delete="${e(rule.id)}">Hapus</button></div>`).join('');
   return `<section class="panel"><div class="panel-heading"><div><h2>Peraturan asisten</h2><p>Aturan ini hanya berlaku untuk resto ini. Contoh: "kabari kalau cabai di bawah 3 kg" mengubah ambang notifikasi, "jangan ingatkan stok telur" mematikan notifikasi telur, dan catatan lain diikuti asisten sebagai konteks gaya notifikasi.</p></div></div><form id="rules-form" class="whatsapp-composer"><label class="sr-only" for="rules-text">Tulis peraturan baru</label><textarea id="rules-text" rows="2" maxlength="500" required placeholder="Contoh: kabari kalau cabai di bawah 3 kg"></textarea><button class="button primary" type="submit" ${state.rulesBusy?'disabled':''}>Tambah peraturan</button></form><div id="rules-error" class="notice error" role="alert" hidden></div><div class="admin-list">${rows || '<div class="empty"><strong>Belum ada peraturan.</strong>Tanpa peraturan, asisten memakai ambang default tiap bahan.</div>'}</div><div class="panel-note">Asisten memeriksa stok secara berkala dan mengirim notifikasi stok rendah ke nomor/chat yang terhubung. Semua angka selalu dibaca dari database.</div></section>`;
@@ -538,6 +550,12 @@ document.addEventListener('submit',async event=>{
     const text=$('#rules-text').value.trim();if(!text)return;
     const button=document.querySelector('#rules-form button[type="submit"]');if(button)button.disabled=true;
     $('#rules-text').value='';await addRule(text);
+  }
+  if(event.target.id==='opname-form'){
+    event.preventDefault();
+    const counted=$('#opname-counted').value.trim();if(!counted)return;
+    const button=document.querySelector('#opname-form button[type="submit"]');if(button)button.disabled=true;
+    await applyOpname();
   }
   if(event.target.id==='links-form'){
     event.preventDefault();
