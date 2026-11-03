@@ -73,7 +73,7 @@ def link_chat_to_demo(client, chat_id=CHAT_ID):
 
 def test_parse_update_normalizes_text_and_media():
     text = parse_update(json.dumps(update("beli cabai 3 kg")).encode())
-    assert text == [{"sender": CHAT_ID, "text": "beli cabai 3 kg", "event_id": "100", "num_media": 0, "media_id": None, "media_kind": None}]
+    assert text == [{"sender": CHAT_ID, "text": "beli cabai 3 kg", "event_id": "100", "num_media": 0, "media_id": None, "media_kind": None, "media_group_id": None}]
     photo = update(None, update_id=101)
     photo["message"].pop("text")
     photo["message"]["photo"] = [{"file_id": "small", "file_size": 10}, {"file_id": "LARGE", "file_size": 900}]

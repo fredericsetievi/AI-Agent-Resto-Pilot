@@ -114,7 +114,15 @@ def parse_update(raw):
         text, num_media = "", 1
     if media_id is not None and (not isinstance(media_id, str) or not _MEDIA_ID.fullmatch(media_id)):
         media_id, media_kind, num_media = None, None, 1
-    return [{"sender": sender, "text": text, "event_id": event_id, "num_media": num_media, "media_id": media_id, "media_kind": media_kind}]
+    group_id = message.get("media_group_id")
+    if isinstance(group_id, bool) or group_id in (None, ""):
+        group_id = None
+    else:
+        group_id = str(group_id)
+        if not group_id.strip() or len(group_id) > 64:
+            group_id = None
+    return [{"sender": sender, "text": text, "event_id": event_id, "num_media": num_media, "media_id": media_id,
+             "media_kind": media_kind, "media_group_id": group_id}]
 
 
 async def send_text(token, chat_id, text, *, api_base=DEFAULT_API_BASE, client=None):

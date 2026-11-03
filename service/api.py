@@ -201,6 +201,16 @@ class ImageIntake(Model):
     supplier: ShortText | None = None
     source_label: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] = "Foto nota"
 
+class ImagePart(Model):
+    image_base64: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8_000_000)]
+    media_type: Literal["image/jpeg", "image/png", "image/webp"] = "image/jpeg"
+
+
+class IntakeImages(Model):
+    """Up to five nota photos submitted together as one purchase draft."""
+    images: Annotated[list[ImagePart], Field(min_length=1, max_length=5)]
+    supplier: ShortText | None = None
+
 
 class RuleCreate(Model):
     rule: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
@@ -257,6 +267,7 @@ def create_app(
     telegram_webhook_secret=None,
     telegram_api_base=TELEGRAM_DEFAULT_API_BASE,
     telegram_http_client=None,
+    telegram_group_seconds=4.0,
     proactive_check_interval_seconds=None,
 ):
     # The proactive loop closes over store/run_proactive_check by name; both
@@ -704,6 +715,35 @@ def create_app(
             actor["restaurant_id"],
         )}
 
+    @app.post("/v1/intake/images", status_code=201)
+    async def intake_images(body: IntakeImages, actor=Depends(owner_actor), idempotency_key=Depends(key)):
+        """Several nota photos in one request become one merged purchase draft."""
+        if not vision_api_key:
+            raise DomainError("vision_not_configured", "Set STEPFUN_API_KEY before reading invoice photos.", 503)
+        merged = {"items": [], "warnings": []}
+        supplier = body.supplier
+        for part in body.images:
+            try:
+                photo = decode_vision_image(part.image_base64, part.media_type)
+                extracted = await extract_invoice(
+                    photo,
+                    media_type=part.media_type,
+                    restaurant=actor["restaurant_name"],
+                    api_key=vision_api_key,
+                    model=vision_model,
+                    base_url=vision_base_url,
+                    client=vision_http_client,
+                )
+            except StepFunVisionError as exc:
+                logger.warning("StepFun vision multi-photo intake failed: %s", exc)
+                raise DomainError("vision_failed", str(exc), exc.status)
+            merged["items"].extend(extracted.get("items") or [])
+            merged["warnings"].extend(extracted.get("warnings") or [])
+            supplier = supplier or extracted.get("supplier")
+        merged = await filter_kitchen_items(merged, actor["restaurant_id"])
+        payload = {"text": f"Gabungan {len(body.images)} foto nota", "supplier": supplier}
+        return {"data": await run_in_threadpool(store.intake, idempotency_key, payload, merged, actor["restaurant_id"])}
+
     @app.patch("/v1/drafts/{draft_id}")
     def edit(draft_id: str, body: Edit, actor=Depends(owner_actor), idempotency_key=Depends(key)):
         return {"data": store.edit(draft_id, idempotency_key, body.model_dump(), actor["restaurant_id"])}
@@ -1060,13 +1100,59 @@ def create_app(
             logger.warning("Rejected Telegram webhook: %s", exc)
             raise DomainError("invalid_telegram_update", str(exc), exc.status)
 
-        bot_channel = "telegram:" + bot_id_from_token(telegram_bot_token)
         for message in messages:
             payload = {key: message[key] for key in ("sender", "text", "event_id", "num_media")}
+            payload["_restaurant_id"] = None
             # The same allowlist as WhatsApp, scoped to the Telegram platform:
             # the same digits may belong to another restaurant on WhatsApp.
             sender_restaurant = await run_in_threadpool(store.restaurant_for_sender, message["sender"], "telegram")
             restaurant_id = sender_restaurant["id"] if sender_restaurant else None
+            payload["_restaurant_id"] = restaurant_id
+            if message.get("media_group_id") and telegram_group_seconds > 0:
+                # Part of a multi-photo send: extract now, buffer the result,
+                # and let the quiet-period flush deliver one merged draft.
+                group_key = f"{message['sender']}:{message['media_group_id']}"
+                async with telegram_group_lock:
+                    entry = telegram_groups.setdefault(group_key, {
+                        "update_ids": set(), "parts": [], "sender": message["sender"],
+                        "restaurant_id": restaurant_id, "event_id": message["event_id"]})
+                    replay = message["event_id"] in entry["update_ids"]
+                    entry["update_ids"].add(message["event_id"])
+                if replay:
+                    continue  # a retried update; the flush owns the one reply
+                part = {"extracted": None}
+                if message.get("media_kind") == "image" and vision_api_key and sender_restaurant and message.get("media_id"):
+                    try:
+                        photo, _media_type = await download_telegram_file(
+                            telegram_bot_token,
+                            message["media_id"],
+                            api_base=telegram_api_base,
+                            client=telegram_http_client,
+                        )
+                        part["extracted"] = await filter_kitchen_items(
+                            await extract_invoice(
+                                photo,
+                                media_type="image/jpeg",
+                                restaurant=sender_restaurant["name"],
+                                api_key=vision_api_key,
+                                model=vision_model,
+                                base_url=vision_base_url,
+                                client=vision_http_client,
+                            ),
+                            restaurant_id,
+                        )
+                    except (TelegramError, StepFunVisionError) as exc:
+                        logger.warning("Telegram grouped photo intake failed: %s", exc)
+                async with telegram_group_lock:
+                    entry = telegram_groups.get(group_key)
+                    if entry is None:
+                        continue  # flushed between the two locks
+                    entry["parts"].append(part)
+                    old_task = entry.get("task")
+                if old_task:
+                    old_task.cancel()
+                entry["task"] = asyncio.create_task(_flush_group_later(group_key))
+                continue
             if message.get("media_kind") == "image" and vision_api_key and sender_restaurant and message.get("media_id"):
                 try:
                     photo, _media_type = await download_telegram_file(
@@ -1128,40 +1214,92 @@ def create_app(
                     if hint:
                         payload["intent_hint"] = hint
                     payload["extracted_text"] = extracted
-            result = await run_in_threadpool(
-                store.whatsapp_ingest,
-                "telegram:" + bot_channel + ":" + message["event_id"],
-                payload,
-                transport=TG_TRANSPORT,
-                channel=bot_channel,
-                outbound_status=TG_OUTBOUND_PENDING,
-                restaurant_id=restaurant_id,
-                platform="telegram",
+            await deliver_telegram(payload, message)
+
+
+    bot_channel = ("telegram:" + bot_id_from_token(telegram_bot_token)) if telegram_bot_token else None
+    # Photos sent together as one Telegram media group share a group id;
+    # they arrive as separate updates, so each photo's extraction is
+    # buffered and flushed once the group goes quiet — one merged draft,
+    # one reply. The in-process buffer is enough for the single-process
+    # demo; update ids dedupe Telegram's webhook retries.
+    telegram_groups = {}
+    telegram_group_lock = asyncio.Lock()
+    import traceback
+
+
+    async def _flush_group_later(group_key):
+        await asyncio.sleep(telegram_group_seconds)
+        await flush_telegram_group(group_key)
+
+    async def flush_telegram_group(group_key):
+        # The entry stays in the buffer so Telegram's webhook retries of
+        # the same update ids keep deduplicating; only parts not yet
+        # delivered are flushed, so a late-arriving photo becomes its own
+        # follow-up draft instead of duplicating lines.
+        async with telegram_group_lock:
+            entry = telegram_groups.get(group_key)
+            if not entry:
+                return
+            delivered = entry.get("delivered", 0)
+            parts = entry["parts"][delivered:]
+            if not parts:
+                return
+            entry["delivered"] = delivered + len(parts)
+
+        payload = {"sender": entry["sender"], "text": "", "event_id": entry["event_id"],
+                   "num_media": max(1, len(parts)), "_restaurant_id": entry["restaurant_id"]}
+        extracted_parts = [part for part in parts if part.get("extracted")]
+        if extracted_parts:
+            merged_items, merged_warnings, supplier = [], [], None
+            for part in extracted_parts:
+                merged_items.extend(part["extracted"].get("items") or [])
+                merged_warnings.extend(part["extracted"].get("warnings") or [])
+                supplier = supplier or part["extracted"].get("supplier")
+            payload["extracted"] = {"items": merged_items, "warnings": merged_warnings, "supplier": supplier}
+            payload["source_label"] = f"{len(parts)} foto nota Telegram"
+        try:
+            await deliver_telegram(payload, {"sender": entry["sender"]})
+        except DomainError as exc:
+            logger.warning("Telegram media group delivery failed: %s", exc)
+
+    async def deliver_telegram(payload, message):
+        result = await run_in_threadpool(
+            store.whatsapp_ingest,
+            "telegram:" + bot_channel + ":" + payload["event_id"],
+            payload,
+            transport=TG_TRANSPORT,
+            channel=bot_channel,
+            outbound_status=TG_OUTBOUND_PENDING,
+            restaurant_id=payload.get("_restaurant_id"),
+            platform="telegram",
+        )
+        outbound = result["messages"][-1]
+        claimed = await run_in_threadpool(
+            store.claim_whatsapp_message,
+            outbound["id"],
+            TG_OUTBOUND_PENDING,
+            TG_OUTBOUND_SENDING,
+        )
+        if not claimed:
+            # A Telegram retry of an update already answered; the stored
+            # response replays but the bot must not double-send.
+            return
+        try:
+            await send_telegram_text(
+                telegram_bot_token,
+                message["sender"],
+                outbound["body"],
+                api_base=telegram_api_base,
+                client=telegram_http_client,
             )
-            outbound = result["messages"][-1]
-            claimed = await run_in_threadpool(
-                store.claim_whatsapp_message,
-                outbound["id"],
-                TG_OUTBOUND_PENDING,
-                TG_OUTBOUND_SENDING,
-            )
-            if not claimed:
-                # A Telegram retry of an update already answered; the stored
-                # response replays but the bot must not double-send.
-                continue
-            try:
-                await send_telegram_text(
-                    telegram_bot_token,
-                    message["sender"],
-                    outbound["body"],
-                    api_base=telegram_api_base,
-                    client=telegram_http_client,
-                )
-            except (TelegramError, ValueError) as exc:
-                await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], TG_OUTBOUND_PENDING)
-                status = exc.status if isinstance(exc, TelegramError) else 500
-                raise DomainError("telegram_send_failed", str(exc), status)
-            await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], TG_OUTBOUND_SENT)
+        except (TelegramError, ValueError) as exc:
+            await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], TG_OUTBOUND_PENDING)
+            status = exc.status if isinstance(exc, TelegramError) else 500
+            raise DomainError("telegram_send_failed", str(exc), status)
+        await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], TG_OUTBOUND_SENT)
+
+
         return {"ok": True}
 
     frontend = Path(__file__).resolve().parent.parent / "frontend"
