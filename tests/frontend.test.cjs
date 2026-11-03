@@ -49,7 +49,9 @@ test('retries reuse keys and distinct decisions never share keys',()=>{
 });
 
 test('no-item extraction has a useful title and rejection is never shown in review queue',()=>{
-  const h=harness();assert.equal(h.run('itemSummary([])'),'Purchase needs details');
+  const h=harness();assert.equal(h.run('itemSummary([])'),'Pembelian perlu detail');
+  h.run('LANG="en"');
+  assert.equal(h.run('itemSummary([])'),'Purchase needs details');
   h.run(`state.data={drafts:[{status:'rejected'},{status:'recorded'},{status:'needs_clarification'},{status:'pending_approval'}]}`);
   assert.equal(h.run('pendingDrafts().length'),2);
 });
@@ -87,12 +89,16 @@ test('simulated chat history escapes untrusted message text',()=>{
   assert.ok(html.includes('received'));
 });
 
-test('WhatsApp simulator renders the requested route and a clear non-live label',()=>{
+test('WhatsApp simulator renders the requested route and follows the language toggle',()=>{
   const h=harness({hash:'#whatsapp'});
   h.run(`state.data={restaurant:{name:'Demo kitchen'},drafts:[]};state.whatsappLoaded=true;navigate()`);
-  assert.equal(h.element('#page-title').textContent,'A WhatsApp flow you can rehearse.');
+  // Default language: Indonesian.
+  assert.equal(h.element('#page-title').textContent,'Alur WhatsApp yang bisa dilatih.');
   assert.match(h.element('#content').innerHTML,/SIMULATED/);
-  assert.match(h.element('#content').innerHTML,/META CLOUD API FLOW/);
+  assert.match(h.element('#content').innerHTML,/Tidak terhubung ke WhatsApp/);
+  // Toggle to English: same page, translated.
+  h.run('LANG="en";applyStaticI18n();render()');
+  assert.equal(h.element('#page-title').textContent,'A WhatsApp flow you can rehearse.');
   assert.match(h.element('#content').innerHTML,/does not connect to WhatsApp or send a live message/);
   const index=fs.readFileSync('frontend/index.html','utf8');
   assert.match(index,/#whatsapp[^>]*>.*WhatsApp demo/s);

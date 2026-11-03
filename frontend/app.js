@@ -3,11 +3,70 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const e = escapeHTML;
+
+// ---- Language: Indonesian default, English toggle (persisted) ----
+const LANG_KEY = 'restopilot-lang';
+function loadLang() { try { return window.localStorage.getItem(LANG_KEY); } catch { return null; } }
+let LANG = loadLang() === 'en' ? 'en' : 'id';
+const t = (idText, enText) => LANG === 'en' ? enText : idText;
+const STATIC_I18N = {
+  skip: {id:'Lewati ke konten', en:'Skip to content'},
+  workspace_sub: {id:'Workspace resto', en:'Restaurant workspace'},
+  nav_label: {id:'OPERASI ANDA', en:'YOUR OPERATIONS'},
+  nav_overview: {id:'Ringkasan', en:'Overview'},
+  nav_approvals: {id:'Persetujuan', en:'Approvals'},
+  nav_purchases: {id:'Pembelian', en:'Purchases'},
+  nav_inventory: {id:'Stok', en:'Inventory'},
+  nav_rules: {id:'Peraturan', en:'Rules'},
+  nav_links: {id:'Koneksi', en:'Connections'},
+  nav_activity: {id:'Aktivitas', en:'Activity'},
+  nav_whatsapp: {id:'WhatsApp demo', en:'WhatsApp demo'},
+  nav_admin: {id:'Resto', en:'Restaurants'},
+  session_active: {id:'Sesi aktif', en:'Session active'},
+  session_note: {id:'Autentikasi demo.<br>Nomor WhatsApp dihubungkan admin per resto.', en:'Demo authentication.<br>WhatsApp numbers are linked per restaurant by the admin.'},
+  logout: {id:'Keluar', en:'Log out'},
+  workspace: {id:'Workspace', en:'Workspace'},
+  connecting: {id:'Menghubungkan…', en:'Connecting…'},
+  eyebrow: {id:'SEDIKIT KEJELASAN UNTUK DAPUR ANDA', en:'A LITTLE CLARITY FOR YOUR KITCHEN'},
+  btn_log: {id:'Catat pembelian', en:'Log a purchase'},
+  loading: {id:'Memuat dapur Anda…', en:'Loading your kitchen…'},
+  footer_left: {id:'RestoPilot · Dari pembelian ke ketenangan.', en:'RestoPilot · From purchase to peace of mind.'},
+  footer_right: {id:'Input manual · Parser aturan · Database lokal', en:'Manual intake · Rules parser · Persistent local database'},
+  intake_title: {id:'Apa yang masuk ke dapur?', en:'What came into the kitchen?'},
+  intake_intro: {id:'Tulis pembelian dalam Bahasa Indonesia, atau lampirkan foto nota pemasok. Semuanya Anda tinjau sebelum dicatat.', en:'Type your purchase in Indonesian, or attach a photo of the supplier invoice. Everything is reviewed before it is recorded.'},
+  intake_msg_label: {id:'Pesan pembelian', en:'Purchase message'},
+  try_it: {id:'Coba:', en:'Try:'},
+  intake_photo_label: {id:'Atau lampirkan nota pemasok', en:'Or attach the supplier invoice'},
+  intake_supplier_label: {id:'Pemasok', en:'Supplier'},
+  intake_help: {id:'Untuk beberapa bahan, gunakan satu baris per bahan. Foto dibaca vision StepFun; yang tidak terbaca dibiarkan kosong untuk Anda isi. Voice note belum didukung.', en:'For several items, use one line per item. Photos are read by StepFun vision; anything it cannot read stays blank for you to fill in. Voice notes are not supported yet.'},
+  intake_footer: {id:'Tidak ada yang tercatat tanpa persetujuan Anda.', en:'Nothing posts without your approval.'},
+  btn_prepare: {id:'Siapkan draf', en:'Prepare draft'},
+};
+function applyStaticI18n() {
+  const root = document.documentElement; if (root) root.lang = LANG;
+  document.querySelectorAll('[data-i18n]').forEach(element => {
+    const entry = STATIC_I18N[element.dataset.i18n];
+    if (entry) element.innerHTML = LANG === 'en' ? entry.en : entry.id;
+  });
+  const toggle = $('#lang-toggle');
+  if (toggle) { toggle.textContent = LANG === 'en' ? 'ID' : 'EN'; toggle.title = LANG === 'en' ? 'Ganti ke Bahasa Indonesia' : 'Switch to English'; }
+}
+function toggleLang() {
+  LANG = LANG === 'en' ? 'id' : 'en';
+  try { window.localStorage.setItem(LANG_KEY, LANG); } catch { /* private mode */ }
+  applyStaticI18n();
+  renderIdentity();
+  render();
+}
 const rupiah = value => value == null ? '—' : `Rp${new Intl.NumberFormat('id-ID', {maximumFractionDigits: 0}).format(Number(value))}`;
 const number = value => value == null ? '—' : new Intl.NumberFormat('id-ID', {maximumFractionDigits: 6}).format(Number(value));
 const date = value => value ? new Intl.DateTimeFormat('en-GB', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jakarta'}).format(new Date(value)) + ' WIB' : '';
 const icons = {cabai:'🌶',telur:'🥚',beras:'🌾',minyak:'🫙',bawang:'🧅'};
-const titles = {overview:['Your kitchen, in view.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for.','Approved purchases and their source records. Payment status is separate.'],inventory:['Know what came in.','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],rules:['Peraturan asisten resto Anda.','Aturan khusus per resto — asisten menaatinya, resto lain tidak terpengaruh.'],links:['Hubungkan nomor/chat resto Anda.','Satu nomor bisa aktif di WhatsApp dan Telegram sekaligus — per resto.'],activity:['The story behind each record.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['A WhatsApp flow you can rehearse.','A persistent local conversation, from purchase note to owner decision.']};
+const TITLES = {
+  id: {overview:['Dapur Anda, dalam pandangan.','Pembelian, stok, dan keputusan yang menunggu Anda.'],approvals:['Saatnya meninjau.','Periksa detailnya. Anda yang memutuskan menjadi catatan.'],purchases:['Setiap pembelian tercatat.','Pembelian yang disetujui beserta sumber catatannya. Status pembayaran terpisah.'],inventory:['Tahu apa yang masuk.','Stok estimasi dari pembelian tercatat. Pemakaian dapur belum dilacak.'],rules:['Peraturan asisten resto Anda.','Aturan khusus per resto — asisten menaatinya, resto lain tidak terpengaruh.'],links:['Hubungkan nomor/chat resto Anda.','Satu nomor bisa aktif di WhatsApp dan Telegram sekaligus — per resto.'],activity:['Kisah di balik tiap catatan.','Jejak permanen draf, koreksi, dan keputusan pemilik.'],whatsapp:['Alur WhatsApp yang bisa dilatih.','Percakapan lokal permanen, dari catatan pembelian ke keputusan pemilik.']},
+  en: {overview:['Your kitchen, in view.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for.','Approved purchases and their source records. Payment status is separate.'],inventory:['Know what came in.','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],rules:['Rules for your restaurant assistant.','Per-restaurant rules — the assistant obeys them, other restaurants are unaffected.'],links:['Connect your restaurant numbers.','One number can be active on WhatsApp and Telegram at once — per restaurant.'],activity:['The story behind each record.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['A WhatsApp flow you can rehearse.','A persistent local conversation, from purchase note to owner decision.']}
+};
+const titles = () => TITLES[LANG] || TITLES.id;
 let WHATSAPP_SENDER = '';
 const state = {user:null, data:null, adminList:null, adminSelected:null, adminRejected:[], adminForms:{}, draft:null, page:'overview', dirty:false, busy:false, online:false, intakeKey:null, decisions:new Map(), mutationKeys:new Map(), refreshId:0, inlineDecisions:new Set(), whatsappMessages:[], whatsappDraft:null, whatsappResult:null, whatsappLoading:false, whatsappError:'', whatsappLoaded:false, whatsappPending:null, whatsappSending:false, whatsappNumber:'', rules:[], rulesLoaded:false, rulesBusy:false, links:[], linksLoaded:false, linksBusy:false, opnameBusy:false};
 
@@ -22,8 +81,8 @@ async function api(path, {method='GET', body, key, timeout=15000} = {}) {
       }
     return payload.data;
   } catch (error) {
-    if (error.name === 'AbortError') throw new Error('The request timed out. Retry the same action to check its result safely.');
-    if (error instanceof TypeError) throw new Error('Cannot reach the local server. Check it is running, then retry.');
+    if (error.name === 'AbortError') throw new Error(t('Permintaan kehabisan waktu. Ulangi aksi yang sama untuk memeriksa hasilnya dengan aman.','The request timed out. Retry the same action to check its result safely.'));
+    if (error instanceof TypeError) throw new Error(t('Tidak dapat menghubungi server lokal. Pastikan server berjalan, lalu coba lagi.','Cannot reach the local server. Check it is running, then retry.'));
     throw error;
   } finally { clearTimeout(timer); }
 }
@@ -42,7 +101,7 @@ async function loadAdminList() {
 }
 function renderAdmin() {
   const page=state.page, [title,subtitle]=ADMIN_TITLES[page] || ADMIN_TITLES.admin;
-  $('#page-title').textContent=title; $('#page-subtitle').textContent=subtitle; $('#breadcrumb').textContent=page==='admin'?'Restaurants':'Restaurant detail';
+  $('#page-title').textContent=title; $('#page-subtitle').textContent=subtitle; $('#breadcrumb').textContent=page==='admin'?t('Resto','Restaurants'):t('Detail resto','Restaurant detail');
   const navCount=$('#nav-count');if(navCount)navCount.textContent='—';
   if(!state.adminList && !state.adminLoading){state.adminLoading=true;loadAdminList().finally(() => state.adminLoading=false);$('#content').innerHTML='<div class="loading-state"><span class="spinner"></span> Loading restaurants…</div>';return;}
   if(page==='admin')renderAdminList(); else renderAdminDetail();
@@ -73,7 +132,7 @@ async function refreshAdminOverview() {
 }
 function draftCardReadOnly(draft) {
   const item=draft.items?.[0] || {};
-  return `<article class="draft-card"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">▤</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || 'Supplier unspecified')} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} items`)}</p></div><div class="price money">${rupiah(draft.total_idr)}</div></div><div class="draft-bottom">${badge(draft.status)}</div></article>`;
+  return `<article class="draft-card"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">▤</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || t('Pemasok tidak disebutkan','Supplier unspecified'))} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} ${t('bahan','items')}`)}</p></div><div class="price money">${rupiah(draft.total_idr)}</div></div><div class="draft-bottom">${badge(draft.status)}</div></article>`;
 }
 function adminDialogForm(title, fields, action) {
   const dialog=$('#admin-dialog');if(!dialog)return;
@@ -167,7 +226,7 @@ function renderIdentity() {
   $('#nav-whatsapp').hidden = isAdmin;
   $('#nav-rules').hidden = isAdmin;
   $('#nav-links').hidden = isAdmin;
-  $('#workspace-sub').textContent = isAdmin ? 'Semua resto' : 'Restaurant workspace';
+  $('#workspace-sub').textContent = isAdmin ? t('Semua resto','All restaurants') : t('Workspace resto','Restaurant workspace');
 }
 function toast(message) { $('#toast').textContent=message; $('#toast').hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(() => $('#toast').hidden=true, 5500); }
 function showError(id, message) { const element=$(`#${id}`); element.textContent=message; element.hidden=!message; }
@@ -197,26 +256,26 @@ function resolveIngredient(query,fallback) {
   }
   return {ingredient_id:null,raw_name:String(fallback || '').slice(0,200)};
 }
-function itemSummary(items) { return (items || []).map(item => nameFor(item)).join(', ') || 'Purchase needs details'; }
+function itemSummary(items) { return (items || []).map(item => nameFor(item)).join(', ') || t('Pembelian perlu detail','Purchase needs details'); }
 function warningFor(draft) { return draft.items?.find(item => item.comparison?.status==='price_increase'); }
 function draftCard(draft) {
   const item=draft.items?.[0] || {}, spike=warningFor(draft), clarify=draft.status==='needs_clarification';
-  return `<article class="draft-card ${spike?'alert':''}"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">${icons[item.ingredient_id] || '▤'}</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || 'Supplier unspecified')} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} items`)}</p>${sourceChip(draft)}</div><div class="price money">${rupiah(draft.total_idr)}<small>Purchase total</small></div></div>${spike ? `<div class="price-alert"><span aria-hidden="true">↗</span><span><strong>${number(Number(spike.comparison.change_percent).toFixed(1))}% price increase</strong> · ${rupiah(spike.unit_price_idr)}/${e(spike.canonical_unit)} vs ${rupiah(spike.comparison.baseline_unit_price_idr)}</span></div>` : clarify ? '<div class="price-alert">Some details need your attention before this can be recorded.</div>' : ''}<div class="draft-bottom">${badge(draft.status)}<div class="draft-actions"><button class="text-button" data-review="${e(draft.id)}">Review purchase <span aria-hidden="true">→</span></button><button class="button mini primary" data-approve="${e(draft.id)}"${clarify?' disabled title="Lengkapi detailnya lewat Review dulu"':''}>Setujui</button><button class="button mini" data-reject="${e(draft.id)}">Batalkan</button></div></div></article>`;
+  return `<article class="draft-card ${spike?'alert':''}"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">${icons[item.ingredient_id] || '▤'}</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || t('Pemasok tidak disebutkan','Supplier unspecified'))} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} ${t('bahan','items')}`)}</p>${sourceChip(draft)}</div><div class="price money">${rupiah(draft.total_idr)}<small>${t('Total pembelian','Purchase total')}</small></div></div>${spike ? `<div class="price-alert"><span aria-hidden="true">↗</span><span><strong>${number(Number(spike.comparison.change_percent).toFixed(1))}% ${t('kenaikan harga','price increase')}</strong> · ${rupiah(spike.unit_price_idr)}/${e(spike.canonical_unit)} vs ${rupiah(spike.comparison.baseline_unit_price_idr)}</span></div>` : clarify ? t('<div class="price-alert">Ada detail yang perlu diperhatikan sebelum dicatat.</div>','<div class="price-alert">Some details need your attention before this can be recorded.</div>') : ''}<div class="draft-bottom">${badge(draft.status)}<div class="draft-actions"><button class="text-button" data-review="${e(draft.id)}">${t('Tinjau pembelian','Review purchase')} <span aria-hidden="true">→</span></button><button class="button mini primary" data-approve="${e(draft.id)}"${clarify?' disabled title="Lengkapi detailnya lewat Review dulu"':''}>${t('Setujui','Approve')}</button><button class="button mini" data-reject="${e(draft.id)}">${t('Batalkan','Reject')}</button></div></div></article>`;
 }
 function purchaseTable(purchases) {
-  if (!purchases.length) return '<div class="empty"><strong>Your purchase history starts here.</strong>Approved purchases will appear in this view.</div>';
-  return `<div class="table-wrap"><table><thead><tr><th>Purchase</th><th>Supplier</th><th>Amount</th><th>Status</th></tr></thead><tbody>${purchases.map(purchase => `<tr><td><button class="text-button" data-review="${e(purchase.draft_id)}">${e(itemSummary(purchase.items))}</button><small>${e(date(purchase.created_at))}</small></td><td>${e(purchase.supplier || 'Unspecified')}</td><td class="money">${rupiah(purchase.total_idr)}<small>Payment unknown</small></td><td>${badge('recorded')}</td></tr>`).join('')}</tbody></table></div>`;
+  if (!purchases.length) return `<div class="empty"><strong>${t('Riwayat pembelian Anda dimulai di sini.','Your purchase history starts here.')}</strong>${t('Pembelian yang disetujui akan muncul di sini.','Approved purchases will appear in this view.')}</div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>${t('Pembelian','Purchase')}</th><th>${t('Pemasok','Supplier')}</th><th>${t('Jumlah','Amount')}</th><th>${t('Status','Status')}</th></tr></thead><tbody>${purchases.map(purchase => `<tr><td><button class="text-button" data-review="${e(purchase.draft_id)}">${e(itemSummary(purchase.items))}</button><small>${e(date(purchase.created_at))}</small></td><td>${e(purchase.supplier || t('Tidak disebutkan','Unspecified'))}</td><td class="money">${rupiah(purchase.total_idr)}<small>${t('Pembayaran belum diketahui','Payment unknown')}</small></td><td>${badge('recorded')}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function inventoryRows(inventory) {
   return `<div class="inventory-list">${inventory.map(item => `<div class="inventory-row"><span class="ingredient-icon" aria-hidden="true">${icons[item.ingredient_id] || '▦'}</span><div><strong>${e(item.name)}</strong><small>${item.low_stock?'<span class="badge red">Stok rendah</span>':'<span class="badge green">Tercatat</span>'}</small></div><div class="stock ${item.low_stock?'low':''}">${number(item.quantity)} <span>${e(item.unit)}</span><small>Threshold ${number(item.reorder_threshold)} ${e(item.unit)}</small></div></div>`).join('')}</div>`;
 }
 function activityRows(activity) {
-  if (!activity.length) return '<div class="empty">Your kitchen activity will appear here.</div>';
+  if (!activity.length) return `<div class="empty">${t('Aktivitas dapur Anda akan muncul di sini.','Your kitchen activity will appear here.')}</div>`;
   return `<div class="activity-list">${activity.map(item => `<div class="activity-row"><span class="activity-dot"></span><div><p>${e(item.message || item.event)}</p><small>${e(date(item.created_at))}</small></div></div>`).join('')}</div>`;
 }
 function whatsappPage() {
   const numbers=state.data?.whatsapp_numbers || [];
-  return `<div class="whatsapp-layout"><section class="panel whatsapp-panel"><div class="whatsapp-topline"><div><p class="eyebrow">SIMULATED · META CLOUD API FLOW</p><h2>${e(state.user?.display_name || 'Pemilik')}</h2><p class="muted"><select id="whatsapp-sender" aria-label="Nomor WhatsApp pengirim">${numbers.map(number => `<option value="${e(number.phone)}"${number.phone===WHATSAPP_SENDER?' selected':''}>${e(number.phone)}${number.label?` · ${e(number.label)}`:''}</option>`).join('')}</select> · percakapan lokal</p></div><span class="simulated-badge">SIMULATED</span></div><div class="chat-shell"><div class="chat-date">TODAY · LOCAL DEMO</div><div id="whatsapp-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions text">${whatsappMessageHTML()}</div></div><div id="whatsapp-error" class="notice error" role="alert" ${state.whatsappError?'':'hidden'}>${e(state.whatsappError)}</div><form id="whatsapp-form" class="whatsapp-composer"><label class="sr-only" for="whatsapp-text">Message to the simulated RestoPilot assistant</label><textarea id="whatsapp-text" rows="2" maxlength="4000" required placeholder="Type a purchase message…" ${state.whatsappSending?'disabled':''}></textarea><button class="button primary" type="submit" ${state.whatsappSending?'disabled':''}>${state.whatsappSending?'Sending…':'Send message'} <span aria-hidden="true">→</span></button></form><div class="whatsapp-examples" aria-label="Quick message examples"><span>Try a message:</span>${['beli cabai 3 kg 150rb','ya','batal','beli beras','berapa cabai yang tersisa?'].map(value=>`<button type="button" data-whatsapp-example="${e(value)}">${e(value)}</button>`).join('')}</div><p class="simulator-note">This rehearsal stores messages in the local demo database. It does not connect to WhatsApp or send a live message.</p></section><aside class="panel whatsapp-guide"><p class="eyebrow">THE REHEARSAL</p><h2>From a note to a record.</h2><ol><li><span>1</span><div><strong>Send a purchase note</strong><small>Try “beli cabai 3 kg 150rb”.</small></div></li><li><span>2</span><div><strong>Review the structured draft</strong><small>Correct the details in the dashboard.</small></div></li><li><span>3</span><div><strong>Reply ya or batal</strong><small>Only an owner decision records or rejects it.</small></div></li></ol><a class="text-button" href="#approvals">Open the review queue <span aria-hidden="true">→</span></a></aside></div>`;
+  return `<div class="whatsapp-layout"><section class="panel whatsapp-panel"><div class="whatsapp-topline"><div><p class="eyebrow">SIMULATED · META CLOUD API FLOW</p><h2>${e(state.user?.display_name || 'Pemilik')}</h2><p class="muted"><select id="whatsapp-sender" aria-label="Nomor WhatsApp pengirim">${numbers.map(number => `<option value="${e(number.phone)}"${number.phone===WHATSAPP_SENDER?' selected':''}>${e(number.phone)}${number.label?` · ${e(number.label)}`:''}</option>`).join('')}</select> · percakapan lokal</p></div><span class="simulated-badge">SIMULATED</span></div><div class="chat-shell"><div class="chat-date">TODAY · LOCAL DEMO</div><div id="whatsapp-messages" class="chat-messages" role="log" aria-live="polite" aria-relevant="additions text">${whatsappMessageHTML()}</div></div><div id="whatsapp-error" class="notice error" role="alert" ${state.whatsappError?'':'hidden'}>${e(state.whatsappError)}</div><form id="whatsapp-form" class="whatsapp-composer"><label class="sr-only" for="whatsapp-text">${t('Pesan untuk asisten RestoPilot simulasi','Message to the simulated RestoPilot assistant')}</label><textarea id="whatsapp-text" rows="2" maxlength="4000" required placeholder="${t('Tulis pesan pembelian…','Type a purchase message…')}" ${state.whatsappSending?'disabled':''}></textarea><button class="button primary" type="submit" ${state.whatsappSending?'disabled':''}>${state.whatsappSending?t('Mengirim…','Sending…'):t('Kirim pesan','Send message')} <span aria-hidden="true">→</span></button></form><div class="whatsapp-examples" aria-label="Quick message examples"><span>${t('Coba pesan:','Try a message:')}</span>${['beli cabai 3 kg 150rb','ya','batal','beli beras','berapa cabai yang tersisa?'].map(value=>`<button type="button" data-whatsapp-example="${e(value)}">${e(value)}</button>`).join('')}</div><p class="simulator-note">${t('Latihan ini menyimpan pesan di database demo lokal. Tidak terhubung ke WhatsApp dan tidak mengirim pesan sungguhan.','This rehearsal stores messages in the local demo database. It does not connect to WhatsApp or send a live message.')}</p></section><aside class="panel whatsapp-guide"><p class="eyebrow">${t('LATIHAN','THE REHEARSAL')}</p><h2>${t('Dari catatan menjadi catatan resmi.','From a note to a record.')}</h2><ol><li><span>1</span><div><strong>${t('Kirim catatan pembelian','Send a purchase note')}</strong><small>Try “beli cabai 3 kg 150rb”.</small></div></li><li><span>2</span><div><strong>${t('Tinjau draf terstruktur','Review the structured draft')}</strong><small>Correct the details in the dashboard.</small></div></li><li><span>3</span><div><strong>${t('Balas ya atau batal','Reply ya or batal')}</strong><small>Only an owner decision records or rejects it.</small></div></li></ol><a class="text-button" href="#approvals">${t('Buka antrean peninjauan','Open the review queue')} <span aria-hidden="true">→</span></a></aside></div>`;
 }
 function whatsappMessageHTML() {
   if(state.whatsappLoading && !state.whatsappMessages.length)return '<div class="chat-empty">Loading saved conversation…</div>';
@@ -226,15 +285,15 @@ function whatsappMessageHTML() {
 function whatsappOutcomeHTML() {
   const draft=state.whatsappDraft, action=state.whatsappResult?.action;
   let status='';
-  if(action==='approved')status='<div class="chat-outcome recorded"><strong>Purchase recorded.</strong><span>Inventory and purchase history have been updated.</span></div>';
-  else if(action==='rejected')status='<div class="chat-outcome"><strong>Draft rejected.</strong><span>Inventory is unchanged.</span></div>';
-  else if(action==='review_required')status='<div class="chat-outcome"><strong>Needs a closer look.</strong><span>Complete the missing details in the dashboard before deciding.</span></div>';
-  else if(action==='stock_answer')status='<div class=\"chat-outcome recorded\"><strong>Stock answered.</strong><span>Read straight from the inventory ledger — nothing was recorded.</span></div>';
-  else if(action==='active_draft_exists')status='<div class="chat-outcome"><strong>One draft is already waiting.</strong><span>Review or decide on it before starting another purchase.</span></div>';
-  else if(action==='no_active_draft')status='<div class="chat-outcome"><strong>No active draft.</strong><span>Send a purchase note to start a new rehearsal.</span></div>';
-  else if(draft?.status==='needs_clarification')status='<div class="chat-outcome"><strong>Draft needs details.</strong><span>Review the fields, then save corrections.</span></div>';
-  else if(draft)status='<div class="chat-outcome"><strong>Draft ready for review.</strong><span>Nothing is recorded until you confirm received goods.</span></div>';
-  const review=draft && ['needs_clarification','pending_approval'].includes(draft.status) ? `<button class="button secondary chat-review" type="button" data-whatsapp-review="${e(draft.id)}">Review in dashboard <span aria-hidden="true">→</span></button>` : '';
+  if(action==='approved')status=`<div class="chat-outcome recorded"><strong>${t('Pembelian tercatat.','Purchase recorded.')}</strong><span>${t('Stok dan riwayat pembelian diperbarui.','Inventory and purchase history have been updated.')}</span></div>`;
+  else if(action==='rejected')status=`<div class="chat-outcome"><strong>${t('Draf dibatalkan.','Draft rejected.')}</strong><span>${t('Stok tidak berubah.','Inventory is unchanged.')}</span></div>`;
+  else if(action==='review_required')status=`<div class="chat-outcome"><strong>${t('Perlu ditinjau lebih detail.','Needs a closer look.')}</strong><span>${t('Lengkapi detail yang kurang di dashboard sebelum memutuskan.','Complete the missing details in the dashboard before deciding.')}</span></div>`;
+  else if(action==='stock_answer')status=`<div class="chat-outcome recorded"><strong>${t('Pertanyaan stok terjawab.','Stock answered.')}</strong><span>${t('Dibaca langsung dari catatan stok — tidak ada yang dicatat.','Read straight from the inventory ledger — nothing was recorded.')}</span></div>`;
+  else if(action==='active_draft_exists')status=`<div class="chat-outcome"><strong>${t('Sudah ada draf menunggu.','One draft is already waiting.')}</strong><span>${t('Tinjau atau putuskan dulu sebelum memulai pembelian baru.','Review or decide on it before starting another purchase.')}</span></div>`;
+  else if(action==='no_active_draft')status=`<div class="chat-outcome"><strong>${t('Tidak ada draf aktif.','No active draft.')}</strong><span>${t('Kirim catatan pembelian untuk memulai latihan baru.','Send a purchase note to start a new rehearsal.')}</span></div>`;
+  else if(draft?.status==='needs_clarification')status=`<div class="chat-outcome"><strong>${t('Draf perlu detail.','Draft needs details.')}</strong><span>${t('Periksa kolomnya, lalu simpan koreksinya.','Review the fields, then save corrections.')}</span></div>`;
+  else if(draft)status=`<div class="chat-outcome"><strong>${t('Draf siap ditinjau.','Draft ready for review.')}</strong><span>${t('Tidak ada yang dicatat sampai Anda konfirmasi barang diterima.','Nothing is recorded until you confirm received goods.')}</span></div>`;
+  const review=draft && ['needs_clarification','pending_approval'].includes(draft.status) ? `<button class="button secondary chat-review" type="button" data-whatsapp-review="${e(draft.id)}">${t('Tinjau di dashboard','Review in dashboard')} <span aria-hidden="true">→</span></button>` : '';
   return status || review ? `<div class="chat-next">${status}${review}</div>` : '';
 }
 async function loadWhatsAppMessages() {
@@ -278,13 +337,13 @@ function overview() {
   const {metrics, purchases=[], inventory=[], activity=[]}=state.data, drafts=pendingDrafts();
   const delta=heroDelta(metrics);
   const metric=(label,value,detail,symbol,accent=false) => `<article class="metric ${accent?'metric-accent':''}"><div class="metric-label">${label}<span class="metric-symbol" aria-hidden="true">${symbol}</span></div><p class="metric-value money">${value}</p><small>${detail}</small></article>`;
-  const hero=`<article class="metric metric-hero"><div class="metric-label">Purchases today<span class="metric-symbol" aria-hidden="true">↗</span></div><p class="metric-value money">${rupiah(metrics.purchases_today_idr)}</p><small class="hero-delta ${delta.cls}">${e(delta.text)}</small><small>Approved invoice value · WIB</small></article>`;
-  return `<div class="metrics">${hero}${metric('Waiting for you',number(drafts.length),'Drafts to review or complete','☑',true)}${metric('Low stock',number(metrics.low_stock_count),'Based on estimated inventory','▦')}${metric('Recorded purchases',number(metrics.recorded_purchases),'Saved in your local database','▤')}</div><div class="main-grid"><div class="column"><section class="panel">${panelHeading(`Needs your attention <span class="count-pill">${drafts.length}</span>`,'A quick check today, fewer surprises tomorrow.', '<a class="text-button" href="#approvals">View all →</a>')}<div class="draft-list">${drafts.slice(0,3).map(draftCard).join('') || '<div class="empty"><strong>You’re all caught up.</strong>New purchase drafts will appear here.</div>'}</div></section><section class="panel">${panelHeading('Recent purchases','Confirmed, recorded, and easy to find.','<a class="text-button" href="#purchases">All purchases →</a>')}${purchaseTable(purchases.slice(0,5))}</section></div><div class="column"><section class="panel quick-panel"><div class="quick-icon" aria-hidden="true">✳</div><h2>A purchase. A simple message.</h2><p>Keep your kitchen moving. Turn a quick note into a purchase ready for your review.</p><div class="quick-sample">beli cabai 3 kg 150rb</div><button class="button" data-action="new-purchase">Try a quick log <span aria-hidden="true">→</span></button></section><section class="panel">${panelHeading('Kitchen stock','','<a class="text-button" href="#inventory">View all →</a>')}${inventoryRows(inventory.slice(0,3))}<div class="panel-note">Estimated from approved receipts. Physical counts and kitchen usage may differ.</div></section><section class="panel">${panelHeading('Latest activity')}${activityRows(activity.slice(0,3))}</section></div></div><div class="charts-grid"><section class="panel">${panelHeading('Pengeluaran 14 hari','Total pembelian tercatat per hari (WIB).')}${dailySpendChart(state.data.charts?.daily_spend)}</section><section class="panel">${panelHeading('Bahan pengeluaran terbesar','Dari pembelian 30 hari terakhir.')}${ingredientSpendChart(state.data.charts?.ingredient_spend)}</section></div>`;
+  const hero=`<article class="metric metric-hero"><div class="metric-label">${t('Pembelian hari ini','Purchases today')}<span class="metric-symbol" aria-hidden="true">↗</span></div><p class="metric-value money">${rupiah(metrics.purchases_today_idr)}</p><small class="hero-delta ${delta.cls}">${e(delta.text)}</small><small>${t('Nilai invoice disetujui · WIB','Approved invoice value · WIB')}</small></article>`;
+  return `<div class="metrics">${hero}${metric(t('Menunggu Anda','Waiting for you'),number(drafts.length),t('Draf untuk ditinjau atau dilengkapi','Drafts to review or complete'),'☑',true)}${metric(t('Stok rendah','Low stock'),number(metrics.low_stock_count),t('Berdasar estimasi inventory','Based on estimated inventory'),'▦')}${metric(t('Pembelian tercatat','Recorded purchases'),number(metrics.recorded_purchases),t('Tersimpan di database lokal','Saved in your local database'),'▤')}</div><div class="main-grid"><div class="column"><section class="panel">${panelHeading(`${t('Perlu perhatian Anda','Needs your attention')} <span class="count-pill">${drafts.length}</span>`,t('Periksa cepat hari ini, besok lebih sedikit kejutan.','A quick check today, fewer surprises tomorrow.'), `<a class="text-button" href="#approvals">${t('Lihat semua →','View all →')}</a>`)}<div class="draft-list">${drafts.slice(0,3).map(draftCard).join('') || `<div class="empty"><strong>${t('Semua sudah beres.','You’re all caught up.')}</strong>${t('Draf pembelian baru akan muncul di sini.','New purchase drafts will appear here.')}</div>`}</div></section><section class="panel">${panelHeading(t('Pembelian terbaru','Recent purchases'),t('Terkonfirmasi, tercatat, mudah dicari.','Confirmed, recorded, and easy to find.'),`<a class="text-button" href="#purchases">${t('Semua pembelian →','All purchases →')}</a>`)}${purchaseTable(purchases.slice(0,5))}</section></div><div class="column"><section class="panel quick-panel"><div class="quick-icon" aria-hidden="true">✳</div><h2>${t('Satu pembelian. Satu pesan sederhana.','A purchase. A simple message.')}</h2><p>${t('Dapur tetap bergerak. Ubah catatan singkat menjadi pembelian siap tinjau.','Keep your kitchen moving. Turn a quick note into a purchase ready for your review.')}</p><div class="quick-sample">beli cabai 3 kg 150rb</div><button class="button" data-action="new-purchase">${t('Coba catat cepat →','Try a quick log →')}</button></section><section class="panel">${panelHeading(t('Stok dapur','Kitchen stock'),'',`<a class="text-button" href="#inventory">${t('Lihat semua →','View all →')}</a>`)}${inventoryRows(inventory.slice(0,3))}<div class="panel-note">${t('Estimasi dari nota yang disetujui. Hitungan fisik dan pemakaian dapur bisa berbeda.','Estimated from approved receipts. Physical counts and kitchen usage may differ.')}</div></section><section class="panel">${panelHeading(t('Aktivitas terbaru','Latest activity'))}${activityRows(activity.slice(0,3))}</section></div></div><div class="charts-grid"><section class="panel">${panelHeading(t('Pengeluaran 14 hari','14-day spending'),t('Total pembelian tercatat per hari (WIB).','Recorded purchase totals per day (WIB).'))}${dailySpendChart(state.data.charts?.daily_spend)}</section><section class="panel">${panelHeading(t('Bahan pengeluaran terbesar','Top ingredients by spend'),t('Dari pembelian 30 hari terakhir.','From purchases in the last 30 days.'))}${ingredientSpendChart(state.data.charts?.ingredient_spend)}</section></div>`;
 }
 function render() {
   renderIdentity();
   if(state.user?.role==='admin')return renderAdmin();
-  const page=state.page, [title,subtitle]=titles[page];
+  const page=state.page, [title,subtitle]=titles()[page] || titles().overview;
   $('#page-title').textContent=title; $('#page-subtitle').textContent=subtitle; $('#breadcrumb').textContent=page[0].toUpperCase()+page.slice(1);
   document.querySelectorAll('[data-page]').forEach(link => { link.classList.toggle('active',link.dataset.page===page); if(link.dataset.page===page)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current'); });
   if (!state.data) return;
@@ -293,10 +352,10 @@ function render() {
   $('#nav-count').textContent=pendingDrafts().length;
   let html='';
   if (page==='overview') html=overview();
-  if (page==='approvals') html=`<section class="panel">${panelHeading('Review queue',`${pendingDrafts().length} drafts waiting for your decision`)}<div class="full-list">${pendingDrafts().map(draftCard).join('') || '<div class="empty"><strong>All clear.</strong>Every draft has a decision.</div>'}</div></section>`;
-  if (page==='purchases') html=`<p class="subtle-note">Includes synthetic opening purchases used to demonstrate price comparisons. Recording a purchase does not mark a supplier as paid.</p><section class="panel">${panelHeading('Purchase history')}${purchaseTable(state.data.purchases)}</section>`;
-  if (page==='inventory') html=`<section class="panel">${panelHeading('Estimated inventory','Approved received quantities only. Correct the numbers with a stock opname over chat or with the form below.')}${inventoryRows(state.data.inventory)}<div class="panel-note">Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.</div></section>` + opnameFormPanel() + (state.data.stock_counts?.length ? `<section class="panel">${panelHeading('Riwayat stok opname','Koreksi stok fisik dari chat dan dashboard. Semua angka dari database.')}${state.data.stock_counts.map(item=>`<div class="number-row"><code>${e(item.name)}</code><span>${e(item.estimated_quantity)} → ${e(item.counted_quantity)} (selisih ${e(item.delta)})</span><span class="spacer"></span><small>${e(date(item.applied_at))}</small></div>`).join('')}</section>` : '');
-  if (page==='activity') html=`<section class="panel">${panelHeading('Activity history','Includes synthetic setup records. All new actions are persisted.')}${activityRows(state.data.activity)}</section>`;
+  if (page==='approvals') html=`<section class="panel">${panelHeading(t('Antrean peninjauan','Review queue'),`${pendingDrafts().length} ${t('draf menunggu keputusan Anda','drafts waiting for your decision')}`)}<div class="full-list">${pendingDrafts().map(draftCard).join('') || `<div class="empty"><strong>${t('Semua beres.','All clear.')}</strong>${t('Setiap draf sudah punya keputusan.','Every draft has a decision.')}</div>`}</div></section>`;
+  if (page==='purchases') html=`<p class="subtle-note">${t('Termasuk pembelian pembuka sintetis untuk demo perbandingan harga. Mencatat pembelian tidak menandai pemasok sebagai dibayar.','Includes synthetic opening purchases used to demonstrate price comparisons. Recording a purchase does not mark a supplier as paid.')}</p><section class="panel">${panelHeading(t('Riwayat pembelian','Purchase history'))}${purchaseTable(state.data.purchases)}</section>`;
+  if (page==='inventory') html=`<section class="panel">${panelHeading(t('Estimasi stok','Estimated inventory'),t('Hanya jumlah barang yang diterima dan disetujui. Koreksi angkanya dengan stok opname lewat chat atau formulir di bawah.','Approved received quantities only. Correct the numbers with a stock opname over chat or with the form below.'))}${inventoryRows(state.data.inventory)}<div class="panel-note">${t('Ambang stok rendah adalah konfigurasi demo. Bandingkan dengan hitungan fisik sebelum memesan.','Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.')}</div></section>` + opnameFormPanel() + (state.data.stock_counts?.length ? `<section class="panel">${panelHeading(t('Riwayat stok opname','Stock count history'),t('Koreksi stok fisik dari chat dan dashboard. Semua angka dari database.','Physical corrections from chat and the dashboard. Every figure comes from the database.'))}${state.data.stock_counts.map(item=>`<div class="number-row"><code>${e(item.name)}</code><span>${e(item.estimated_quantity)} → ${e(item.counted_quantity)} (${t('selisih','delta')} ${e(item.delta)})</span><span class="spacer"></span><small>${e(date(item.applied_at))}</small></div>`).join('')}</section>` : '');
+  if (page==='activity') html=`<section class="panel">${panelHeading(t('Riwayat aktivitas','Activity history'),t('Termasuk catatan pembuka sintetis. Semua tindakan baru tersimpan.','Includes synthetic setup records. All new actions are persisted.'))}${activityRows(state.data.activity)}</section>`;
   if (page==='whatsapp') html=whatsappPage();
   if (page==='rules') html=rulesPage();
   if (page==='links') html=linksPage();
@@ -393,14 +452,14 @@ async function refresh() {
     if(id!==state.refreshId)return;
     state.data=data;state.online=true;
     if(!WHATSAPP_SENDER && data.whatsapp_numbers?.length)WHATSAPP_SENDER=state.whatsappNumber||data.whatsapp_numbers[0].phone;
-    $('#sync-status').textContent=`Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
+    $('#sync-status').textContent=t(`Diperbarui ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`,`Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`);
     showError('connection-error','');render();
     if(state.draft && $('#review-dialog').open && !state.busy) updateApprovalButton();
   } catch(error) {
     if(id!==state.refreshId)return;
-    state.online=false;$('#sync-status').textContent='Connection lost';
-    showError('connection-error',`${error.message} ${state.data?'Showing the last loaded data. Decisions are disabled until reconnected.':''}`);
-    if (!state.data && state.user?.role!=='admin') $('#content').innerHTML='<div class="empty"><strong>The kitchen is temporarily offline.</strong>Use the refresh button after starting the local server.</div>';
+    state.online=false;$('#sync-status').textContent=t('Koneksi terputus','Connection lost');
+    showError('connection-error',`${error.message} ${state.data?t('Menampilkan data terakhir yang dimuat. Keputusan dinonaktifkan sampai terhubung kembali.','Showing the last loaded data. Decisions are disabled until reconnected.'):''}`);
+    if (!state.data && state.user?.role!=='admin') $('#content').innerHTML=`<div class="empty"><strong>${t('Dapur sedang offline sementara.','The kitchen is temporarily offline.')}</strong>${t('Gunakan tombol refresh setelah server lokal berjalan.','Use the refresh button after starting the local server.')}</div>`;
     updateApprovalButton();
   }
 }
@@ -457,7 +516,7 @@ async function saveCorrections(event) {
   try { items=editedItems(); } catch(error) {showError('review-error',error.message);return;}
   const body={expected_version:state.draft.version,items,supplier:$('#review-supplier').value.trim() || null};
   reviewBusy(true);
-  try { state.draft=await api(`/v1/drafts/${encodeURIComponent(state.draft.id)}`,{method:'PATCH',body,key:stableMutationKey(`edit:${state.draft.id}`,body)});state.dirty=false;renderReview();await refresh();toast('Corrections saved. Review the updated totals before approving.'); }
+  try { state.draft=await api(`/v1/drafts/${encodeURIComponent(state.draft.id)}`,{method:'PATCH',body,key:stableMutationKey(`edit:${state.draft.id}`,body)});state.dirty=false;renderReview();await refresh();toast(t('Koreksi tersimpan. Tinjau total terbaru sebelum menyetujui.','Corrections saved. Review the updated totals before approving.')); }
   catch(error) { handleReviewError(error); }
   finally {reviewBusy(false);}
 }
@@ -470,7 +529,7 @@ async function decide(decision) {
   try {
     await api(`/v1/drafts/${encodeURIComponent(state.draft.id)}/decision`,{method:'POST',body,key:stableMutationKey(`${decision}:${state.draft.id}`,body)});
     $('#review-dialog').close();state.draft=null;await refresh();
-    toast(decision==='approve'?'Purchase recorded. Inventory and purchase history updated.':'Draft rejected. Inventory is unchanged.');
+    toast(decision==='approve'?t('Pembelian tercatat. Stok dan riwayat pembelian diperbarui.','Purchase recorded. Inventory and purchase history updated.'):t('Draf dibatalkan. Stok tidak berubah.','Draft rejected. Inventory is unchanged.'));
   } catch(error) { handleReviewError(error); }
   finally {reviewBusy(false);}
 }
@@ -580,7 +639,7 @@ $('#review-dialog').addEventListener('cancel',event => {if(state.busy)event.prev
 $('#refresh').addEventListener('click',refresh);
 function navigate() {
   const hash=location.hash.slice(1);
-  const known=Object.hasOwn(state.user?.role==='admin'?{...titles,admin:'','admin-detail':''}:titles,hash);
+  const known=Object.hasOwn(state.user?.role==='admin'?{...titles(),admin:'','admin-detail':''}:titles(),hash);
   state.page=known?hash:(state.user?.role==='admin'?'admin':'overview');
   render();
 }

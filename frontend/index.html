@@ -1,55 +1,55 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#183f35">
-  <title>RestoPilot · Your kitchen, in view</title>
+  <title>RestoPilot · Dapur Anda, dalam pandangan</title>
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
+  <a class="skip-link" href="#main" data-i18n="skip">Lewati ke konten</a>
   <aside class="sidebar" id="sidebar" hidden>
     <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true">r<span>·</span></span>RestoPilot</a>
-    <div class="workspace"><span class="workspace-icon" aria-hidden="true">⌂</span><div><strong id="restaurant-name">…</strong><small id="workspace-sub">Restaurant workspace</small></div></div>
-    <p class="nav-label" id="nav-label">YOUR OPERATIONS</p>
+    <div class="workspace"><span class="workspace-icon" aria-hidden="true">⌂</span><div><strong id="restaurant-name">…</strong><small id="workspace-sub">Workspace resto</small></div></div>
+    <p class="nav-label" id="nav-label" data-i18n="nav_label">OPERASI ANDA</p>
     <nav aria-label="Main navigation" id="main-nav">
-      <a href="#overview" data-page="overview"><span aria-hidden="true">◫</span> Overview</a>
-      <a href="#approvals" data-page="approvals" id="nav-approvals"><span aria-hidden="true">☑</span> Approvals <span id="nav-count" class="nav-count">—</span></a>
-      <a href="#purchases" data-page="purchases"><span aria-hidden="true">▤</span> Purchases</a>
-      <a href="#inventory" data-page="inventory"><span aria-hidden="true">▦</span> Inventory</a>
-      <a href="#rules" data-page="rules" id="nav-rules" hidden><span aria-hidden="true">✎</span> Peraturan</a>
-      <a href="#links" data-page="links" id="nav-links" hidden><span aria-hidden="true">⇄</span> Koneksi</a>
-      <a href="#activity" data-page="activity"><span aria-hidden="true">↗</span> Activity</a>
-      <a href="#whatsapp" data-page="whatsapp" id="nav-whatsapp"><span aria-hidden="true">◌</span> WhatsApp demo</a>
-      <a href="#admin" data-page="admin" id="nav-admin" hidden><span aria-hidden="true">⚙</span> Restaurants</a>
+      <a href="#overview" data-page="overview"><span aria-hidden="true">◫</span><span data-i18n="nav_overview">Ringkasan</span></a>
+      <a href="#approvals" data-page="approvals" id="nav-approvals"><span aria-hidden="true">☑</span><span data-i18n="nav_approvals">Persetujuan</span> <span id="nav-count" class="nav-count">—</span></a>
+      <a href="#purchases" data-page="purchases"><span aria-hidden="true">▤</span><span data-i18n="nav_purchases">Pembelian</span></a>
+      <a href="#inventory" data-page="inventory"><span aria-hidden="true">▦</span><span data-i18n="nav_inventory">Stok</span></a>
+      <a href="#rules" data-page="rules" id="nav-rules" hidden><span aria-hidden="true">✎</span><span data-i18n="nav_rules">Peraturan</span></a>
+      <a href="#links" data-page="links" id="nav-links" hidden><span aria-hidden="true">⇄</span><span data-i18n="nav_links">Koneksi</span></a>
+      <a href="#activity" data-page="activity"><span aria-hidden="true">↗</span><span data-i18n="nav_activity">Aktivitas</span></a>
+      <a href="#whatsapp" data-page="whatsapp" id="nav-whatsapp"><span aria-hidden="true">◌</span><span data-i18n="nav_whatsapp">WhatsApp demo</span></a>
+      <a href="#admin" data-page="admin" id="nav-admin" hidden><span aria-hidden="true">⚙</span><span data-i18n="nav_admin">Resto</span></a>
     </nav>
-    <div class="sidebar-bottom"><span class="status-dot"></span> Session active<p>Demo authentication.<br>WhatsApp numbers are linked per restaurant by the admin.</p><div class="profile"><span id="profile-initials">…</span><div><span id="profile-name">…</span><small id="profile-role">…</small></div></div><button class="button mini" id="logout" type="button">Keluar</button></div>
+    <div class="sidebar-bottom"><span class="status-dot"></span><span data-i18n="session_active">Sesi aktif</span><p data-i18n="session_note">Autentikasi demo.<br>Nomor WhatsApp dihubungkan admin per resto.</p><div class="profile"><span id="profile-initials">…</span><div><span id="profile-name">…</span><small id="profile-role">…</small></div></div><button class="button mini" id="lang-toggle" type="button" title="Ganti bahasa">EN</button><button class="button mini" id="logout" type="button" data-i18n="logout">Keluar</button></div>
   </aside>
   <div class="shell" id="shell" hidden>
-    <header class="topbar"><span>Workspace <span class="breadcrumb">/ <span id="breadcrumb">Overview</span></span></span><div><span class="demo-pill">DEMO</span><span id="sync-status" role="status">Connecting…</span><button id="refresh" class="icon-button" aria-label="Refresh dashboard">↻</button></div></header>
+    <header class="topbar"><span><span data-i18n="workspace">Workspace</span> <span class="breadcrumb">/ <span id="breadcrumb">Ringkasan</span></span></span><div><span class="demo-pill">DEMO</span><span id="sync-status" role="status" data-i18n="connecting">Menghubungkan…</span><button id="refresh" class="icon-button" aria-label="Refresh dashboard">↻</button></div></header>
     <main id="main" tabindex="-1">
-      <div class="page-heading"><div><p class="eyebrow">A LITTLE CLARITY FOR YOUR KITCHEN</p><h1 id="page-title">Your kitchen, in view.</h1><p id="page-subtitle">Purchases, stock, and the decisions that need you.</p></div><button class="button primary" data-action="new-purchase"><span aria-hidden="true">＋</span> Log a purchase</button></div>
+      <div class="page-heading"><div><p class="eyebrow" data-i18n="eyebrow">SEDIKIT KEJELASAN UNTUK DAPUR ANDA</p><h1 id="page-title">Dapur Anda, dalam pandangan.</h1><p id="page-subtitle">Pembelian, stok, dan keputusan yang menunggu Anda.</p></div><button class="button primary" data-action="new-purchase"><span aria-hidden="true">＋</span><span data-i18n="btn_log">Catat pembelian</span></button></div>
       <div id="connection-error" class="notice error" role="alert" hidden></div>
-      <div id="content" aria-live="polite"><div class="loading-state"><span class="spinner"></span> Loading your kitchen…</div></div>
-      <footer class="page-footer"><span>RestoPilot · From purchase to peace of mind.</span><span>Manual intake · Rules parser · Persistent local database</span></footer>
+      <div id="content" aria-live="polite"><div class="loading-state"><span class="spinner"></span><span data-i18n="loading">Memuat dapur Anda…</span></div></div>
+      <footer class="page-footer"><span data-i18n="footer_left">RestoPilot · Dari pembelian ke ketenangan.</span><span data-i18n="footer_right">Input manual · Parser aturan · Database lokal</span></footer>
     </main>
   </div>
   <dialog id="intake-dialog" aria-labelledby="intake-title">
-    <div class="dialog-heading"><div><p class="eyebrow">QUICK LOG</p><h2 id="intake-title">What came into the kitchen?</h2></div><button class="icon-button" data-close="intake-dialog" aria-label="Close purchase form">×</button></div>
-    <p class="muted">Type your purchase in Indonesian, or attach a photo of the supplier nota. You’ll review it before anything is recorded.</p>
+    <div class="dialog-heading"><div><p class="eyebrow">CATAT CEPAT</p><h2 id="intake-title" data-i18n="intake_title">Apa yang masuk ke dapur?</h2></div><button class="icon-button" data-close="intake-dialog" aria-label="Tutup">×</button></div>
+    <p class="muted" data-i18n="intake_intro">Tulis pembelian dalam Bahasa Indonesia, atau lampirkan foto nota pemasok. Semuanya Anda tinjau sebelum dicatat.</p>
     <form id="intake-form">
-      <label for="purchase-text">Purchase message</label>
+      <label for="purchase-text" data-i18n="intake_msg_label">Pesan pembelian</label>
       <textarea id="purchase-text" name="text" rows="4" maxlength="4000" placeholder="beli cabai 3 kg 150rb"></textarea>
-      <div class="examples"><span>Try:</span><button type="button" data-example="beli cabai 3 kg 150rb">Cabai · 3 kg</button><button type="button" data-example="beli beras">Missing details</button><button type="button" data-example="beli cabai 500 g Rp25.000">Grams → kg</button></div>
-      <label for="purchase-photo">Or attach the supplier nota <span class="muted">(JPEG, PNG, WEBP, or PDF — up to 5 files become one draft)</span></label>
+      <div class="examples"><span data-i18n="try_it">Coba:</span><button type="button" data-example="beli cabai 3 kg 150rb">Cabai · 3 kg</button><button type="button" data-example="beli beras" data-i18n="ex_missing">Detail kurang</button><button type="button" data-example="beli cabai 500 g Rp25.000" data-i18n="ex_grams">Gram → kg</button></div>
+      <label for="purchase-photo" data-i18n="intake_photo_label">Atau lampirkan nota pemasok <span class="muted">(JPEG, PNG, WEBP, atau PDF — hingga 5 berkas jadi satu draf)</span></label>
       <input id="purchase-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" multiple>
-      <label for="purchase-supplier">Supplier <span class="muted">(optional)</span></label>
-      <input id="purchase-supplier" name="supplier" maxlength="100" placeholder="e.g. Pasar Pagi">
-      <p class="field-help">For several items, use one line per item. A photo is read by StepFun vision; anything it cannot read stays blank for you to fill in. Voice notes are not supported yet.</p>
+      <label for="purchase-supplier" data-i18n="intake_supplier_label">Pemasok <span class="muted">(opsional)</span></label>
+      <input id="purchase-supplier" name="supplier" maxlength="100" placeholder="mis. Pasar Pagi">
+      <p class="field-help" data-i18n="intake_help">Untuk beberapa bahan, gunakan satu baris per bahan. Foto dibaca vision StepFun; yang tidak terbaca dibiarkan kosong untuk Anda isi. Voice note belum didukung.</p>
       <div id="intake-error" class="notice error" role="alert" hidden></div>
-      <div class="dialog-footer"><span class="muted">Nothing posts without your approval.</span><button class="button primary" type="submit">Prepare draft <span aria-hidden="true">→</span></button></div>
+      <div class="dialog-footer"><span class="muted" data-i18n="intake_footer">Tidak ada yang tercatat tanpa persetujuan Anda.</span><button class="button primary" type="submit"><span data-i18n="btn_prepare">Siapkan draf</span> <span aria-hidden="true">→</span></button></div>
     </form>
   </dialog>
   <dialog id="review-dialog" class="review-dialog" aria-labelledby="review-title"><div id="review-content"></div></dialog>
