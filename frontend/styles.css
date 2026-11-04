@@ -108,3 +108,9 @@ body.is-admin .page-heading > .button{display:none}
 .recipe-line label{min-width:0}.recipe-line input{width:100%}
 @media(max-width:620px){.stock-card-grid{grid-template-columns:1fr;padding:0 14px 14px}.inventory-event{flex-direction:column;gap:5px}.recipe-line{grid-template-columns:1fr 1fr}.recipe-line button{justify-self:start}.inventory-toolbar .button{flex:1 1 44%;font-size:12px}}
 .forecast-history{border:1px solid var(--line);border-radius:8px;padding:14px;margin:20px 0}.forecast-history legend{font-size:13px;padding:0 7px;color:var(--green-dark)}
+/* Language toggle (ID | EN) */
+.lang-toggle{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;flex:none}
+.lang-toggle button{border:0;background:transparent;font-size:10px;font-weight:600;padding:5px 9px;color:var(--muted);letter-spacing:.04em}
+.lang-toggle button.active{background:var(--green);color:#fff}
+.topbar .lang-toggle{margin-right:4px}
+.login-card .lang-toggle{margin-bottom:14px}
