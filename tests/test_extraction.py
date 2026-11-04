@@ -44,6 +44,32 @@ def test_aliases_decimal_comma_and_supported_line_separators():
     assert result["warnings"] == []
 
 
+def test_trailing_dari_clause_becomes_supplier():
+    result = extract_purchase("Beli cabai 3 kg 150rb dari Bu Sari")
+    assert result["items"] == [
+        {"ingredient_id": "cabai", "raw_name": "cabai", "quantity": "3", "unit": "kg", "line_total_idr": 150000}
+    ]
+    assert result["warnings"] == []
+    assert result["supplier"] == "Bu Sari"
+
+    # Trailing punctuation is trimmed from the name.
+    assert extract_purchase("beli cabai 3 kg 150rb dari Bu Sari.")["supplier"] == "Bu Sari"
+
+    # No supplier clause: the result stays exactly as before.
+    assert "supplier" not in extract_purchase("beli cabai 3 kg 150rb")
+
+    # The clause is stripped per line; the first named supplier wins.
+    multi = extract_purchase("beli cabai 3 kg 150rb dari Bu Sari\nbeli telur 1 kg 30rb")
+    assert [item["ingredient_id"] for item in multi["items"]] == ["cabai", "telur"]
+    assert multi["supplier"] == "Bu Sari"
+
+    # An item without quantity or price still parses; the supplier is kept.
+    sparse = extract_purchase("beli cabai dari Bu Sari")
+    assert sparse["items"][0]["ingredient_id"] == "cabai"
+    assert sparse["supplier"] == "Bu Sari"
+    assert any("quantity" in warning for warning in sparse["warnings"])
+
+
 def test_unknown_item_and_pack_are_preserved_for_manual_selection():
     result = extract_purchase("beli daun bawang 2 ikat 10rb")
     assert result["items"][0]["ingredient_id"] is None

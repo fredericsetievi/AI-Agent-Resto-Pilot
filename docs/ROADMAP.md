@@ -8,11 +8,13 @@ Automated fake-provider contract tests are available for the Meta integration. A
 
 ## Next delivery work
 
+The inventory extension now implements confirmed usage/waste, stock-count reconciliation, recipe-based sales, and reorder planning. See [the inventory guide](INVENTORY.md). Hosted rollout requires migration `0004_inventory_operations.sql` and the updated application; no automatic ordering or outbound reminders are included.
+
 1. Replace the temporary tunnel and development token with stable deployment configuration when the project moves beyond local rehearsal.
 2. Evaluate the parser against reviewed Indonesian purchase examples and improve aliases or explicit correction prompts.
 3. Prepare PostgreSQL persistence, managed identity and restaurant memberships; port concurrency and tenant-access checks.
 4. Add private receipt photo storage, bounded extraction, retained source evidence and mandatory correction/approval.
-5. Add durable delivery jobs, restart/retry behavior, audited reversals, stock counts and backup/restore rehearsal.
+5. Add durable delivery jobs, restart/retry behavior, audited purchase/sales reversals and backup/restore rehearsal.
 
 Voice, marketing, supplier outreach, payments and POS connectors remain outside the current purchase-loop scope.
 

@@ -11,9 +11,14 @@ function harness({fetchImpl=()=>new Promise(()=>{}),hash='#overview'}={}) {
     if(!elements.has(selector))elements.set(selector,{textContent:'',innerHTML:'',hidden:true,disabled:false,checked:false,open:false,value:'',dataset:{},classList:{toggle(){}},addEventListener(){},querySelector:element,querySelectorAll:()=>[],setAttribute(){},removeAttribute(){},toggleAttribute(){},insertBefore(){}});
     return elements.get(selector);
   }
-  const context=vm.createContext({console,Intl,Date,Number,String,Object,AbortController,TypeError,Map,Promise,crypto,setTimeout,clearTimeout,setInterval:()=>{},location:{hash},window:{addEventListener(){}},document:{hidden:false,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement:()=>element('new-element')},fetch:fetchImpl});
+  // UI request/toast timers must not hold this unit harness open when a stubbed
+  // fetch deliberately never resolves (the admin preview uses a 60s timeout).
+  const context=vm.createContext({console,Intl,Date,Number,String,Object,AbortController,TypeError,Map,Promise,crypto,FormData:class {constructor(form){this.values=form.values;}get(key){return this.values[key]??null;}},setTimeout:(...args)=>setTimeout(...args).unref(),clearTimeout,setInterval:()=>{},location:{hash},window:{addEventListener(){}},localStorage:{getItem:()=>null,setItem(){}},document:{hidden:false,documentElement:{lang:''},querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement:()=>element('new-element')},fetch:fetchImpl});
   // Omit boot calls; no network request or timer is required by these tests.
   // Omit boot: the real app boots via boot() (auth check) which no test needs implicitly.
+  // i18n.js loads first so t() exists; tests assert the English strings.
+  vm.runInContext(fs.readFileSync('frontend/i18n.js','utf8'),context);
+  vm.runInContext("window.setLang('en')",context);
   const source=fs.readFileSync('frontend/app.js','utf8').replace('boot();','');
   vm.runInContext(source,context);
   return {context,element,run:code=>vm.runInContext(code,context)};
@@ -101,7 +106,7 @@ test('WhatsApp simulator renders the requested route and follows the language to
   assert.equal(h.element('#page-title').textContent,'A WhatsApp flow you can rehearse.');
   assert.match(h.element('#content').innerHTML,/does not connect to WhatsApp or send a live message/);
   const index=fs.readFileSync('frontend/index.html','utf8');
-  assert.match(index,/#whatsapp[^>]*>.*WhatsApp demo/s);
+  assert.match(index,/#whatsapp[^>]*>.*WhatsApp/s);
 });
 
 test('simulator POST uses the requested body and reuses event id and idempotency key on retry',async()=>{
@@ -166,7 +171,7 @@ test('admin row data attributes drive the detail navigation',()=>{
   h.run(`state.user={id:'u1',username:'admin',display_name:'Platform admin',role:'admin',restaurant_id:null,restaurant_name:null};state.adminSelected='resto-1';state.adminList=[{id:'resto-1',name:'Warung Bu Sari',address:null,created_at:'2026-10-27T00:00:00Z',whatsapp_numbers:[],users:[],pending_drafts:1,recorded_purchases:2}];navigate()`);
   assert.equal(h.element('#page-title').textContent,'Restaurant detail.');
   assert.match(h.element('#content').innerHTML,/Warung Bu Sari/);
-  assert.match(h.element('#content').innerHTML,/data-open-resto="resto-1"|Nomor WhatsApp terhubung/);
+  assert.match(h.element('#content').innerHTML,/Connected WhatsApp numbers|Nomor WhatsApp terhubung/);
 });
 
 test('review warnings are deduplicated and capped at four visible details',()=>{
@@ -241,4 +246,68 @@ test('api calls send the ngrok skip header and report non-JSON gateway pages cle
   }});
   await assert.rejects(h.run(`api('/v1/links')`), /Gateway mengembalikan halaman bukan-JSON/);
   assert.equal(capturedHeaders['ngrok-skip-browser-warning'], '1');
+});
+
+test('inventory cards escape ledger content and distinguish forecast evidence sources',()=>{
+  const h=harness();
+  h.run(`state.data={inventory:[{ingredient_id:'rice',name:'<img src=x>',quantity:'10',unit:'kg',reorder_threshold:'2'},{ingredient_id:'oil',name:'Oil',quantity:'4',unit:'l',reorder_threshold:'1'}]};inventoryState.loaded=true;inventoryState.data={settings:{lead_days:2,safety_days:1,history_start:'2026-10-01',history_end:'2026-10-07'},forecasts:[{ingredient_id:'rice',source:'manual',daily_usage:'2',days_left:'5',reorder_in_days:'2'},{ingredient_id:'oil',source:'recorded',daily_usage:'1',days_left:'4',reorder_in_days:'1',evidence_days:7}],events:[{kind:'usage',note:'<script>alert(1)</script>',created_at:'2026-10-20T00:00:00Z',items:[]}]};`);
+  const html=h.run('inventoryWorkspace()');
+  assert.ok(!html.includes('<img'));
+  assert.ok(!html.includes('<script>'));
+  assert.match(html,/&lt;img/);
+  assert.match(html,/your estimate/);
+  assert.match(html,/7 recorded days/);
+  assert.match(html,/2026-10-01/);
+});
+
+function inventoryMutationHarness(kind,values){
+  const h=harness();
+  const button={disabled:false,textContent:''};
+  h.context.testForm={dataset:{kind},values,querySelector:()=>button,querySelectorAll:()=>[]};
+  h.run(`inventoryState.formId='test-form';inventoryState.snapshot=[{ingredient_id:'rice',quantity:'10',unit:'kg'}];var sent=[];api=async(path,options)=>{sent.push({path,...options});throw new Error('Temporary failure — retry');};`);
+  return h;
+}
+
+test('history settings require confirmation and send the complete-history flag',async()=>{
+  const values={lead_days:'2',safety_days:'1',history_start:'2026-10-01',history_end:'2026-10-07',history_confirmed:''};
+  const h=inventoryMutationHarness('settings',values);
+  await h.run(`saveInventoryForm({preventDefault(){},target:testForm})`);
+  assert.equal(h.run('sent.length'),0);
+  assert.match(h.element('#inventory-form-error').textContent,/confirm/);
+  values.history_confirmed='on';
+  await h.run(`saveInventoryForm({preventDefault(){},target:testForm})`);
+  const payload=JSON.parse(h.run('JSON.stringify(sent[0].body)'));
+  assert.equal(payload.history_complete,true);
+  assert.equal(payload.history_start,'2026-10-01');
+  assert.equal(payload.history_end,'2026-10-07');
+  assert.equal(h.run('sent[0].path'),'/v1/inventory/settings');
+});
+
+test('stock count uses the opened balance and retry retains the same mutation key',async()=>{
+  const h=inventoryMutationHarness('count',{ingredient_id:'rice',quantity:'0.5',pack_size:'12',note:'Physical count',confirmed:'on'});
+  h.run(`state.data={inventory:[{ingredient_id:'rice',quantity:'99'}]};`);
+  await h.run(`saveInventoryForm({preventDefault(){},target:testForm})`);
+  await h.run(`saveInventoryForm({preventDefault(){},target:testForm})`);
+  assert.equal(h.run('sent.length'),2);
+  assert.equal(h.run('sent[0].body.items[0].expected_quantity'),'10');
+  assert.equal(h.run('sent[0].body.items[0].quantity'),'0.5');
+  assert.equal(h.run('sent[0].body.items[0].pack_size'),'12');
+  assert.equal(h.run('sent[0].key'),h.run('sent[1].key'));
+});
+
+test('unmapped sales preserve portions and revenue without inventing ingredient deductions',async()=>{
+  const h=inventoryMutationHarness('sale',{recipe_id:'',portions:'12',revenue_idr:'150000',note:'Lunch service',confirmed:'on'});
+  await h.run(`saveInventoryForm({preventDefault(){},target:testForm})`);
+  const payload=JSON.parse(h.run('JSON.stringify(sent[0].body)'));
+  assert.equal(payload.portions,'12');
+  assert.equal(payload.revenue_idr,150000);
+  assert.deepEqual(payload.items,[]);
+  assert.equal(payload.recipe_id,undefined);
+});
+
+test('recipe sales submit the reviewed version even after a background refresh',async()=>{
+  const h=inventoryMutationHarness('sale',{recipe_id:'recipe1',portions:'2',revenue_idr:'',note:'Lunch',confirmed:'on'});
+  h.run(`inventoryState.recipesSnapshot=[{id:'recipe1',version:1,items:[]}];inventoryState.data={recipes:[{id:'recipe1',version:2,items:[]}]};`);
+  await h.run(`saveInventoryForm({preventDefault(){},target:testForm})`);
+  assert.equal(h.run('sent[0].body.expected_recipe_version'),1);
 });

@@ -2,6 +2,24 @@
 
 A local restaurant purchasing demo: Indonesian text or WhatsApp message → editable purchase draft → owner approval → persistent purchase, estimated stock, price evidence and activity.
 
+## Atoms dashboard
+
+The hosted dashboard is **https://restopilot-dashboard.pub.atoms.world/**.
+The [Atoms project](https://atoms.dev/chat/2cc522e0e3264f43a31c2e2a62d0ba27)
+contains the published app. Use the current [team deployment guide](docs/ATOMS_GITHUB_WORKFLOW.md)
+for releases. The older exported runtime is in [deploy/atoms/](deploy/atoms/README.md);
+preserve the native Atoms files called out in the current guide. The application sources remain in
+`service/` and `frontend/`; deployment builds copy the current service into the
+managed backend package. Existing Git branches keep their original history.
+
+## Team workflow
+
+Coding agents should read [AGENTS.md](AGENTS.md). **Implement** means code and
+test locally; **implement and deploy** also includes the release push, required
+additive migrations, Atoms sync, publication and public verification. Current
+deployment and feature guides take precedence over historical setup notes below.
+This convention is shared guidance, not an automatic GitHub deployment pipeline.
+
 ## Run locally
 
 Requires Python 3.11 or newer. From this directory:
@@ -41,12 +59,13 @@ The SQLite file is kept untouched. Without the password set, the app falls back 
 
 Every restaurant is a tenant with its own drafts, purchases, inventory, ingredient catalog, price baselines and activity. An owner only ever sees their own restaurant; the admin console can view any restaurant's dashboard but cannot log, edit, or approve purchases — those decisions stay with the owner.
 
-WhatsApp numbers are linked to exactly one restaurant (the `whatsapp_links.phone` column is unique). A message from an unregistered number is rejected with a polite Indonesian reply; nothing is processed, no draft or model call happens, and the attempt appears in the admin console. A registered number's conversation — drafts, `YA` approvals, summaries — is scoped to its linked restaurant only, so a number can never read or ask about another restaurant's data. When the optional StepFun models are invoked (text rescue, invoice vision), the prompts carry an explicit tenant rule naming the sender's restaurant as defense in depth; the actual isolation is the allowlist plus per-tenant storage, and the model never receives another restaurant's content.
+WhatsApp numbers are linked to exactly one restaurant (the `whatsapp_links.phone` column is unique). With the launchers’ default `WHATSAPP_OPEN_ONBOARDING=1`, a new number receives a restaurant menu and must select a restaurant by name before purchase text, photos, audio, or stock questions are processed. Selecting a restaurant links the number without creating a purchase; the sender then resends the purchase message. Existing linked numbers retain their restaurant. Set `WHATSAPP_OPEN_ONBOARDING=0` for administrator-only linking and the previous rejection response. A registered number's conversation — drafts, `YA` approvals, summaries — is scoped to its linked restaurant only, so a number can never read or ask about another restaurant's data. When the optional StepFun models are invoked (text rescue, invoice vision), the prompts carry an explicit tenant rule naming the sender's restaurant as defense in depth; the actual isolation is the allowlist plus per-tenant storage, and the model never receives another restaurant's content.
 
 Sessions are HttpOnly `SameSite=Lax` cookies (7-day expiry, stored server-side so restarts keep logins). Owner passwords can be reset by the admin, which signs out that owner's sessions.
 
 ## Current capabilities
 
+- Stock usage/waste, physical counts, recipe-based sales, optional revenue-only or quantity-only sales, and reorder estimates are available under **Inventory**. Package sizes are explicit; all stock writes are confirmed, audited, and retry-safe. Forecasts use an owner estimate or a confirmed complete consumption period. See [inventory and sales guide](docs/INVENTORY.md) for the workflow and required additive Supabase migration.
 - Indonesian purchase text parsing, editable drafts, owner approval/rejection and stock posting.
 - Flexible ingredient catalog: the review dialog's ingredient field is searchable and accepts any typed name; unknown ingredients are added to the catalog when the purchase is approved, on the dashboard and over WhatsApp. Spelling slips close to a catalog name ("bwang putih") are recovered automatically and confirmed back in the draft reply before approval; names with no similar entry become new ingredients.
 - Optional StepFun text rescue (`LLM_TEXT_EXTRACTION=1` with `STEPFUN_API_KEY`): free-form sentences, reordered clauses and voice-note transcripts that the rules parser cannot read get one model pass. Rules always run first; command words never reach the model, and any model error keeps the rules result.

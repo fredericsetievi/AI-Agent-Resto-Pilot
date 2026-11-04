@@ -31,6 +31,9 @@ from .data_qa import (
     is_compare_question, is_price_question, is_rank_question, is_spend_question,
     parse_window, find_windows, price_fact, rank_fact, spend_fact,
 )
+from .inventory import InventoryMixin
+from .operations import OperationsMixin
+from .purchase_sources import PurchaseSourcesMixin
 from .db import (
     APPROVE_COMMANDS, CATALOG, CATALOG_BY_ID, DEMO_NUMBERS, DEMO_USERS,
     DomainError, RESTAURANT, RESTAURANT_TIMEZONE, REJECT_COMMANDS,
@@ -43,26 +46,80 @@ from .db import (
 )
 from .extraction import catalog_aliases, extract_purchase
 from .pg import pg_connection, pg_transaction
+from .onboarding import restaurant_selection
 from .whatsapp import (
     FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR,
     UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply,
-    parse_payment_followup, parse_remove_item, stock_reply,
+    parse_payment_followup, parse_remove_request, stock_reply,
     weekly_summary_reply,
 )
 
 
-class PostgresStore:
+class PostgresStore(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
     """The RestoPilot authority in Supabase Postgres. Same contract as Store."""
 
-    def __init__(self, path=None, seed=True):
+    inventory_postgres = True
+
+    # Tables/columns the application reads and writes (supabase/migrations/0003).
+    REQUIRED_SCHEMA = {
+        "restaurants": {"id", "name", "slug", "address"},
+        "tenants": {"slug", "restaurant_id", "created_at"},
+        "app_users": {"id", "username", "password_hash", "display_name", "role", "slug", "created_at"},
+        "app_sessions": {"token", "user_id", "created_at", "expires_at"},
+        "whatsapp_links": {"id", "slug", "phone", "label", "created_at"},
+        "custom_ingredients": {"id", "slug", "name", "unit", "reorder_threshold", "created_at"},
+        "drafts": {"id", "slug", "version", "status", "body", "created_at"},
+        "purchases": {"id", "slug", "draft_id", "supplier", "created_at", "body"},
+        "stock": {"slug", "ingredient_id", "quantity"},
+        "movements": {"id", "slug", "purchase_id", "ingredient_id", "quantity", "created_at"},
+        "activity": {"id", "slug", "event", "message", "created_at"},
+        "idempotency": {"key", "slug", "fingerprint", "response", "created_at"},
+        "whatsapp_threads": {"id", "slug", "channel", "sender", "transport", "active_draft_id",
+                             "active_version", "pending_followup"},
+        "whatsapp_messages": {"id", "thread_id", "direction", "body", "created_at", "transport",
+                              "status", "draft_id"},
+        "whatsapp_events": {"channel", "event_id", "thread_id", "fingerprint", "response"},
+        "app_metadata": {"key", "value"},
+    }
+
+    def __init__(self, path=None, seed=True, read_only_startup=False):
         # `path` is accepted and ignored so call sites stay identical.
         self._catalogs = {}
         # Short-TTL overview cache: each Supabase round trip costs 0.1-0.9s,
         # and the dashboard polls every 5s — serve repeats from memory.
         self._overview_cache = {}
         self._overview_cache_ttl = 3.0
-        self.initialize(seed)
+        if read_only_startup:
+            # Hosted deployments attach to an existing ledger: validate only,
+            # never insert demo users, allowlist rows, metadata or stock.
+            self.validate_schema()
+        else:
+            self.initialize(seed)
         self._load_custom_ingredients()
+
+    def validate_schema(self):
+        """SELECT-only check that every required table and column exists."""
+        with pg_connection() as conn:
+            self._execute(conn, "SET TRANSACTION READ ONLY")
+            cur = self._execute(
+                conn,
+                "SELECT table_name, column_name FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name = ANY(%s)",
+                (list(self.REQUIRED_SCHEMA),),
+            )
+            found = {}
+            for table, column in cur.fetchall():
+                found.setdefault(table, set()).add(column)
+        problems = []
+        for table, columns in self.REQUIRED_SCHEMA.items():
+            if table not in found:
+                problems.append(f"missing table {table}")
+                continue
+            missing = sorted(columns - found[table])
+            if missing:
+                problems.append(f"{table} missing columns {', '.join(missing)}")
+        if problems:
+            raise RuntimeError("Supabase schema does not match RestoPilot: " + "; ".join(problems))
 
     # ---- connection helpers -------------------------------------------------
 
@@ -317,6 +374,8 @@ class PostgresStore:
     def _idempotent(self, key, operation, payload, action):
         fingerprint = hashlib.sha256(encode({"operation": operation, "payload": payload}).encode()).hexdigest()
         with pg_transaction() as conn:
+            # Serialize the same request key before its first mutation.
+            self._execute(conn, "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
             cur = self._execute(conn, "SELECT fingerprint, response FROM idempotency WHERE key=%s", (key,))
             existing = cur.fetchone()
             if existing:
@@ -336,7 +395,7 @@ class PostgresStore:
         if extracted is None or not isinstance(extracted.get("items"), list):
             extracted = extract_purchase(payload["text"])
         def action(conn):
-            return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=restaurant_id), restaurant_id)
+            return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier") or extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=restaurant_id), restaurant_id)
         return self._idempotent(key, "intake", payload, action)
 
     def intake_image(self, key, image_sha256, source_label, supplier, items, warnings, restaurant_id=None):
@@ -383,8 +442,9 @@ class PostgresStore:
         for item in draft["items"]:
             ingredient = item["ingredient_id"]
             deltas[ingredient] = deltas.get(ingredient, Decimal(0)) + Decimal(item["canonical_quantity"])
-        for ingredient, quantity in deltas.items():
-            cur = self._execute(conn, "SELECT quantity FROM stock WHERE slug=%s AND ingredient_id=%s", (restaurant_id, ingredient))
+        for ingredient, quantity in sorted(deltas.items()):
+            self._execute(conn, "INSERT INTO stock (slug,ingredient_id,quantity) VALUES (%s,%s,'0') ON CONFLICT DO NOTHING", (restaurant_id, ingredient))
+            cur = self._execute(conn, "SELECT quantity FROM stock WHERE slug=%s AND ingredient_id=%s FOR UPDATE", (restaurant_id, ingredient))
             row = cur.fetchone()
             stock = Decimal(row[0]) if row else Decimal(0)
             if row:
@@ -473,7 +533,20 @@ class PostgresStore:
     # ---- WhatsApp -----------------------------------------------------------
 
     def _whatsapp_thread(self, conn, sender, channel, transport, restaurant_id=None, create=False):
-        cur = self._execute(conn, "SELECT * FROM whatsapp_threads WHERE channel=%s AND sender=%s", (channel, sender))
+        # A whole conversation is serialized, including distinct Meta event IDs.
+        # Creating the deterministic row first also covers simultaneous first
+        # messages without relying on a request-key lock shared by those IDs.
+        if create:
+            self._execute(
+                conn,
+                "INSERT INTO whatsapp_threads (id, slug, channel, sender, transport) VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT (channel, sender) DO NOTHING",
+                (hashlib.sha256((channel + "\0" + sender).encode()).hexdigest()[:32], restaurant_id, channel, sender, transport),
+            )
+        cur = self._execute(
+            conn, "SELECT * FROM whatsapp_threads WHERE channel=%s AND sender=%s" + (" FOR UPDATE" if create else ""),
+            (channel, sender),
+        )
         columns = [desc[0] for desc in cur.description]
         row = cur.fetchone()
         if row:
@@ -482,16 +555,9 @@ class PostgresStore:
                 thread["slug"] = restaurant_id
                 self._execute(conn, "UPDATE whatsapp_threads SET slug=%s WHERE id=%s", (restaurant_id, thread["id"]))
             return thread
-        thread = {"id": hashlib.sha256((channel + "\0" + sender).encode()).hexdigest()[:32], "channel": channel,
-                  "sender": sender, "transport": transport, "active_draft_id": None, "active_version": None,
-                  "pending_followup": None, "slug": restaurant_id}
-        if create:
-            self._execute(
-                conn,
-                "INSERT INTO whatsapp_threads (id, slug, channel, sender, transport) VALUES (%s, %s, %s, %s, %s)",
-                (thread["id"], restaurant_id, channel, sender, transport),
-            )
-        return thread
+        return {"id": hashlib.sha256((channel + "\0" + sender).encode()).hexdigest()[:32], "channel": channel,
+                "sender": sender, "transport": transport, "active_draft_id": None, "active_version": None,
+                "pending_followup": None, "slug": restaurant_id}
 
     def _whatsapp_snapshot(self, conn, thread, draft=None, result=None):
         tenant = thread.get("slug")
@@ -949,8 +1015,10 @@ class PostgresStore:
             row = cur.fetchone()
         return row[0] if row else None
 
-    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, platform="whatsapp"):
+    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, platform="whatsapp", open_onboarding=False):
         channel = channel or transport
+        operation_candidate = payload.get("operation_candidate")
+        operation_source = payload.get("operation_source")
         extracted_photo = payload.get("extracted")
         source_label = payload.get("source_label") or "Foto nota WhatsApp"
         transcript = payload.get("transcript")
@@ -976,41 +1044,102 @@ class PostgresStore:
         if intent_hint not in ("approve", "reject", "summary"):
             intent_hint = None
         payload = {"sender": payload["sender"], "text": payload["text"], "event_id": payload.get("event_id"), "num_media": payload.get("num_media", 0)}
+        # Provenance bytes/media identity are stable across provider retries;
+        # model-derived candidates and transcripts deliberately are not.
+        fingerprint_source = {}
+        if isinstance(operation_source, dict):
+            identity_fields = ("media_id", "media_kind", "caption") if operation_source.get("media_id") else ("digest", "media_kind", "caption")
+            identity = {name: operation_source[name] for name in identity_fields if operation_source.get(name) is not None}
+            if identity:
+                fingerprint_source = identity
         event_id = payload["event_id"] or "sim:" + key
-        fingerprint = hashlib.sha256(encode({"sender": payload["sender"], "text": payload["text"], "num_media": payload["num_media"]}).encode()).hexdigest()
+        request_identity = dict(payload)
+        if fingerprint_source.get("media_kind") == "image" and fingerprint_source.get("media_id"):
+            # Older normalizers omitted image captions. Keep their request-key
+            # identity while retaining the caption in the stronger event hash.
+            request_identity["text"] = ""
+            fingerprint_source.setdefault("caption", payload["text"])
+        fingerprint_body = {"sender": request_identity["sender"], "text": request_identity["text"], "num_media": request_identity["num_media"]}
+        # Preserve request-key compatibility with already stored WhatsApp
+        # callbacks; media identity tightens the provider-event comparison.
+        legacy_fingerprint = hashlib.sha256(encode(fingerprint_body).encode()).hexdigest()
+        if fingerprint_source:
+            fingerprint_body["operation_source"] = fingerprint_source
+        fingerprint = hashlib.sha256(encode(fingerprint_body).encode()).hexdigest()
 
         def action(conn):
             cur = self._execute(conn, "SELECT fingerprint, response FROM whatsapp_events WHERE channel=%s AND event_id=%s", (channel, event_id))
             prior = cur.fetchone()
             if prior:
-                if prior[0] != fingerprint:
+                if prior[0] not in (fingerprint, legacy_fingerprint):
                     raise DomainError("event_conflict", "This message event was already used for different content or sender.")
                 return prior[1]
             cur = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s AND platform=%s", (payload["sender"], platform))
             link = cur.fetchone()
             linked = link[0] if link else None
-            if restaurant_id is not None and linked != restaurant_id:
+            onboarding_reply = None
+            if linked is None and open_onboarding:
+                rows = self._rows(self._execute(conn,
+                    "SELECT t.slug AS id, r.name FROM tenants t JOIN restaurants r ON r.id=t.restaurant_id ORDER BY r.name, t.slug"))
+                choices = [row for row in rows if restaurant_id is None or row["id"] == restaurant_id]
+                selected, onboarding_reply = restaurant_selection(choices, payload["text"])
+                if selected:
+                    phone = validate_phone_number(payload["sender"])
+                    self._execute(conn,
+                        "INSERT INTO whatsapp_links (id, slug, phone, label) VALUES (%s, %s, %s, %s) ON CONFLICT (phone) DO NOTHING",
+                        (uuid.uuid4().hex, selected["id"], phone, "WhatsApp self-registration"))
+                    linked = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s", (phone,)).fetchone()[0]
+                    if linked != selected["id"]:
+                        raise DomainError("sender_link_changed", "This number was linked elsewhere. Please send your message again.", 409)
+            if restaurant_id is not None and linked != restaurant_id and not (linked is None and open_onboarding):
                 raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
             tenant = linked
             thread = self._whatsapp_thread(conn, payload["sender"], channel, transport, restaurant_id=tenant, create=True)
+            # Another key may have replayed this same provider event while we
+            # waited on the thread lock. Re-read before touching any draft.
+            prior = self._execute(conn, "SELECT fingerprint, response FROM whatsapp_events WHERE channel=%s AND event_id=%s", (channel, event_id)).fetchone()
+            if prior:
+                if prior[0] not in (fingerprint, legacy_fingerprint):
+                    raise DomainError("event_conflict", "This message event was already used for different content or sender.")
+                return prior[1]
             names = self.catalog_names(tenant) if tenant else None
             draft = self._load_draft(conn, thread["active_draft_id"], tenant) if thread["active_draft_id"] and tenant else None
             if draft and draft["status"] not in ("pending_approval", "needs_clarification"):
                 draft = None
                 thread.update(active_draft_id=None, active_version=None)
             pending_purchase = thread.get("pending_followup")
-            thread["pending_followup"] = None
+            operation_result = None
+            if tenant and onboarding_reply is None:
+                operation_result = self._operation_handle(
+                    conn, thread, tenant, transcript or payload["text"],
+                    candidate=operation_candidate, source=operation_source,
+                    purchase_draft=draft,
+                )
+            # Inventory conversations must not consume purchase payment state.
+            if operation_result is None:
+                thread["pending_followup"] = None
             command = payload["text"].strip().casefold()
             result = {}
-            if tenant is None:
+            if onboarding_reply is not None:
+                reply = onboarding_reply
+                result["action"] = "restaurant_selected" if tenant else "restaurant_selection_required"
+            elif tenant is None:
                 reply = UNREGISTERED_REPLY
                 result["action"] = "unregistered_sender"
+            elif operation_result is not None:
+                reply = operation_result["reply"]
+                result = operation_result["result"]
             elif extracted_photo:
-                if draft:
+                source_digest, source_result = self._purchase_source_guard(conn, tenant, operation_source)
+                if source_result is not None:
+                    reply, result = source_result["reply"], source_result["result"]
+                    thread["pending_followup"] = pending_purchase
+                elif draft:
                     reply = "Foto diterima. Masih ada draf yang menunggu konfirmasimu dulu, jadi foto ini belum dicatat:\n" + draft_reply(draft, names)
                     result["action"] = "active_draft_exists"
                 else:
                     draft = self._new_draft(conn, source_label, extracted_photo.get("supplier"), extracted_photo.get("items") or [], extracted_photo.get("warnings") or [], restaurant_id=tenant)
+                    self._purchase_source_register(conn, tenant, source_digest, draft["id"])
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = "Nota diterima. Cek draf pembelian ini:\n" + draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
@@ -1020,7 +1149,7 @@ class PostgresStore:
                     result["action"] = "active_draft_exists"
                 else:
                     extracted = extracted_text if extracted_text is not None else extract_purchase(transcript)
-                    draft = self._new_draft(conn, transcript, None, extracted["items"], extracted["warnings"], restaurant_id=tenant)
+                    draft = self._new_draft(conn, transcript, extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=tenant)
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
@@ -1105,25 +1234,43 @@ class PostgresStore:
                 reply = weekly_summary_reply(summary, SUMMARY_WINDOW_DAYS)
                 result["action"] = "weekly_summary"
                 result["summary"] = summary
-            elif draft and (remove_index := parse_remove_item(payload["text"])):
-                # 'hapus 2' drops the 1-based flagged item from the active
-                # draft - the owner's confirmation for the kitchen filter.
-                flagged = [position for position, item in enumerate(draft["items"]) if item.get("non_kitchen")]
-                if remove_index - 1 not in flagged:
-                    hint = ", ".join(str(position + 1) for position in flagged) or "tidak ada"
-                    reply = f"Item {remove_index} tidak bertanda bukan bahan masak. Hapus hanya baris bertanda: " + hint + "."
+            elif draft and (request := parse_remove_request(payload["text"])):
+                # 'hapus 4', 'hapus 4, 5' and 'hapus semua' drop flagged
+                # (non-kitchen) lines from the active draft - the owner's
+                # confirmation for the kitchen filter.
+                items = draft["items"]
+                flagged = [position for position, item in enumerate(items) if item.get("non_kitchen")]
+                hint = ", ".join(str(position + 1) for position in flagged) or "tidak ada"
+                if request["mode"] == "all":
+                    targets = flagged
+                else:
+                    targets = [index - 1 for index in dict.fromkeys(request["indices"])]
+                unknown = [position for position in targets if not 0 <= position < len(items)]
+                unflagged = [position for position in targets if position not in flagged]
+                if unknown:
+                    reply = (f"Item {', '.join(str(position + 1) for position in unknown)} tidak ada di draf "
+                             f"({len(items)} baris). Hapus hanya baris bertanda: {hint}.")
                     result["action"] = "remove_rejected"
-                elif len(draft["items"]) <= 1:
-                    reply = "Draf tinggal satu baris. Balas BATAL untuk membatalkan seluruh draf."
+                elif unflagged:
+                    reply = (f"Item {', '.join(str(position + 1) for position in unflagged)} tidak bertanda "
+                             f"bukan bahan masak. Hapus hanya baris bertanda: {hint}.")
+                    result["action"] = "remove_rejected"
+                elif not targets:
+                    reply = "Tidak ada baris yang bertanda bukan bahan masak."
+                    result["action"] = "remove_rejected"
+                elif len(targets) >= len(items):
+                    reply = "Kalau semua baris dibuang, draf jadi kosong. Balas BATAL untuk membatalkan seluruh draf."
                     result["action"] = "remove_rejected"
                 else:
-                    removed = draft["items"].pop(remove_index - 1)
+                    removed_names = [str(items[position].get("raw_name")) for position in targets]
+                    for position in sorted(targets, reverse=True):
+                        items.pop(position)
                     # Re-derive warnings for the remaining items: numbered
-                    # warnings ('Item 2: ...') shift when a line disappears.
-                    remaining, field_warnings = self._normalize(draft["items"], self._catalog_for(tenant))
-                    flags = [item.get("non_kitchen") for item in draft["items"]]
-                    for item, flagged in zip(remaining, flags):
-                        if flagged:
+                    # warnings ('Item 2: ...') shift when lines disappear.
+                    remaining, field_warnings = self._normalize(items, self._catalog_for(tenant))
+                    flags = [item.get("non_kitchen") for item in items]
+                    for item, still_flagged in zip(remaining, flags):
+                        if still_flagged:
                             item["non_kitchen"] = True
                     kept_warnings = [warning for warning in draft.get("warnings") or []
                                      if "bukan bahan masak" in warning
@@ -1135,8 +1282,10 @@ class PostgresStore:
                                   "version": draft["version"] + 1})
                     self._save_draft(conn, draft)
                     thread["active_version"] = draft["version"]
-                    self._audit(conn, "draft_item_removed", f"Non-kitchen item '{removed.get('raw_name')}' removed from draft {draft['id'][:8]}.", tenant)
-                    reply = f"Item '{removed.get('raw_name')}' dihapus dari draf.\n" + draft_reply(draft, names)
+                    quoted = [f"'{name}'" for name in removed_names]
+                    names_text = " dan ".join([", ".join(quoted[:-1]), quoted[-1]]) if len(quoted) > 1 else quoted[0]
+                    self._audit(conn, "draft_item_removed", f"Non-kitchen item(s) {names_text} removed from draft {draft['id'][:8]}.", tenant)
+                    reply = f"Item {names_text} dihapus dari draf.\n\n" + draft_reply(draft, names)
                     result["action"] = "item_removed"
             elif stock_answer:
                 # A stock question answered from inventory facts before the
@@ -1176,7 +1325,7 @@ class PostgresStore:
                     reply = HELP_REPLY
                     result["action"] = "help_reply"
                 else:
-                    draft = self._new_draft(conn, payload["text"], None, extracted["items"], extracted["warnings"], restaurant_id=tenant)
+                    draft = self._new_draft(conn, payload["text"], extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=tenant)
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
@@ -1213,7 +1362,7 @@ class PostgresStore:
             )
             return response
 
-        return self._idempotent(key, "whatsapp:" + channel, payload, action)
+        return self._idempotent(key, "whatsapp:" + channel, request_identity, action)
 
     # ---- reports and exports ------------------------------------------------
 

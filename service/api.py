@@ -16,10 +16,13 @@ import csv
 import hashlib
 import io
 import logging
+from contextlib import AsyncExitStack
+from time import perf_counter
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
+import httpx
 from fastapi import Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -38,12 +41,13 @@ from .audio import (
     validate_asr_model,
     validate_tts_model,
 )
-from .db import APPROVE_COMMANDS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
+from .db import APPROVE_COMMANDS, DEMO_USERS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
 from .pg_store import PostgresStore
 from .data_qa import build_answer as build_data_answer
 from .data_qa import phrase_data_answer, phrase_opname_answer
 from .extraction import extract_purchase
 from .intent_llm import classify_intent
+from .operation_extraction import caption_requests_purchase, extract_operations_document, parse_operations_text
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .notifications import build_alert_text, phrase_alert
 from .pdfpages import PdfRenderError, render_pdf_pages
@@ -78,6 +82,7 @@ from .vision import (
 )
 from .whatsapp import (
     LIVE,
+    SIMULATOR,
     OUTBOUND_PENDING,
     OUTBOUND_SENDING,
     OUTBOUND_SENT,
@@ -105,6 +110,29 @@ from .whatsapp import (
 
 
 logger = logging.getLogger("restopilot.api")
+
+
+class _MetaWebhookClient:
+    """One request-scoped pool with the transport's existing time limits."""
+
+    def __init__(self, client):
+        self.client = client
+
+    async def get(self, url, **kwargs):
+        return await self.client.get(url, timeout=30.0, **kwargs)
+
+    async def post(self, url, **kwargs):
+        timeout = 30.0 if kwargs.get("files") is not None else 5.0
+        return await self.client.post(url, timeout=timeout, **kwargs)
+
+
+async def _timed_whatsapp(stage, kind, awaitable):
+    """Log timing labels only; never include messages, identities or credentials."""
+    started = perf_counter()
+    try:
+        return await awaitable
+    finally:
+        logger.info("WhatsApp stage=%s kind=%s duration_ms=%.1f", stage, kind, (perf_counter() - started) * 1000)
 
 SESSION_COOKIE = "restopilot_session"
 
@@ -193,6 +221,44 @@ class Decision(Model):
     received: StrictBool
 
 
+class InventoryLine(Model):
+    ingredient_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    quantity: Quantity
+    pack_size: Quantity = "1"
+    expected_quantity: Quantity | None = None
+
+
+class InventoryEvent(Model):
+    kind: Literal["usage", "waste", "count", "sale"]
+    note: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+    items: Annotated[list[InventoryLine], Field(max_length=50)] = Field(default_factory=list)
+    recipe_id: ShortText | None = None
+    expected_recipe_version: Annotated[StrictInt, Field(gt=0)] | None = None
+    portions: Quantity | None = None
+    revenue_idr: Annotated[StrictInt, Field(ge=0, le=1_000_000_000_000)] | None = None
+    confirmed: StrictBool
+
+
+class RecipeLine(Model):
+    ingredient_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    quantity: Quantity
+
+
+class InventoryRecipe(Model):
+    id: ShortText | None = None
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+    items: Annotated[list[RecipeLine], Field(min_length=1, max_length=50)]
+
+
+class InventorySettings(Model):
+    lead_days: Annotated[StrictInt, Field(ge=0, le=365)] = 2
+    safety_days: Annotated[StrictInt, Field(ge=0, le=365)] = 1
+    daily_usage: dict[ShortText, Quantity] = Field(default_factory=dict)
+    history_start: Annotated[str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}$")] | None = None
+    history_end: Annotated[str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}$")] | None = None
+    history_complete: StrictBool = False
+
+
 class SimulatedMessage(Model):
     text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10000)]
     sender: Sender = "demo"
@@ -266,6 +332,8 @@ def create_app(
     asr_model=None,
     asr_api_key=None,
     asr_base_url=None,
+    asr_language=None,
+    asr_prompt=None,
     tts_model=None,
     tts_voice=None,
     text_llm_enabled=False,
@@ -282,7 +350,20 @@ def create_app(
     telegram_http_client=None,
     telegram_group_seconds=4.0,
     proactive_check_interval_seconds=None,
+    hosted=False,
+    secure_cookies=None,
+    store_factory=None,
+    whatsapp_open_onboarding=False,
 ):
+    """Build the app.
+
+    ``hosted=True`` is the deployment mode for an existing Supabase ledger:
+    startup only validates the schema (no demo users, allowlist, metadata or
+    stock writes), a missing or unreachable database fails closed with a JSON
+    error on every route except ``/health/live`` (never a SQLite fallback),
+    session cookies are Secure, and the well-known demo credentials are
+    rejected at login. ``store_factory`` lets offline tests inject a store.
+    """
     # The proactive loop closes over store/run_proactive_check by name; both
     # are bound below before any request (or lifespan call) can run.
     @contextlib.asynccontextmanager
@@ -308,18 +389,43 @@ def create_app(
                     await task
 
     app = FastAPI(title="RestoPilot local demo", version="0.2.0", description="Session login with resto owner and platform admin roles, per-restaurant tenant isolation, WhatsApp allowlist, rules extraction and SQLite.", lifespan=_lifespan)
-    # The authority is Supabase Postgres when configured; the local SQLite
-    # file stays as an offline/demo fallback so the app still boots without it.
+    secure_cookies = hosted if secure_cookies is None else secure_cookies
     store = None
-    if not _test_sqlite_fallback():
+    storage_error = None
+    if hosted:
         try:
-            store = PostgresStore(seed=seed)
+            if store_factory is not None:
+                store = store_factory()
+            else:
+                store = PostgresStore(seed=False, read_only_startup=True)
             storage = "supabase"
-        except RuntimeError:
+        except Exception as exc:  # noqa: BLE001 - any config/connect/schema failure fails closed
+            logger.error("Hosted storage unavailable; failing closed: %s", type(exc).__name__)
             store = None
-    if store is None:
-        store = Store(db_path, seed=seed)
-        storage = "sqlite"
+            storage = "unavailable"
+            storage_error = str(exc) if isinstance(exc, RuntimeError) else "The database could not be reached."
+    else:
+        # The authority is Supabase Postgres when configured; the local SQLite
+        # file stays as an offline/demo fallback so the app still boots without it.
+        if not _test_sqlite_fallback():
+            try:
+                store = PostgresStore(seed=seed)
+                storage = "supabase"
+            except RuntimeError:
+                store = None
+        if store is None:
+            store = Store(db_path, seed=seed)
+            storage = "sqlite"
+    app.state.storage = storage
+    default_credentials = {(user["username"].casefold(), user["password"]) for user in DEMO_USERS}
+    # Server-only, default-off escape hatch: ALLOW_DEMO_OWNER_LOGIN=1 (exactly)
+    # lets the existing "owner" account authenticate through the normal
+    # store.verify_login against its stored hash. Every other default
+    # credential (including admin's) stays blocked.
+    import os
+    allow_demo_owner_login = hosted and os.environ.get("ALLOW_DEMO_OWNER_LOGIN", "") == "1"
+    if allow_demo_owner_login:
+        logger.warning("ALLOW_DEMO_OWNER_LOGIN is enabled: the 'owner' account may log in with its existing password.")
 
     # Text words that mean "operate on the previous draft" never reach the
     # model: a bare "ya" must stay a zero-cost command.
@@ -351,7 +457,11 @@ def create_app(
         except (StepFunTextError, ValueError) as exc:
             logger.warning("StepFun text rescue failed; keeping the rules result: %s", exc)
             return extracted
-        return rescued if rescued["items"] else extracted
+        if rescued["items"]:
+            if extracted.get("supplier") and not rescued.get("supplier"):
+                rescued["supplier"] = extracted["supplier"]
+            return rescued
+        return extracted
 
     def _no_purchase_signal(extracted):
         """True when extraction read no usable purchase line from the message."""
@@ -581,6 +691,15 @@ def create_app(
     tts_model = validate_tts_model(tts_model) if tts_model else DEFAULT_TTS_MODEL
     tts_voice = (tts_voice or DEFAULT_TTS_VOICE).strip() or DEFAULT_TTS_VOICE
 
+    if storage == "unavailable":
+        @app.middleware("http")
+        async def fail_closed(request: Request, call_next):
+            if request.url.path == "/health/live":
+                return await call_next(request)
+            response = error("storage_unavailable", f"RestoPilot storage is unavailable: {storage_error}", 500)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
     @app.middleware("http")
     async def loopback_boundary(request: Request, call_next):
         # Both provider webhooks are exempt from the loopback boundary when
@@ -638,7 +757,7 @@ def create_app(
 
     def owner_actor(actor=Depends(current_user)):
         if actor["role"] != "owner":
-            raise DomainError("owner_required", "Only a restaurant owner may edit or decide purchase drafts.", 403)
+            raise DomainError("owner_required", "Only a restaurant owner may change operational records.", 403)
         return actor
 
     def admin_actor(actor=Depends(current_user)):
@@ -653,12 +772,16 @@ def create_app(
 
     @app.post("/v1/auth/login")
     def login(body: Login, response: Response):
+        demo_owner_exempt = allow_demo_owner_login and body.username == "owner"
+        if hosted and not demo_owner_exempt and (body.username.casefold(), body.password) in default_credentials:
+            # Checked before any database lookup; stored hashes are untouched.
+            raise DomainError("default_credentials_rejected", "Default demo credentials are disabled on this deployment.", 401)
         user = store.verify_login(body.username, body.password)
         token = store.create_session(user["id"])
         response.set_cookie(
             SESSION_COOKIE, token,
             max_age=int(SESSION_TTL.total_seconds()),
-            httponly=True, samesite="lax", path="/",
+            httponly=True, samesite="lax", path="/", secure=secure_cookies,
         )
         return {"data": user}
 
@@ -667,7 +790,7 @@ def create_app(
         token = request.cookies.get(SESSION_COOKIE)
         if token:
             store.delete_session(token)
-        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(SESSION_COOKIE, path="/", secure=secure_cookies, httponly=True, samesite="lax")
         return {"data": {"ok": True}}
 
     @app.get("/v1/auth/me")
@@ -676,7 +799,7 @@ def create_app(
 
     @app.get("/health/live")
     def live():
-        return {"data": {"status": "ok", "mode": "local_demo"}}
+        return {"data": {"status": "ok", "mode": "hosted" if hosted else "local_demo", "storage": storage}}
 
     @app.get("/health/ready")
     def ready():
@@ -692,6 +815,22 @@ def create_app(
     @app.get("/v1/overview")
     def overview(actor=Depends(current_user)):
         return {"data": store.overview(actor["restaurant_id"])}
+
+    @app.get("/v1/inventory/workspace")
+    def inventory_workspace(actor=Depends(owner_actor)):
+        return {"data": store.inventory_workspace(actor["restaurant_id"])}
+
+    @app.post("/v1/inventory/events", status_code=201)
+    def inventory_event(body: InventoryEvent, idempotency_key=Depends(key), actor=Depends(owner_actor)):
+        return {"data": store.record_inventory_event(idempotency_key, body.model_dump(exclude_none=True), actor["restaurant_id"])}
+
+    @app.post("/v1/inventory/recipes")
+    def inventory_recipe(body: InventoryRecipe, idempotency_key=Depends(key), actor=Depends(owner_actor)):
+        return {"data": store.save_inventory_recipe(idempotency_key, body.model_dump(exclude_none=True), actor["restaurant_id"])}
+
+    @app.post("/v1/inventory/settings")
+    def inventory_settings(body: InventorySettings, idempotency_key=Depends(key), actor=Depends(owner_actor)):
+        return {"data": store.save_inventory_settings(idempotency_key, body.model_dump(exclude_none=True), actor["restaurant_id"])}
 
     @app.get("/v1/drafts/{draft_id}")
     def draft(draft_id: str, actor=Depends(current_user)):
@@ -815,23 +954,37 @@ def create_app(
     async def simulate_whatsapp(body: SimulatedMessage, actor=Depends(owner_actor), idempotency_key=Depends(key)):
         # The simulator may only speak as one of this restaurant's linked numbers.
         sender_restaurant = store.restaurant_for_sender(body.sender)
-        if not sender_restaurant or sender_restaurant["id"] != actor["restaurant_id"]:
+        if (sender_restaurant and sender_restaurant["id"] != actor["restaurant_id"]) or (not sender_restaurant and not whatsapp_open_onboarding):
             raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
         payload = body.model_dump()
-        if payload["text"].strip():
-            # A physical stock count takes priority over stock/data questions;
-            # both are read-only pre-ingest lookups with the ledger as source.
-            payload["opname_answer"] = await build_opname_answer(payload["text"], actor["restaurant_id"])
-            if payload["opname_answer"] is None:
-                payload["stock_answer"] = await build_stock_answer(payload["text"], actor["restaurant_id"])
-            if payload["opname_answer"] is None and payload["stock_answer"] is None:
-                extracted = await filter_kitchen_items(
-                    await extract_text(payload["text"], actor["restaurant_name"]), actor["restaurant_id"])
-                hint = await maybe_intent_hint(payload["text"], extracted)
-                if hint:
-                    payload["intent_hint"] = hint
-                payload["extracted_text"] = extracted
-        return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"])}
+        if sender_restaurant and payload["text"].strip():
+            await enrich_whatsapp_text(payload, sender_restaurant, channel=SIMULATOR)
+        return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"], open_onboarding=whatsapp_open_onboarding)}
+
+    async def enrich_whatsapp_text(payload, restaurant, *, channel):
+        """Operations and active clarification take priority over purchase AI."""
+        text = payload.get("transcript") or payload.get("text") or ""
+        candidate = parse_operations_text(text)
+        if candidate is not None:
+            payload["operation_candidate"] = candidate
+            return
+        if await run_in_threadpool(store.has_active_operation, payload["sender"], channel):
+            return
+        # A physical stock count takes priority over stock/data questions;
+        # both are read-only pre-ingest lookups with the ledger as source.
+        payload["opname_answer"] = await build_opname_answer(text, restaurant["id"])
+        if payload["opname_answer"] is None:
+            payload["stock_answer"] = await build_stock_answer(text, restaurant["id"])
+        if payload["opname_answer"] is None and payload["stock_answer"] is None:
+            extracted = await filter_kitchen_items(
+                await extract_text(text, restaurant["name"]), restaurant["id"])
+            hint = await maybe_intent_hint(text, extracted)
+            if hint:
+                payload["intent_hint"] = hint
+            payload["extracted_text"] = extracted
+
+    def uncertain_document(message):
+        return {"document_type": "ambiguous", "lines": [], "unresolved": [message]}
 
     # ---- Per-restaurant agent rules and proactive checks -------------------
 
@@ -982,6 +1135,28 @@ def create_app(
             logger.warning("Rejected Meta WhatsApp webhook: %s", exc)
             raise DomainError("invalid_meta_webhook", str(exc), exc.status)
 
+        # The Atoms forwarding adapter does not run this inner app's lifespan.
+        # Request-scoped pools therefore close reliably on success and failure.
+        async with AsyncExitStack() as stack:
+            scoped_meta = meta_http_client
+            scoped_vision = vision_http_client
+
+            async def get_meta_client():
+                nonlocal scoped_meta
+                if scoped_meta is None:
+                    owned = await stack.enter_async_context(httpx.AsyncClient(timeout=30.0, follow_redirects=False))
+                    scoped_meta = _MetaWebhookClient(owned)
+                return scoped_meta
+
+            async def get_vision_client():
+                nonlocal scoped_vision
+                if scoped_vision is None:
+                    scoped_vision = await stack.enter_async_context(httpx.AsyncClient(timeout=60.0, follow_redirects=False))
+                return scoped_vision
+
+            return await _timed_whatsapp("total", "batch", handle_meta_messages(messages, get_meta_client, get_vision_client))
+
+    async def handle_meta_messages(messages, get_meta_client, get_vision_client):
         async def summary_voice(text):
             """Speak the summary and upload it; returns a Meta media ID or None.
 
@@ -996,14 +1171,14 @@ def create_app(
                     model=tts_model,
                     voice=tts_voice,
                     base_url=vision_base_url,
-                    client=vision_http_client,
+                    client=await get_vision_client(),
                 )
                 return await upload_audio(
                     meta_access_token,
                     meta_phone_number_id,
                     meta_graph_api_version,
                     speech,
-                    client=meta_http_client,
+                    client=await get_meta_client(),
                 )
             except (MetaWhatsAppError, StepFunAudioError, ValueError) as exc:
                 logger.warning("WhatsApp summary voice reply unavailable: %s", exc)
@@ -1014,112 +1189,81 @@ def create_app(
             payload = {key: message[key] for key in ("sender", "text", "event_id", "num_media")}
             # The allowlist is checked before any media download or model call:
             # unregistered numbers cost nothing to process and learn nothing.
-            sender_restaurant = await run_in_threadpool(store.restaurant_for_sender, message["sender"])
+            media_kind = message.get("media_kind")
+            timing_kind = media_kind or ("unsupported" if payload["num_media"] else "text")
+            sender_restaurant = await _timed_whatsapp("sender_lookup", timing_kind, run_in_threadpool(store.restaurant_for_sender, message["sender"]))
             restaurant_id = sender_restaurant["id"] if sender_restaurant else None
-            if message.get("media_kind") == "image" and vision_api_key and sender_restaurant:
-                # A photo is read before the draft is created so the owner gets
-                # the same review-and-confirm flow as typed text.
-                try:
-                    photo, media_type = await download_image(
-                        message["media_id"],
-                        meta_access_token,
-                        meta_graph_api_version,
-                        client=meta_http_client,
-                    )
-                    payload["extracted"] = await filter_kitchen_items(
-                        await extract_invoice(
-                            photo,
-                            media_type=media_type,
-                            restaurant=sender_restaurant["name"],
-                            api_key=vision_api_key,
-                            model=vision_model,
-                            base_url=vision_base_url,
-                            client=vision_http_client,
-                        ),
-                        restaurant_id,
-                    )
-                    payload["source_label"] = "Foto nota WhatsApp"
-                except (MetaWhatsAppError, StepFunVisionError) as exc:
-                    # A failed read falls back to the safe media reply; no draft.
-                    logger.warning("WhatsApp photo intake failed: %s", exc)
-            elif message.get("media_kind") == "pdf" and vision_api_key and sender_restaurant and message.get("media_id"):
-                # A PDF nota: rendered to images locally, read page by page,
-                # merged into one draft.
-                try:
-                    pdf_bytes = await download_pdf(
-                        message["media_id"],
-                        meta_access_token,
-                        meta_graph_api_version,
-                        client=meta_http_client,
-                    )
-                    pages = render_pdf_pages(pdf_bytes)
-                    merged = {"items": [], "warnings": []}
-                    supplier = None
-                    for page in pages:
-                        extracted = await filter_kitchen_items(
-                            await extract_invoice(
-                                page,
-                                media_type="image/jpeg",
-                                restaurant=sender_restaurant["name"],
-                                api_key=vision_api_key,
-                                model=vision_model,
-                                base_url=vision_base_url,
-                                client=vision_http_client,
-                            ),
-                            restaurant_id,
-                        )
-                        merged["items"].extend(extracted.get("items") or [])
-                        merged["warnings"].extend(extracted.get("warnings") or [])
-                        supplier = supplier or extracted.get("supplier")
-                    if supplier:
-                        merged["supplier"] = supplier
-                    payload["extracted"] = merged
-                    payload["source_label"] = f"PDF nota WhatsApp ({len(pages)} halaman)"
-                except (PdfRenderError, MetaWhatsAppError, StepFunVisionError) as exc:
-                    logger.warning("WhatsApp PDF intake failed: %s", exc)
-            elif message.get("media_kind") == "audio" and vision_api_key and sender_restaurant:
+            if payload["num_media"]:
+                payload["operation_source"] = {
+                    "media_id": message.get("media_id") or event_id,
+                    "media_kind": media_kind or "unsupported",
+                    "caption": payload["text"],
+                }
+            if media_kind == "image" and sender_restaurant:
+                payload["operation_candidate"] = uncertain_document(
+                    "Foto belum dapat dibaca. Jelaskan jenis dokumen dan rinciannya sebagai teks; stok belum berubah.")
+                if vision_api_key:
+                    try:
+                        photo, media_type = await _timed_whatsapp("media_download", timing_kind, download_image(
+                            message["media_id"], meta_access_token, meta_graph_api_version,
+                            client=await get_meta_client(),
+                        ))
+                        payload["operation_source"]["digest"] = hashlib.sha256(photo).hexdigest()
+                        if caption_requests_purchase(payload["text"]):
+                            # The owner's caption decides the direction: a
+                            # supplier invoice titled "Sales Invoice" is still
+                            # a purchase for the warung. Skip the classifier.
+                            document = {"document_type": "purchase_invoice"}
+                        else:
+                            document = await _timed_whatsapp("document_read", timing_kind, extract_operations_document(
+                                photo, media_type=media_type, caption=payload["text"],
+                                restaurant=sender_restaurant["name"], api_key=vision_api_key,
+                                model=vision_model, base_url=vision_base_url, client=await get_vision_client(),
+                            ))
+                        if document.get("document_type") == "purchase_invoice":
+                            # Only an explicit supplier-purchase classification
+                            # enters the existing stock-increasing receipt flow.
+                            # Non-kitchen goods still get flagged for owner review.
+                            payload["extracted"] = await filter_kitchen_items(
+                                await _timed_whatsapp("document_read", timing_kind, extract_invoice(
+                                    photo, media_type=media_type, restaurant=sender_restaurant["name"],
+                                    api_key=vision_api_key, model=vision_model,
+                                    base_url=vision_base_url, client=await get_vision_client(),
+                                )),
+                                restaurant_id,
+                            )
+                            payload.pop("operation_candidate", None)
+                            payload["source_label"] = "Foto nota WhatsApp"
+                        else:
+                            payload["operation_candidate"] = document
+                    except (MetaWhatsAppError, StepFunVisionError, ValueError) as exc:
+                        logger.warning("WhatsApp document intake failed: %s", exc)
+            elif media_kind == "audio" and vision_api_key and sender_restaurant:
                 # A voice note is transcribed and then parsed like typed text;
                 # a failed read falls back to the safe media reply; no draft.
                 try:
-                    audio, mime = await download_audio(
-                        message["media_id"],
-                        meta_access_token,
-                        meta_graph_api_version,
-                        client=meta_http_client,
-                    )
-                    payload["transcript"] = await transcribe_audio(
-                        audio,
-                        mime,
-                        api_key=asr_api_key,
-                        model=asr_model,
-                        base_url=asr_base_url,
-                        client=vision_http_client,
-                    )
+                    audio, mime = await _timed_whatsapp("media_download", timing_kind, download_audio(
+                        message["media_id"], meta_access_token, meta_graph_api_version,
+                        client=await get_meta_client(),
+                    ))
+                    payload["operation_source"]["digest"] = hashlib.sha256(audio).hexdigest()
+                    payload["transcript"] = await _timed_whatsapp("document_read", timing_kind, transcribe_audio(
+                        audio, mime, api_key=asr_api_key, model=asr_model,
+                        base_url=asr_base_url, language=asr_language, prompt=asr_prompt,
+                        client=await get_vision_client(),
+                    ))
                     if payload["transcript"].strip():
-                        extracted = await filter_kitchen_items(
-                            await extract_text(payload["transcript"], sender_restaurant["name"]), restaurant_id)
-                        hint = await maybe_intent_hint(payload["transcript"], extracted)
-                        if hint:
-                            payload["intent_hint"] = hint
-                        payload["extracted_text"] = extracted
+                        await _timed_whatsapp("text_enrichment", timing_kind, enrich_whatsapp_text(
+                            payload, sender_restaurant, channel=LIVE + ":" + meta_phone_number_id))
                 except (MetaWhatsAppError, StepFunAudioError) as exc:
                     logger.warning("WhatsApp voice intake failed: %s", exc)
-            elif not message.get("media_kind") and payload["text"].strip() and sender_restaurant:
-                # Plain text gets the same rules-then-model rescue so free-form
-                # sentences reach the draft flow; commands skip the model. A
-                # stock question is answered read-only from the sender's own
-                # restaurant inventory before any of that.
-                payload["opname_answer"] = await build_opname_answer(payload["text"], restaurant_id)
-                if payload["opname_answer"] is None:
-                    payload["stock_answer"] = await build_stock_answer(payload["text"], restaurant_id)
-                if payload["opname_answer"] is None and payload["stock_answer"] is None:
-                    extracted = await filter_kitchen_items(
-                        await extract_text(payload["text"], sender_restaurant["name"]), restaurant_id)
-                    hint = await maybe_intent_hint(payload["text"], extracted)
-                    if hint:
-                        payload["intent_hint"] = hint
-                    payload["extracted_text"] = extracted
-            result = await run_in_threadpool(
+            elif payload["num_media"] and media_kind != "audio" and sender_restaurant:
+                payload["operation_candidate"] = uncertain_document(
+                    "Format lampiran belum didukung. Kirim JPG/PNG/WebP atau rincian sebagai teks; stok belum berubah.")
+            elif payload["text"].strip() and sender_restaurant:
+                await _timed_whatsapp("text_enrichment", timing_kind, enrich_whatsapp_text(
+                    payload, sender_restaurant, channel=LIVE + ":" + meta_phone_number_id))
+            result = await _timed_whatsapp("store_ingestion", timing_kind, run_in_threadpool(
                 store.whatsapp_ingest,
                 meta_event_key(meta_phone_number_id, event_id),
                 payload,
@@ -1128,14 +1272,15 @@ def create_app(
                 outbound_status=OUTBOUND_PENDING,
                 restaurant_id=restaurant_id,
                 platform="whatsapp",
-            )
+                open_onboarding=whatsapp_open_onboarding,
+            ))
             outbound = result["messages"][-1]
-            claimed = await run_in_threadpool(
+            claimed = await _timed_whatsapp("store_claim", timing_kind, run_in_threadpool(
                 store.claim_whatsapp_message,
                 outbound["id"],
                 OUTBOUND_PENDING,
                 OUTBOUND_SENDING,
-            )
+            ))
             if not claimed:
                 continue
             # whatsapp_ingest nests the ingest result (action/summary) under "result".
@@ -1145,27 +1290,27 @@ def create_app(
                 audio_id = await summary_voice(outbound["body"])
             if audio_id:
                 try:
-                    await send_audio_message(
+                    await _timed_whatsapp("send", timing_kind, send_audio_message(
                         meta_access_token,
                         meta_phone_number_id,
                         meta_graph_api_version,
                         message["sender"],
                         audio_id,
-                        client=meta_http_client,
-                    )
+                        client=await get_meta_client(),
+                    ))
                 except (MetaWhatsAppError, ValueError) as exc:
                     logger.warning("WhatsApp audio reply failed; falling back to text: %s", exc)
                     audio_id = None
             if not audio_id:
                 try:
-                    await send_text(
+                    await _timed_whatsapp("send", timing_kind, send_text(
                         meta_access_token,
                         meta_phone_number_id,
                         meta_graph_api_version,
                         message["sender"],
                         outbound["body"],
-                        client=meta_http_client,
-                    )
+                        client=await get_meta_client(),
+                    ))
                 except (MetaWhatsAppError, ValueError) as exc:
                     await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], OUTBOUND_PENDING)
                     status = exc.status if isinstance(exc, MetaWhatsAppError) else 500

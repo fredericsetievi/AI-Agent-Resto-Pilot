@@ -19,9 +19,13 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from .inventory import InventoryMixin, SQLITE_SCHEMA
+from .operations import OperationsMixin, SQLITE_SCHEMA as OPERATIONS_SQLITE_SCHEMA
+from .purchase_sources import PurchaseSourcesMixin, SQLITE_SCHEMA as PURCHASE_SOURCES_SQLITE_SCHEMA
 from .extraction import catalog_aliases, extract_purchase, normalize_item
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
-from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_item, stock_reply, weekly_summary_reply
+from .onboarding import restaurant_selection
+from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, weekly_summary_reply
 
 
 CATALOG = [
@@ -225,7 +229,7 @@ def normalize_items_for_catalog(items, catalog):
     return normalized, list(dict.fromkeys(warnings))
 
 
-class Store:
+class Store(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
     def __init__(self, path, seed=True):
         self.path = str(path)
         # Each restaurant owns a catalog: the shared base plus the ingredients
@@ -304,6 +308,11 @@ class Store:
                 "CREATE TABLE IF NOT EXISTS stock_counts (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), ingredient_id TEXT NOT NULL, estimated_quantity TEXT NOT NULL, counted_quantity TEXT NOT NULL, delta TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, applied_at TEXT)",
             ):
                 conn.execute(statement)
+            for statement in (*SQLITE_SCHEMA, *OPERATIONS_SQLITE_SCHEMA, *PURCHASE_SOURCES_SQLITE_SCHEMA):
+                conn.execute(statement)
+            movement_columns = {row[1] for row in conn.execute("PRAGMA table_info(movements)")}
+            if "inventory_event_id" not in movement_columns:
+                conn.execute("ALTER TABLE movements ADD COLUMN inventory_event_id TEXT")
             # Databases created before the follow-up state existed keep their
             # whatsapp_threads table; add the column in place.
             columns = {row[1] for row in conn.execute("PRAGMA table_info(whatsapp_threads)")}
@@ -515,7 +524,7 @@ class Store:
         if extracted is None or not isinstance(extracted.get("items"), list):
             extracted = extract_purchase(payload["text"])
         def action(conn):
-            return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=restaurant_id), restaurant_id)
+            return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier") or extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=restaurant_id), restaurant_id)
         return self._idempotent(key, "intake", payload, action)
 
     def intake_image(self, key, image_sha256, source_label, supplier, items, warnings, restaurant_id=None):
@@ -885,7 +894,7 @@ class Store:
             top = {"name": top_name, "quantity": format(top_entry["quantity"].normalize(), "f"), "unit": top_entry["unit"] or ""}
             return {"question": str(text).strip(), "facts": [spend_fact(agg["total_idr"], agg["purchase_count"], label, top=top)]}
 
-    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, platform="whatsapp"):
+    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, platform="whatsapp", open_onboarding=False):
         """Persist inbound, decision/ledger, outbound and dedupe in one commit.
 
         The allowlist is the tenant gate: a sender must be linked to exactly
@@ -898,6 +907,8 @@ class Store:
         """
         platform = validate_platform(platform)
         channel = channel or transport
+        operation_candidate = payload.get("operation_candidate")
+        operation_source = payload.get("operation_source")
         extracted_photo = payload.get("extracted")
         source_label = payload.get("source_label") or "Foto nota WhatsApp"
         # A voice transcript, like a vision read, is not byte-identical across
@@ -924,19 +935,50 @@ class Store:
         if intent_hint not in ("approve", "reject", "summary"):
             intent_hint = None
         payload = {"sender": payload["sender"], "text": payload["text"], "event_id": payload.get("event_id"), "num_media": payload.get("num_media", 0)}
+        # Provenance bytes/media identity are stable across provider retries;
+        # model-derived candidates and transcripts deliberately are not.
+        fingerprint_source = {}
+        if isinstance(operation_source, dict):
+            identity_fields = ("media_id", "media_kind", "caption") if operation_source.get("media_id") else ("digest", "media_kind", "caption")
+            identity = {name: operation_source[name] for name in identity_fields if operation_source.get(name) is not None}
+            if identity:
+                fingerprint_source = identity
         event_id = payload["event_id"] or "sim:" + key
-        fingerprint = hashlib.sha256(encode({"sender": payload["sender"], "text": payload["text"], "num_media": payload["num_media"]}).encode()).hexdigest()
+        request_identity = dict(payload)
+        if fingerprint_source.get("media_kind") == "image" and fingerprint_source.get("media_id"):
+            # Older normalizers omitted image captions. Keep their request-key
+            # identity while retaining the caption in the stronger event hash.
+            request_identity["text"] = ""
+            fingerprint_source.setdefault("caption", payload["text"])
+        fingerprint_body = {"sender": request_identity["sender"], "text": request_identity["text"], "num_media": request_identity["num_media"]}
+        # Preserve request-key compatibility with already stored WhatsApp
+        # callbacks; media identity tightens the provider-event comparison.
+        legacy_fingerprint = hashlib.sha256(encode(fingerprint_body).encode()).hexdigest()
+        if fingerprint_source:
+            fingerprint_body["operation_source"] = fingerprint_source
+        fingerprint = hashlib.sha256(encode(fingerprint_body).encode()).hexdigest()
 
         def action(conn):
             prior = conn.execute("SELECT fingerprint, response FROM whatsapp_events WHERE channel=? AND event_id=?", (channel, event_id)).fetchone()
             if prior:
-                if prior["fingerprint"] != fingerprint:
+                if prior["fingerprint"] not in (fingerprint, legacy_fingerprint):
                     raise DomainError("event_conflict", "This message event was already used for different content or sender.")
                 return json.loads(prior["response"])
             link = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=? AND platform=?", (payload["sender"], platform)).fetchone()
             linked = link["restaurant_id"] if link else None
-            if restaurant_id is not None and linked != restaurant_id:
-                # Simulator callers may only speak as one of their own numbers.
+            onboarding_reply = None
+            if linked is None and open_onboarding:
+                rows = [dict(row) for row in conn.execute("SELECT id, name FROM restaurants ORDER BY name, id")]
+                choices = [row for row in rows if restaurant_id is None or row["id"] == restaurant_id]
+                selected, onboarding_reply = restaurant_selection(choices, payload["text"])
+                if selected:
+                    phone = validate_phone_number(payload["sender"])
+                    conn.execute("INSERT OR IGNORE INTO whatsapp_links (id, restaurant_id, phone, label, created_at) VALUES (?, ?, ?, ?, ?)",
+                                 (uuid.uuid4().hex, selected["id"], phone, "WhatsApp self-registration", now()))
+                    linked = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=?", (phone,)).fetchone()[0]
+                    if linked != selected["id"]:
+                        raise DomainError("sender_link_changed", "This number was linked elsewhere. Please send your message again.", 409)
+            if restaurant_id is not None and linked != restaurant_id and not (linked is None and open_onboarding):
                 raise DomainError("sender_not_registered", "This WhatsApp number is not linked to your restaurant.", 403)
             tenant = linked
             thread = self._whatsapp_thread(conn, payload["sender"], channel, transport, restaurant_id=tenant, create=True)
@@ -948,21 +990,41 @@ class Store:
             # The payment/supplier follow-up is a one-shot offer: the very next
             # message either answers it or the opportunity lapses.
             pending_purchase = thread.get("pending_followup")
-            thread["pending_followup"] = None
+            operation_result = None
+            if tenant and onboarding_reply is None:
+                operation_result = self._operation_handle(
+                    conn, thread, tenant, transcript or payload["text"],
+                    candidate=operation_candidate, source=operation_source,
+                    purchase_draft=draft,
+                )
+            # Inventory conversations must not consume purchase payment state.
+            if operation_result is None:
+                thread["pending_followup"] = None
             command = _resolve_command(payload["text"])
             result = {}
-            if tenant is None:
+            if onboarding_reply is not None:
+                reply = onboarding_reply
+                result["action"] = "restaurant_selected" if tenant else "restaurant_selection_required"
+            elif tenant is None:
                 # Unregistered sender: a read-only rejection. No draft, no
                 # ledger, no model call happened upstream; the admin sees the
                 # attempt in the console and can register the number.
                 reply = UNREGISTERED_REPLY
                 result["action"] = "unregistered_sender"
+            elif operation_result is not None:
+                reply = operation_result["reply"]
+                result = operation_result["result"]
             elif extracted_photo:
-                if draft:
+                source_digest, source_result = self._purchase_source_guard(conn, tenant, operation_source)
+                if source_result is not None:
+                    reply, result = source_result["reply"], source_result["result"]
+                    thread["pending_followup"] = pending_purchase
+                elif draft:
                     reply = "Foto diterima. Masih ada draf yang menunggu konfirmasimu dulu, jadi foto ini belum dicatat:\n" + draft_reply(draft, names)
                     result["action"] = "active_draft_exists"
                 else:
                     draft = self._new_draft(conn, source_label, extracted_photo.get("supplier"), extracted_photo.get("items") or [], extracted_photo.get("warnings") or [], restaurant_id=tenant)
+                    self._purchase_source_register(conn, tenant, source_digest, draft["id"])
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = "Nota diterima. Cek draf pembelian ini:\n" + draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
@@ -974,7 +1036,7 @@ class Store:
                     result["action"] = "active_draft_exists"
                 else:
                     extracted = extracted_text if extracted_text is not None else extract_purchase(transcript)
-                    draft = self._new_draft(conn, transcript, None, extracted["items"], extracted["warnings"], restaurant_id=tenant)
+                    draft = self._new_draft(conn, transcript, extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=tenant)
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
@@ -1046,25 +1108,43 @@ class Store:
                 reply = weekly_summary_reply(summary, SUMMARY_WINDOW_DAYS)
                 result["action"] = "weekly_summary"
                 result["summary"] = summary
-            elif draft and (remove_index := parse_remove_item(payload["text"])):
-                # 'hapus 2' drops the 1-based flagged item from the active
-                # draft — the owner's confirmation for the kitchen filter.
-                flagged = [position for position, item in enumerate(draft["items"]) if item.get("non_kitchen")]
-                if remove_index - 1 not in flagged:
-                    hint = ", ".join(str(position + 1) for position in flagged) or "tidak ada"
-                    reply = f"Item {remove_index} tidak bertanda bukan bahan masak. Hapus hanya baris bertanda: " + hint + "."
+            elif draft and (request := parse_remove_request(payload["text"])):
+                # 'hapus 4', 'hapus 4, 5' and 'hapus semua' drop flagged
+                # (non-kitchen) lines from the active draft — the owner's
+                # confirmation for the kitchen filter.
+                items = draft["items"]
+                flagged = [position for position, item in enumerate(items) if item.get("non_kitchen")]
+                hint = ", ".join(str(position + 1) for position in flagged) or "tidak ada"
+                if request["mode"] == "all":
+                    targets = flagged
+                else:
+                    targets = [index - 1 for index in dict.fromkeys(request["indices"])]
+                unknown = [position for position in targets if not 0 <= position < len(items)]
+                unflagged = [position for position in targets if position not in flagged]
+                if unknown:
+                    reply = (f"Item {', '.join(str(position + 1) for position in unknown)} tidak ada di draf "
+                             f"({len(items)} baris). Hapus hanya baris bertanda: {hint}.")
                     result["action"] = "remove_rejected"
-                elif len(draft["items"]) <= 1:
-                    reply = "Draf tinggal satu baris. Balas BATAL untuk membatalkan seluruh draf."
+                elif unflagged:
+                    reply = (f"Item {', '.join(str(position + 1) for position in unflagged)} tidak bertanda "
+                             f"bukan bahan masak. Hapus hanya baris bertanda: {hint}.")
+                    result["action"] = "remove_rejected"
+                elif not targets:
+                    reply = "Tidak ada baris yang bertanda bukan bahan masak."
+                    result["action"] = "remove_rejected"
+                elif len(targets) >= len(items):
+                    reply = "Kalau semua baris dibuang, draf jadi kosong. Balas BATAL untuk membatalkan seluruh draf."
                     result["action"] = "remove_rejected"
                 else:
-                    removed = draft["items"].pop(remove_index - 1)
+                    removed_names = [str(items[position].get("raw_name")) for position in targets]
+                    for position in sorted(targets, reverse=True):
+                        items.pop(position)
                     # Re-derive warnings for the remaining items: numbered
-                    # warnings ('Item 2: ...') shift when a line disappears.
-                    remaining, field_warnings = self._normalize(draft["items"], self._catalog_for(tenant))
-                    flags = [item.get("non_kitchen") for item in draft["items"]]
-                    for item, flagged in zip(remaining, flags):
-                        if flagged:
+                    # warnings ('Item 2: ...') shift when lines disappear.
+                    remaining, field_warnings = self._normalize(items, self._catalog_for(tenant))
+                    flags = [item.get("non_kitchen") for item in items]
+                    for item, still_flagged in zip(remaining, flags):
+                        if still_flagged:
                             item["non_kitchen"] = True
                     kept_warnings = [warning for warning in draft.get("warnings") or []
                                      if "bukan bahan masak" in warning
@@ -1076,8 +1156,10 @@ class Store:
                                   "version": draft["version"] + 1})
                     self._save_draft(conn, draft)
                     thread["active_version"] = draft["version"]
-                    self._audit(conn, "draft_item_removed", f"Non-kitchen item '{removed.get('raw_name')}' removed from draft {draft['id'][:8]}.", tenant)
-                    reply = f"Item '{removed.get('raw_name')}' dihapus dari draf.\n" + draft_reply(draft, names)
+                    quoted = [f"'{name}'" for name in removed_names]
+                    names_text = " dan ".join([", ".join(quoted[:-1]), quoted[-1]]) if len(quoted) > 1 else quoted[0]
+                    self._audit(conn, "draft_item_removed", f"Non-kitchen item(s) {names_text} removed from draft {draft['id'][:8]}.", tenant)
+                    reply = f"Item {names_text} dihapus dari draf.\n\n" + draft_reply(draft, names)
                     result["action"] = "item_removed"
             elif tenant and not draft and (opname := self.parse_opname(payload["text"], tenant, conn=conn)):
                 # A physical stock count proposal. Parsed deterministically
@@ -1115,7 +1197,7 @@ class Store:
                     reply = HELP_REPLY
                     result["action"] = "help_reply"
                 else:
-                    draft = self._new_draft(conn, payload["text"], None, extracted["items"], extracted["warnings"], restaurant_id=tenant)
+                    draft = self._new_draft(conn, payload["text"], extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=tenant)
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
@@ -1140,7 +1222,7 @@ class Store:
             conn.execute("INSERT INTO whatsapp_events VALUES (?, ?, ?, ?, ?)", (channel, event_id, thread["id"], fingerprint, encode(response)))
             return response
 
-        response = self._idempotent(key, "whatsapp:" + channel, payload, action)
+        response = self._idempotent(key, "whatsapp:" + channel, request_identity, action)
         self.maybe_cloud_mirror(response.get("draft"), response["thread"].get("restaurant_id"))
         return response
 
