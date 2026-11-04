@@ -13,9 +13,12 @@ function harness({fetchImpl=()=>new Promise(()=>{}),hash='#overview'}={}) {
   }
   // UI request/toast timers must not hold this unit harness open when a stubbed
   // fetch deliberately never resolves (the admin preview uses a 60s timeout).
-  const context=vm.createContext({console,Intl,Date,Number,String,Object,AbortController,TypeError,Map,Promise,crypto,FormData:class {constructor(form){this.values=form.values;}get(key){return this.values[key]??null;}},setTimeout:(...args)=>setTimeout(...args).unref(),clearTimeout,setInterval:()=>{},location:{hash},window:{addEventListener(){}},document:{hidden:false,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement:()=>element('new-element')},fetch:fetchImpl});
+  const context=vm.createContext({console,Intl,Date,Number,String,Object,AbortController,TypeError,Map,Promise,crypto,FormData:class {constructor(form){this.values=form.values;}get(key){return this.values[key]??null;}},setTimeout:(...args)=>setTimeout(...args).unref(),clearTimeout,setInterval:()=>{},location:{hash},window:{addEventListener(){}},localStorage:{getItem:()=>null,setItem(){}},document:{hidden:false,documentElement:{lang:''},querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement:()=>element('new-element')},fetch:fetchImpl});
   // Omit boot calls; no network request or timer is required by these tests.
   // Omit boot: the real app boots via boot() (auth check) which no test needs implicitly.
+  // i18n.js loads first so t() exists; tests assert the English strings.
+  vm.runInContext(fs.readFileSync('frontend/i18n.js','utf8'),context);
+  vm.runInContext("window.setLang('en')",context);
   const source=fs.readFileSync('frontend/app.js','utf8').replace('boot();','');
   vm.runInContext(source,context);
   return {context,element,run:code=>vm.runInContext(code,context)};
@@ -97,7 +100,7 @@ test('WhatsApp simulator renders the requested route and a clear non-live label'
   assert.match(h.element('#content').innerHTML,/META CLOUD API FLOW/);
   assert.match(h.element('#content').innerHTML,/does not connect to WhatsApp or send a live message/);
   const index=fs.readFileSync('frontend/index.html','utf8');
-  assert.match(index,/#whatsapp[^>]*>.*WhatsApp demo/s);
+  assert.match(index,/#whatsapp[^>]*>.*WhatsApp/s);
 });
 
 test('simulator POST uses the requested body and reuses event id and idempotency key on retry',async()=>{
@@ -162,7 +165,7 @@ test('admin row data attributes drive the detail navigation',()=>{
   h.run(`state.user={id:'u1',username:'admin',display_name:'Platform admin',role:'admin',restaurant_id:null,restaurant_name:null};state.adminSelected='resto-1';state.adminList=[{id:'resto-1',name:'Warung Bu Sari',address:null,created_at:'2026-10-27T00:00:00Z',whatsapp_numbers:[],users:[],pending_drafts:1,recorded_purchases:2}];navigate()`);
   assert.equal(h.element('#page-title').textContent,'Restaurant detail.');
   assert.match(h.element('#content').innerHTML,/Warung Bu Sari/);
-  assert.match(h.element('#content').innerHTML,/data-open-resto="resto-1"|Nomor WhatsApp terhubung/);
+  assert.match(h.element('#content').innerHTML,/Connected WhatsApp numbers|Nomor WhatsApp terhubung/);
 });
 
 test('review warnings are deduplicated and capped at four visible details',()=>{
