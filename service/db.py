@@ -42,7 +42,29 @@ SUMMARY_COMMANDS = ("ringkas", "ringkasan", "summary")
 # Casual confirmations owners actually type; anything ambiguous falls through
 # to normal message handling instead of guessing.
 APPROVE_COMMANDS = frozenset({"ya", "y", "ya benar", "ya semua", "ok", "oke", "ok semua", "oke semua", "betul", "setuju", "setuju semua", "sip", "approve", "approved", "acc", "yes", "iya", "gas", "gaskan", "lanjut"})
-REJECT_COMMANDS = frozenset({"batal", "batalin", "cancel", "tidak", "tidak jadi", "gajadi", "gak jadi", "nggak jadi", "jangan", "no"})
+REJECT_COMMANDS = frozenset({"batal", "batalin", "cancel", "tidak", "tidak jadi", "gajadi", "gak jadi", "nggak jadi", "ngak jadi", "nga jadi", "ngga jadi", "enggak jadi", "ga jadi", "urungkan", "jangan", "no"})
+# Trailing/leading chat particles owners sprinkle on commands ("ga jadi deh",
+# "ya dong"); stripped before matching so the core phrase decides the intent.
+_COMMAND_PARTICLES = frozenset({"deh", "lah", "dong", "dulu", "aja", "saja"})
+
+
+def _resolve_command(text):
+    """Casefold a message into a command word, dropping casual particles.
+
+    Exact matches win unchanged; otherwise particles are peeled from both
+    ends ("ga jadi deh" -> "ga jadi") and the core phrase is returned —
+    matched or not, so an unknown phrase keeps its own words downstream.
+    """
+    command = str(text).strip().casefold()
+    if command in APPROVE_COMMANDS or command in REJECT_COMMANDS or command in SUMMARY_COMMANDS:
+        return command
+    words = command.split()
+    while words and words[-1] in _COMMAND_PARTICLES:
+        words.pop()
+    while words and words[0] in _COMMAND_PARTICLES:
+        words.pop(0)
+    return " ".join(words)
+
 SUMMARY_WINDOW_DAYS = 7
 MAX_TRANSCRIPT_CHARS = 10_000
 MAX_RULES_PER_RESTAURANT = 20
@@ -927,7 +949,7 @@ class Store:
             # message either answers it or the opportunity lapses.
             pending_purchase = thread.get("pending_followup")
             thread["pending_followup"] = None
-            command = payload["text"].strip().casefold()
+            command = _resolve_command(payload["text"])
             result = {}
             if tenant is None:
                 # Unregistered sender: a read-only rejection. No draft, no

@@ -364,3 +364,15 @@ def test_simulator_confirms_a_spelling_recovery_before_approval(client):
     # A recovered typo maps to the existing catalog entry; nothing new is created.
     assert not approved["draft"].get("new_ingredients")
     assert any(row["ingredient_id"] == "bawang_putih" for row in overview(client)["inventory"])
+
+
+def test_simulator_accepts_colloquial_cancel_variants(client):
+    first = data(simulate(client, "beli cabai 3 kg 150rb"))
+    assert first["draft"]["status"] == "pending_approval"
+    for wording in ("ngak jadi", "ga jadi deh", "urungkan"):
+        cancelled = data(simulate(client, wording))
+        assert cancelled["result"]["action"] == "rejected", wording
+        assert cancelled["thread"]["active_draft_id"] is None
+        # Re-open a fresh draft so each wording is exercised against a live one.
+        first = data(simulate(client, "beli cabai 3 kg 150rb"))
+        assert first["draft"]["status"] == "pending_approval"
