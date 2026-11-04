@@ -167,3 +167,17 @@ def test_send_failure_rolls_the_status_back_and_errors(tmp_path):
     with client.app.state.store.transaction() as conn:
         row = conn.execute("SELECT status FROM whatsapp_messages WHERE direction='outbound' ORDER BY rowid DESC LIMIT 1").fetchone()
     assert row["status"] == "telegram_send_pending"
+
+
+def test_telegram_webhook_reachable_through_the_public_host(tmp_path):
+    """The tunnel boundary lets a matching-host Telegram webhook through."""
+    fake = FakeTelegramClient()
+    client = TestClient(
+        create_app(tmp_path / "pub.sqlite3", public_base_url="https://restopilot-test.example",
+                   vision_api_key="synthetic-key", telegram_bot_token=BOT_TOKEN,
+                   telegram_webhook_secret=SECRET, telegram_http_client=fake, telegram_group_seconds=0),
+        base_url="https://restopilot-test.example")
+    update = {"update_id": 901, "message": {"message_id": 901, "chat": {"id": 111222333}, "date": 1, "text": "halo"}}
+    response = client.post("/webhooks/telegram", headers=HEADERS, content=json.dumps(update).encode())
+    assert response.status_code == 200, response.text
+    assert response.status_code == 200 and response.text in ("", "null")  # empty ok

@@ -580,7 +580,10 @@ def create_app(
 
     @app.middleware("http")
     async def loopback_boundary(request: Request, call_next):
-        public_webhook = request.method in ("GET", "POST") and request.url.path == WEBHOOK_PATH and matches_public_host(request.headers.get("host", ""), configured_origin)
+        # Both provider webhooks are exempt from the loopback boundary when
+        # the request host matches PUBLIC_BASE_URL: Meta's verification
+        # handshake is a GET, Telegram only ever POSTs.
+        public_webhook = request.method in ("GET", "POST") and request.url.path in (WEBHOOK_PATH, TELEGRAM_WEBHOOK_PATH) and matches_public_host(request.headers.get("host", ""), configured_origin)
         # public_demo relaxes the loopback boundary for hosted demo deployments
         # (e.g. Vercel). It is opt-in per deployment; the local default stays
         # loopback-only. Meta webhook signature validation is unaffected either way.
