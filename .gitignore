@@ -25,3 +25,8 @@ STEPFUN-COLLABORATION-ANALYSIS.md
 demo-evidence/
 invoice-samples/
 *.txt
+
+# Local diagnostics (jangan di-commit)
+measure_latency.py
+debug_setup.py
+debug_result.txt
