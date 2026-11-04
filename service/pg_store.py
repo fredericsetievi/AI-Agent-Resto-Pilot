@@ -146,7 +146,7 @@ class PostgresStore:
             for number in DEMO_NUMBERS:
                 self._execute(
                     conn,
-                    "INSERT INTO whatsapp_links (id, slug, phone, label) VALUES (%s, %s, %s, %s) ON CONFLICT (phone) DO NOTHING",
+                    "INSERT INTO whatsapp_links (id, slug, phone, platform, label) VALUES (%s, %s, %s, 'whatsapp', %s) ON CONFLICT (phone, platform) DO NOTHING",
                     (uuid.uuid4().hex, RESTAURANT["id"], number["phone"], number["label"]),
                 )
             self._execute(
@@ -653,8 +653,9 @@ class PostgresStore:
             row = cur.fetchone()
             if not row:
                 raise DomainError("rule_not_found", "Rule was not found for this restaurant.", 404)
+            rule_text = row[0]
             self._execute(conn, "DELETE FROM restaurant_rules WHERE id=%s", (rule_id,))
-            self._audit(conn, "rule_removed", f"Rule removed: {row['rule'][:120]}", restaurant_id)
+            self._audit(conn, "rule_removed", f"Rule removed: {rule_text[:120]}", restaurant_id)
         return {"ok": True}
 
     def enabled_rules_text(self, restaurant_id):
@@ -840,8 +841,10 @@ class PostgresStore:
         per_ingredient = {}
         cur = self._execute(conn,
             "SELECT body, created_at FROM purchases WHERE slug=%s ORDER BY created_at, id", (restaurant_id,))
-        for body, created_raw in self._rows(cur):
-            created = self._as_datetime(created_raw)
+        for row in self._rows(cur):
+            created = self._as_datetime(row["created_at"])
+            body = row["body"]
+            print("[dbg] row created=%r body=%r", created, str(body)[:120])
             if start_dt and created < start_dt:
                 continue
             if end_dt and created >= end_dt:
@@ -865,6 +868,10 @@ class PostgresStore:
 
     def data_facts(self, text, restaurant_id):
         if not restaurant_id:
+            return None
+        with pg_connection() as conn:
+            known = self._execute(conn, "SELECT 1 FROM tenants WHERE slug=%s", (restaurant_id,)).fetchone()
+        if not known:
             return None
         if is_price_question(text):
             named = self._stock_ingredient_ids(text, restaurant_id)
@@ -920,6 +927,7 @@ class PostgresStore:
                             "empty_text": f"Belum ada pembelian {ingredient.get('name') or ingredient_id} tercatat {window['label']}."}
                 return {"question": str(text).strip(), "facts": [ingredient_spend_fact(
                     ingredient.get("name") or ingredient_id, entry["total"], entry["count"], window["label"])]}
+            print("[dbg] spend agg count=%s per=%s start=%r", agg["purchase_count"], dict(agg["per_ingredient"]), window.get("start"))
             if agg["purchase_count"] == 0:
                 return {"question": str(text).strip(), "facts": [],
                         "empty_text": f"Belum ada pembelian tercatat dalam {window['label']}."}
