@@ -568,6 +568,9 @@ def create_app(
     # the WhatsApp-only deployment is unchanged.
     telegram_bot_token = validate_telegram_token(telegram_bot_token) if telegram_bot_token else None
     telegram_webhook_secret = validate_telegram_secret(telegram_webhook_secret) if telegram_webhook_secret else None
+    # An explicitly-passed None (caller omitted the override) must not wipe
+    # the real Bot API default.
+    telegram_api_base = telegram_api_base or TELEGRAM_DEFAULT_API_BASE
     vision_model = validate_vision_model(vision_model) if vision_model else VISION_DEFAULT_MODEL
     vision_base_url = validate_vision_base_url(vision_base_url) if vision_base_url else VISION_DEFAULT_BASE_URL
     # ASR may run on its own provider (AUDIO_ASR_*); without an override it
