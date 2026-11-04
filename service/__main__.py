@@ -40,6 +40,7 @@ SUPPORTED_ENV_KEYS = {
     "TELEGRAM_WEBHOOK_SECRET",
     "TELEGRAM_API_BASE",
     "PROACTIVE_CHECK_HOURS",
+    "PUBLIC_DEMO",
 }
 
 
@@ -110,12 +111,14 @@ def main():
         raise SystemExit("PROACTIVE_CHECK_HOURS must be a number of hours (0 disables the proactive checks).")
     if proactive_hours < 0:
         raise SystemExit("PROACTIVE_CHECK_HOURS must not be negative.")
+    public_demo = (setting("PUBLIC_DEMO") or "").strip().casefold() in {"1", "true", "yes", "on"}
     print("RestoPilot: session login, owner/admin roles, Supabase storage, WhatsApp allowlist.")
     print("Stock Q&A: from the linked restaurant's inventory (tenant-isolated).")
     print(f"Open http://127.0.0.1:{args.port} · Database: {args.db}")
     print("Demo logins: admin / admin123 (platform admin) · owner / owner123 (Warung Bu Sari)")
     print("Meta WhatsApp Cloud API: configured" if meta_configured else "Meta WhatsApp Cloud API: disabled (see .env.example)")
     print("Telegram bot: configured" if telegram_configured else "Telegram bot: disabled (set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET)")
+    print("Public host access: enabled (login still required)" if public_demo else "Public host access: loopback only (set PUBLIC_DEMO=1 to serve a tunnel)")
     print(f"Proactive low-stock checks: every {proactive_hours:g} hour(s)" if proactive_hours > 0 else "Proactive low-stock checks: disabled (PROACTIVE_CHECK_HOURS=0)")
     print("StepFun Vision: configured" if vision_api_key else "StepFun Vision: disabled (set STEPFUN_API_KEY)")
     if text_llm_enabled:
@@ -151,6 +154,7 @@ def main():
             text_llm_model=text_llm_model,
             stock_llm_enabled=bool(stock_llm_enabled),
             intent_llm_enabled=bool(intent_llm_enabled),
+            public_demo=public_demo,
             proactive_check_interval_seconds=proactive_hours * 3600,
             **meta_settings,
             **telegram_settings,

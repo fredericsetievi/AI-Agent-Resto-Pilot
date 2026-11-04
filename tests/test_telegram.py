@@ -181,3 +181,29 @@ def test_telegram_webhook_reachable_through_the_public_host(tmp_path):
     response = client.post("/webhooks/telegram", headers=HEADERS, content=json.dumps(update).encode())
     assert response.status_code == 200, response.text
     assert response.status_code == 200 and response.text in ("", "null")  # empty ok
+
+
+def test_public_demo_opens_the_dashboard_to_the_tunnel_host(tmp_path):
+    """PUBLIC_DEMO=1: non-webhook pages are reachable from the public host."""
+    from service.api import create_app as _create
+
+    update = {"update_id": 901, "message": {"message_id": 901, "chat": {"id": 111222333}, "date": 1, "text": "halo"}}
+    loopback_client = TestClient(
+        create_app(tmp_path / "loop.sqlite3", public_base_url="https://restopilot-test.example",
+                   telegram_bot_token=BOT_TOKEN, telegram_webhook_secret=SECRET,
+                   telegram_http_client=FakeTelegramClient(), telegram_group_seconds=0),
+        base_url="https://restopilot-test.example")
+    blocked = loopback_client.get("/")
+    assert blocked.status_code == 403  # default: the dashboard stays loopback-only
+    webhook_ok = loopback_client.post("/webhooks/telegram", headers=HEADERS, content=json.dumps(update).encode())
+    assert webhook_ok.status_code == 200  # but the provider webhook still works over a tunnel
+
+    public_client = TestClient(
+        create_app(tmp_path / "pub.sqlite3", public_base_url="https://restopilot-test.example", public_demo=True,
+                   telegram_bot_token=BOT_TOKEN, telegram_webhook_secret=SECRET,
+                   telegram_http_client=FakeTelegramClient(), telegram_group_seconds=0),
+        base_url="https://restopilot-test.example")
+    dashboard = public_client.get("/")
+    assert dashboard.status_code == 200  # login page served instead of 403
+    webhook = public_client.post("/webhooks/telegram", headers=HEADERS, content=json.dumps(update).encode())
+    assert webhook.status_code == 200
