@@ -1595,7 +1595,7 @@ class PostgresStore:
             detail["created_at"] = detail["created_at"].isoformat()
         cur = self._execute(
             conn,
-            "SELECT phone, label, created_at FROM whatsapp_links WHERE slug=%s ORDER BY created_at, id",
+            "SELECT phone, platform, label, created_at FROM whatsapp_links WHERE slug=%s ORDER BY created_at, id",
             (restaurant_id,),
         )
         numbers = self._rows(cur)
