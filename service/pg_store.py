@@ -26,21 +26,28 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 
+from .data_qa import (
+    average_fact, compare_fact, ingredient_spend_fact, is_average_question,
+    is_compare_question, is_price_question, is_rank_question, is_spend_question,
+    parse_window, find_windows, price_fact, rank_fact, spend_fact,
+)
 from .db import (
     APPROVE_COMMANDS, CATALOG, CATALOG_BY_ID, DEMO_NUMBERS, DEMO_USERS,
     DomainError, RESTAURANT, RESTAURANT_TIMEZONE, REJECT_COMMANDS,
     SCHEMA_VERSION, SESSION_TTL, SUMMARY_COMMANDS, SUMMARY_WINDOW_DAYS,
     MAX_TRANSCRIPT_CHARS,
     catalog_aliases, decimal_string, draft_total, encode, hash_password,
-    normalize_items_for_catalog, now, validate_password, validate_phone_number,
-    validate_username, verify_password,
+    normalize_items_for_catalog, now, opname_remainder, validate_password,
+    validate_phone_number, validate_platform, validate_username,
+    verify_password,
 )
-from .extraction import extract_purchase
+from .extraction import catalog_aliases, extract_purchase
 from .pg import pg_connection, pg_transaction
 from .whatsapp import (
     FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR,
-    UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup,
-    parse_remove_item, stock_reply, weekly_summary_reply,
+    UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply,
+    parse_payment_followup, parse_remove_item, stock_reply,
+    weekly_summary_reply,
 )
 
 
@@ -592,6 +599,338 @@ class PostgresStore:
                               "low_stock": Decimal(quantity) < Decimal(ingredient["reorder_threshold"])})
         return {"question": str(text).strip(), "facts": facts, "restaurant_name": self.restaurant_name(restaurant_id)}
 
+    # ---- per-restaurant agent rules + proactive low-stock alerts -------
+
+    def add_rule(self, restaurant_id, rule):
+        text = str(rule or "").strip()
+        if not text:
+            raise DomainError("rule_empty", "The rule text is empty.", 422)
+        if len(text) > 500:
+            raise DomainError("rule_too_long", "One rule is capped at 500 characters.", 422)
+        with pg_transaction() as conn:
+            cur = self._execute(conn, "SELECT COUNT(*) AS c FROM restaurant_rules WHERE slug=%s", (restaurant_id,))
+            if cur.fetchone()[0] >= 20:
+                raise DomainError("rule_limit", "A restaurant holds at most 20 rules; remove one first.", 422)
+            rule_id = uuid.uuid4().hex
+            created = now()
+            self._execute(conn,
+                "INSERT INTO restaurant_rules (id, slug, rule, enabled, created_at) VALUES (%s, %s, %s, true, %s)",
+                (rule_id, restaurant_id, text, created))
+            self._audit(conn, "rule_added", f"Rule added: {text[:120]}", restaurant_id)
+        return {"id": rule_id, "restaurant_id": restaurant_id, "rule": text, "enabled": True, "created_at": created}
+
+    def list_rules(self, restaurant_id):
+        with pg_connection() as conn:
+            rows = self._rows(self._execute(conn,
+                "SELECT id, slug, rule, enabled, created_at FROM restaurant_rules WHERE slug=%s ORDER BY created_at, id",
+                (restaurant_id,)))
+        return [{"id": row["id"], "restaurant_id": row["slug"], "rule": row["rule"], "enabled": bool(row["enabled"]),
+                 "created_at": self._as_datetime(row["created_at"])} for row in rows]
+
+    def set_rule(self, restaurant_id, rule_id, *, rule_text=None, enabled=None):
+        with pg_transaction() as conn:
+            cur = self._execute(conn, "SELECT id FROM restaurant_rules WHERE id=%s AND slug=%s", (rule_id, restaurant_id))
+            if not cur.fetchone():
+                raise DomainError("rule_not_found", "Rule was not found for this restaurant.", 404)
+            if rule_text is not None:
+                text = str(rule_text).strip()
+                if not text:
+                    raise DomainError("rule_empty", "The rule text is empty.", 422)
+                if len(text) > 500:
+                    raise DomainError("rule_too_long", "One rule is capped at 500 characters.", 422)
+                self._execute(conn, "UPDATE restaurant_rules SET rule=%s WHERE id=%s", (text, rule_id))
+                self._audit(conn, "rule_edited", f"Rule edited: {text[:120]}", restaurant_id)
+            if enabled is not None:
+                self._execute(conn, "UPDATE restaurant_rules SET enabled=%s WHERE id=%s", (bool(enabled), rule_id))
+                self._audit(conn, "rule_toggled", f"Rule {'enabled' if enabled else 'disabled'}.", restaurant_id)
+            row = self._rows(self._execute(conn, "SELECT id, slug, rule, enabled, created_at FROM restaurant_rules WHERE id=%s", (rule_id,)))[0]
+        return {"id": row["id"], "restaurant_id": row["slug"], "rule": row["rule"], "enabled": bool(row["enabled"]),
+                "created_at": self._as_datetime(row["created_at"])}
+
+    def delete_rule(self, restaurant_id, rule_id):
+        with pg_transaction() as conn:
+            cur = self._execute(conn, "SELECT rule FROM restaurant_rules WHERE id=%s AND slug=%s", (rule_id, restaurant_id))
+            row = cur.fetchone()
+            if not row:
+                raise DomainError("rule_not_found", "Rule was not found for this restaurant.", 404)
+            self._execute(conn, "DELETE FROM restaurant_rules WHERE id=%s", (rule_id,))
+            self._audit(conn, "rule_removed", f"Rule removed: {row['rule'][:120]}", restaurant_id)
+        return {"ok": True}
+
+    def enabled_rules_text(self, restaurant_id):
+        rules = [entry["rule"] for entry in self.list_rules(restaurant_id) if entry["enabled"]]
+        return " ".join(f"- {rule}" for rule in rules)
+
+    def low_stock_candidates(self, restaurant_id, overrides=None, cooldown_hours=24):
+        overrides = overrides or {}
+        catalog = self._catalog_for(restaurant_id)["list"]
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)).isoformat()
+        with pg_connection() as conn:
+            previous = {row["ingredient_id"]: row for row in self._rows(self._execute(conn,
+                "SELECT ingredient_id, last_alerted_at, last_quantity FROM proactive_alerts WHERE slug=%s", (restaurant_id,)))}
+            candidates = []
+            for ingredient in catalog:
+                threshold = overrides.get(ingredient["id"], ingredient["reorder_threshold"])
+                cur = self._execute(conn, "SELECT quantity FROM stock WHERE slug=%s AND ingredient_id=%s", (restaurant_id, ingredient["id"]))
+                row = cur.fetchone()
+                quantity = row[0] if row else "0"
+                if not Decimal(quantity) < Decimal(threshold):
+                    continue
+                prior = previous.get(ingredient["id"])
+                last_alerted = prior["last_alerted_at"] if prior else None
+                if isinstance(last_alerted, datetime):
+                    last_alerted = last_alerted.isoformat()
+                if prior and str(last_alerted) >= cutoff:
+                    continue
+                if prior and str(prior["last_quantity"]) == str(quantity):
+                    continue
+                candidates.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
+                                   "unit": ingredient["unit"], "threshold": threshold, "reorder_threshold": ingredient["reorder_threshold"],
+                                   "low_stock": True})
+        return candidates
+
+    def mark_proactive_alerts(self, restaurant_id, candidates):
+        with pg_transaction() as conn:
+            for item in candidates:
+                self._execute(conn,
+                    "INSERT INTO proactive_alerts (slug, ingredient_id, last_alerted_at, last_quantity) VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (slug, ingredient_id) DO UPDATE SET last_alerted_at=excluded.last_alerted_at, last_quantity=excluded.last_quantity",
+                    (restaurant_id, item["ingredient_id"], now(), item["quantity"]))
+                self._audit(conn, "proactive_alert", f"Proactive low-stock alert sent for {item['name']} at {item['quantity']} {item['unit']}.", restaurant_id)
+
+    def record_proactive_message(self, restaurant_id, channel, sender, transport, body, status):
+        with pg_transaction() as conn:
+            thread = self._whatsapp_thread(conn, sender, channel, transport, restaurant_id=restaurant_id, create=True)
+            message_id = uuid.uuid4().hex
+            self._execute(conn,
+                "INSERT INTO whatsapp_messages (id, thread_id, direction, body, created_at, transport, status, draft_id) VALUES (%s, %s, 'outbound', %s, %s, %s, %s, NULL)",
+                (message_id, thread["id"], body, now(), transport, status))
+            self._audit(conn, "proactive_message", f"Proactive message queued for {sender}.", restaurant_id)
+        return message_id
+
+    # ---- physical stock counts (stok opname) --------------------------------
+
+    def parse_opname(self, text, restaurant_id, conn=None):
+        if not restaurant_id:
+            return None
+        candidate = str(text or "").strip()
+        if not candidate or "opname" not in candidate.casefold() and "stok fisik" not in candidate.casefold() \
+                and "stok aktual" not in candidate.casefold() and "hitung fisik" not in candidate.casefold() \
+                and "catat stok" not in candidate.casefold():
+            return None
+        remainder = opname_remainder(candidate)
+        extracted = extract_purchase(remainder)
+        catalog = self._catalog_for(restaurant_id)
+        items, invalid = [], []
+
+        def finish(own_conn):
+            for item in extracted["items"]:
+                name = str(item.get("raw_name") or "").strip()
+                if not item.get("quantity"):
+                    invalid.append({"raw_name": name, "reason": "jumlah tidak terbaca"})
+                    continue
+                if not item.get("ingredient_id") or item["ingredient_id"] not in catalog["by_id"]:
+                    invalid.append({"raw_name": name, "reason": "bahan tidak ada di katalog"})
+                    continue
+                cur = self._execute(own_conn, "SELECT quantity FROM stock WHERE slug=%s AND ingredient_id=%s", (restaurant_id, item["ingredient_id"]))
+                row = cur.fetchone()
+                estimated = row[0] if row else "0"
+                counted = decimal_string(item["quantity"])
+                items.append({"ingredient_id": item["ingredient_id"], "name": catalog["by_id"][item["ingredient_id"]]["name"],
+                              "unit": item.get("unit") or catalog["by_id"][item["ingredient_id"]]["unit"],
+                              "estimated_quantity": estimated, "counted_quantity": counted,
+                              "delta": decimal_string(Decimal(counted) - Decimal(estimated))})
+
+        if conn is None:
+            with pg_transaction() as own_conn:
+                finish(own_conn)
+        else:
+            finish(conn)
+        if not items and not invalid:
+            return None
+        return {"items": items, "invalid": invalid}
+
+    def create_opname_proposal(self, conn, restaurant_id, items):
+        group_id = uuid.uuid4().hex
+        created = now()
+        for item in items:
+            self._execute(conn,
+                "INSERT INTO stock_counts (id, group_id, slug, ingredient_id, estimated_quantity, counted_quantity, delta, status, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s)",
+                (uuid.uuid4().hex, group_id, restaurant_id, item["ingredient_id"], item["estimated_quantity"],
+                 item["counted_quantity"], item["delta"], created))
+        self._audit(conn, "opname_proposed", "Stock count proposed: " + ", ".join(f"{item['name']} → {item['counted_quantity']} {item['unit']}" for item in items), restaurant_id)
+        return group_id
+
+    def cancel_opname(self, conn, restaurant_id, group_id):
+        self._execute(conn, "UPDATE stock_counts SET status='cancelled' WHERE group_id=%s AND slug=%s AND status='pending'", (group_id, restaurant_id))
+        self._audit(conn, "opname_cancelled", "Stock count proposal cancelled.", restaurant_id)
+
+    def apply_opname(self, conn, restaurant_id, group_id):
+        cur = self._execute(conn,
+            "SELECT ingredient_id, estimated_quantity, counted_quantity, delta FROM stock_counts "
+            "WHERE group_id=%s AND slug=%s AND status='pending'", (group_id, restaurant_id))
+        rows = cur.fetchall()
+        applied = []
+        for row in rows:
+            self._execute(conn, "UPDATE stock SET quantity=%s WHERE slug=%s AND ingredient_id=%s",
+                          (row["counted_quantity"], restaurant_id, row["ingredient_id"]))
+            self._execute(conn,
+                "INSERT INTO movements (id, slug, purchase_id, ingredient_id, quantity, created_at) VALUES (%s, %s, NULL, %s, %s, %s)",
+                (uuid.uuid4().hex, restaurant_id, row["ingredient_id"], row["delta"], now()))
+            entry = self._catalog_for(restaurant_id)["by_id"].get(row["ingredient_id"]) or {}
+            applied.append({"ingredient_id": row["ingredient_id"], "name": entry.get("name") or row["ingredient_id"],
+                            "unit": entry.get("unit") or "", "estimated_quantity": row["estimated_quantity"],
+                            "counted_quantity": row["counted_quantity"], "delta": row["delta"]})
+        self._execute(conn, "UPDATE stock_counts SET status='applied', applied_at=%s WHERE group_id=%s AND slug=%s AND status='pending'",
+                      (now(), group_id, restaurant_id))
+        self._audit(conn, "opname_applied", "Stock count applied: " + ", ".join(f"{item['name']} → {item['counted_quantity']} {item['unit']}" for item in applied), restaurant_id)
+        return applied
+
+    def recent_stock_counts(self, restaurant_id, limit=10):
+        with pg_connection() as conn:
+            rows = self._rows(self._execute(conn,
+                "SELECT ingredient_id, estimated_quantity, counted_quantity, delta, applied_at FROM stock_counts "
+                "WHERE slug=%s AND status='applied' ORDER BY applied_at DESC, id DESC LIMIT %s", (restaurant_id, limit)))
+        catalog = self._catalog_for(restaurant_id)["by_id"]
+        return [{"ingredient_id": row["ingredient_id"], "name": (catalog.get(row["ingredient_id"]) or {}).get("name") or row["ingredient_id"],
+                 "estimated_quantity": row["estimated_quantity"], "counted_quantity": row["counted_quantity"],
+                 "delta": row["delta"], "applied_at": self._as_datetime(row["applied_at"])} for row in rows]
+
+    def record_stock_count(self, restaurant_id, ingredient_id, counted_quantity, note=None):
+        catalog = self._catalog_for(restaurant_id)
+        entry = catalog["by_id"].get(ingredient_id)
+        if not entry:
+            raise DomainError("ingredient_not_found", "Bahan tidak ada di katalog resto ini.", 404)
+        counted_text = str(counted_quantity or "").strip().replace(",", ".")
+        try:
+            counted = Decimal(counted_text)
+        except InvalidOperation:
+            raise DomainError("invalid_quantity", "Hasil hitung fisik harus berupa angka, contoh: 2,5", 422)
+        if counted < 0 or counted > 1000000:
+            raise DomainError("invalid_quantity", "Hasil hitung fisik harus antara 0 dan 1.000.000.", 422)
+        counted = decimal_string(counted)
+        with pg_transaction() as conn:
+            cur = self._execute(conn, "SELECT quantity FROM stock WHERE slug=%s AND ingredient_id=%s", (restaurant_id, ingredient_id))
+            row = cur.fetchone()
+            estimated = row[0] if row else "0"
+            delta = decimal_string(Decimal(counted) - Decimal(estimated))
+            group_id = uuid.uuid4().hex
+            applied_at = now()
+            self._execute(conn,
+                "INSERT INTO stock_counts (id, group_id, slug, ingredient_id, estimated_quantity, counted_quantity, delta, status, source, created_at, applied_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, 'applied', 'dashboard', %s, %s)",
+                (uuid.uuid4().hex, group_id, restaurant_id, ingredient_id, estimated, counted, delta, applied_at, applied_at))
+            self._execute(conn, "UPDATE stock SET quantity=%s WHERE slug=%s AND ingredient_id=%s", (counted, restaurant_id, ingredient_id))
+            self._execute(conn,
+                "INSERT INTO movements (id, slug, purchase_id, ingredient_id, quantity, created_at) VALUES (%s, %s, NULL, %s, %s, %s)",
+                (uuid.uuid4().hex, restaurant_id, ingredient_id, delta, applied_at))
+            audit_note = f" Stock count note: {str(note)[:200]}" if note and str(note).strip() else ""
+            self._audit(conn, "opname_applied", f"Dashboard stock count: {entry['name']} {estimated} → {counted} {entry['unit']}.{audit_note}", restaurant_id)
+        return {"ingredient_id": ingredient_id, "name": entry["name"], "unit": entry["unit"],
+                "estimated_quantity": estimated, "counted_quantity": counted, "delta": delta,
+                "applied_at": applied_at, "note": (str(note).strip() or None) if note else None}
+
+    # ---- data questions v2 (spend windows, prices) ---------------------------
+
+    def _spend_aggregate(self, conn, restaurant_id, start=None, end=None):
+        start_dt = self._as_datetime(start) if start else None
+        end_dt = self._as_datetime(end) if end else None
+        total, count, first = 0, 0, None
+        per_ingredient = {}
+        cur = self._execute(conn,
+            "SELECT body, created_at FROM purchases WHERE slug=%s ORDER BY created_at, id", (restaurant_id,))
+        for body, created_raw in self._rows(cur):
+            created = self._as_datetime(created_raw)
+            if start_dt and created < start_dt:
+                continue
+            if end_dt and created >= end_dt:
+                continue
+            if first is None:
+                first = created
+            count += 1
+            for item in body.get("items") or []:
+                amount = item.get("line_total_idr")
+                if isinstance(amount, int) and not isinstance(amount, bool) and amount > 0:
+                    total += amount
+                    key = item.get("ingredient_id") or "unknown"
+                    entry = per_ingredient.setdefault(key, {"total": 0, "quantity": Decimal(0), "unit": item.get("canonical_unit") or item.get("unit"), "count": 0})
+                    entry["total"] += amount
+                    entry["count"] += 1
+                    try:
+                        entry["quantity"] += Decimal(str(item.get("canonical_quantity") or item.get("quantity") or 0))
+                    except InvalidOperation:
+                        pass
+        return {"total_idr": total, "purchase_count": count, "per_ingredient": per_ingredient, "first_created_at": first}
+
+    def data_facts(self, text, restaurant_id):
+        if not restaurant_id:
+            return None
+        if is_price_question(text):
+            named = self._stock_ingredient_ids(text, restaurant_id)
+            if not named:
+                return None
+            catalog = self._catalog_for(restaurant_id)
+            with pg_connection() as conn:
+                history = {}
+                cur = self._execute(conn,
+                    "SELECT body, created_at FROM purchases WHERE slug=%s ORDER BY created_at, id", (restaurant_id,))
+                for row in self._rows(cur):
+                    created = self._as_datetime(row["created_at"])
+                    for item in row["body"].get("items") or []:
+                        ingredient_id = item.get("ingredient_id")
+                        price = item.get("unit_price_idr")
+                        if isinstance(price, str) and price.isdigit():
+                            price = int(price)
+                        if ingredient_id in named and isinstance(price, int) and not isinstance(price, bool) and price > 0:
+                            history.setdefault(ingredient_id, []).append(
+                                {"unit_price_idr": price, "created_at": created.isoformat(),
+                                 "supplier": row["body"].get("supplier")})
+            facts = []
+            for ingredient_id in named:
+                ingredient = catalog["by_id"].get(ingredient_id)
+                entry = history.get(ingredient_id) or []
+                if not entry:
+                    continue
+                last = entry[-1]
+                fact = {"kind": "price", "name": ingredient["name"], "unit": ingredient["unit"],
+                        "last_price_idr": last["unit_price_idr"], "last_created_at": last["created_at"],
+                        "last_supplier": last.get("supplier"),
+                        "_require": [ingredient["name"], str(last["unit_price_idr"])]}
+                if len(entry) >= 2:
+                    previous = entry[-2]
+                    fact["previous_price_idr"] = previous["unit_price_idr"]
+                    change = round((last["unit_price_idr"] - previous["unit_price_idr"]) / previous["unit_price_idr"] * 100, 1)
+                    fact["change_percent"] = f"{change:.1f}"
+                    fact["_require"].append(f"{fact['change_percent'].replace('.', ',')}%")
+                facts.append(fact)
+            return {"question": str(text).strip(), "facts": facts} if facts else None
+        if is_spend_question(text):
+            window = parse_window(text) if find_windows(text) else {"start": (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(), "end": None, "label": "7 hari terakhir", "days": 7}
+            named = self._stock_ingredient_ids(text, restaurant_id)
+            with pg_connection() as conn:
+                agg = self._spend_aggregate(conn, restaurant_id, window.get("start"), window.get("end"))
+            if named and agg["per_ingredient"]:
+                ingredient_id = named[0]
+                entry = agg["per_ingredient"].get(ingredient_id)
+                catalog = self._catalog_for(restaurant_id)["by_id"]
+                ingredient = catalog.get(ingredient_id) or {}
+                if not entry or entry["total"] == 0:
+                    return {"question": str(text).strip(), "facts": [],
+                            "empty_text": f"Belum ada pembelian {ingredient.get('name') or ingredient_id} tercatat {window['label']}."}
+                return {"question": str(text).strip(), "facts": [ingredient_spend_fact(
+                    ingredient.get("name") or ingredient_id, entry["total"], entry["count"], window["label"])]}
+            if agg["purchase_count"] == 0:
+                return {"question": str(text).strip(), "facts": [],
+                        "empty_text": f"Belum ada pembelian tercatat dalam {window['label']}."}
+            ranked = sorted(agg["per_ingredient"].items(), key=lambda pair: pair[1]["total"], reverse=True)
+            top_key, top_entry = ranked[0]
+            catalog = self._catalog_for(restaurant_id)["by_id"]
+            ingredient = catalog.get(top_key) or {}
+            top = {"name": ingredient.get("name") or str(top_key), "quantity": str(top_entry["quantity"]), "unit": top_entry["unit"] or ""}
+            return {"question": str(text).strip(), "facts": [spend_fact(agg["total_idr"], agg["purchase_count"], window["label"], top=top)]}
+        return None
+
     def restaurant_name(self, restaurant_id):
         with pg_connection() as conn:
             cur = self._execute(
@@ -602,7 +941,7 @@ class PostgresStore:
             row = cur.fetchone()
         return row[0] if row else None
 
-    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None):
+    def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, platform="whatsapp"):
         channel = channel or transport
         extracted_photo = payload.get("extracted")
         source_label = payload.get("source_label") or "Foto nota WhatsApp"
@@ -617,6 +956,17 @@ class PostgresStore:
         stock_answer = payload.get("stock_answer")
         if not isinstance(stock_answer, dict) or not isinstance(stock_answer.get("body"), str) or not stock_answer["body"].strip():
             stock_answer = None
+        # A read-only physical count proposal the API layer pre-phrased; the
+        # ingest re-derives it so stored state can never diverge.
+        opname_answer = payload.get("opname_answer")
+        if not isinstance(opname_answer, dict) or not isinstance(opname_answer.get("body"), str) or not opname_answer["body"].strip():
+            opname_answer = None
+        # A bounded intent route (off by default) may carry an approve/reject/
+        # summary hint for chatty messages the exact commands did not match;
+        # exact commands always win and every precondition is still enforced.
+        intent_hint = payload.get("intent_hint")
+        if intent_hint not in ("approve", "reject", "summary"):
+            intent_hint = None
         payload = {"sender": payload["sender"], "text": payload["text"], "event_id": payload.get("event_id"), "num_media": payload.get("num_media", 0)}
         event_id = payload["event_id"] or "sim:" + key
         fingerprint = hashlib.sha256(encode({"sender": payload["sender"], "text": payload["text"], "num_media": payload["num_media"]}).encode()).hexdigest()
@@ -628,7 +978,7 @@ class PostgresStore:
                 if prior[0] != fingerprint:
                     raise DomainError("event_conflict", "This message event was already used for different content or sender.")
                 return prior[1]
-            cur = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s", (payload["sender"],))
+            cur = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s AND platform=%s", (payload["sender"], platform))
             link = cur.fetchone()
             linked = link[0] if link else None
             if restaurant_id is not None and linked != restaurant_id:
@@ -685,8 +1035,39 @@ class PostgresStore:
                         details.append(f"Penjual: {purchase['supplier']}{suffix}")
                     reply = "Oke, catatan diperbarui. " + " ".join(details) if details else FOLLOWUP_ACK
                     result["action"] = "purchase_updated"
-            elif command in APPROVE_COMMANDS or command in REJECT_COMMANDS:
-                if not draft:
+            elif command in APPROVE_COMMANDS or command in REJECT_COMMANDS or intent_hint in ("approve", "reject"):
+                if not draft and thread.get("pending_opname_id"):
+                    # A physical count proposal is waiting: YA applies the
+                    # counted quantities, BATAL cancels.
+                    group_id = thread["pending_opname_id"]
+                    if command in REJECT_COMMANDS or (intent_hint == "reject" and command not in APPROVE_COMMANDS):
+                        self._execute(conn, "UPDATE stock_counts SET status='cancelled' WHERE group_id=%s AND slug=%s AND status='pending'", (group_id, tenant))
+                        thread.update(pending_opname_id=None)
+                        reply = "Usulan stok opname dibatalkan. Stok sistem tidak berubah."
+                        result["action"] = "opname_cancelled"
+                    else:
+                        cur = self._execute(conn,
+                            "SELECT ingredient_id, estimated_quantity, counted_quantity, delta FROM stock_counts "
+                            "WHERE group_id=%s AND slug=%s AND status='pending'", (group_id, tenant))
+                        rows = cur.fetchall()
+                        applied = []
+                        for row in rows:
+                            self._execute(conn, "UPDATE stock SET quantity=%s WHERE slug=%s AND ingredient_id=%s",
+                                          (row["counted_quantity"], tenant, row["ingredient_id"]))
+                            self._execute(conn,
+                                "INSERT INTO movements (id, slug, purchase_id, ingredient_id, quantity, created_at) VALUES (%s, %s, NULL, %s, %s, %s)",
+                                (uuid.uuid4().hex, tenant, row["ingredient_id"], row["delta"], now()))
+                            entry = self._catalog_for(tenant)["by_id"].get(row["ingredient_id"]) or {}
+                            applied.append({"ingredient_id": row["ingredient_id"], "name": entry.get("name") or row["ingredient_id"],
+                                            "unit": entry.get("unit") or "", "estimated_quantity": row["estimated_quantity"],
+                                            "counted_quantity": row["counted_quantity"], "delta": row["delta"]})
+                        self._execute(conn, "UPDATE stock_counts SET status='applied', applied_at=%s WHERE group_id=%s AND slug=%s AND status='pending'",
+                                      (now(), group_id, tenant))
+                        thread.update(pending_opname_id=None)
+                        reply = "Stok opname diterapkan: " + "; ".join(
+                            f"{item['name']} {item['estimated_quantity']} → {item['counted_quantity']} {item['unit']}" for item in applied) + "."
+                        result["action"] = "opname_applied"
+                elif not draft:
                     reply = "Tidak ada draf aktif untuk nomor ini. Kirim rincian pembelian terlebih dahulu; YA tidak mencatat pembelian lain."
                     result["action"] = "no_active_draft"
                 elif command in REJECT_COMMANDS:
@@ -711,7 +1092,7 @@ class PostgresStore:
                     thread["pending_followup"] = draft["purchase_id"]
                     reply = confirmation + "\n" + PAYMENT_FOLLOWUP_PROMPT
                     result.update(action="approved", purchase_id=draft["purchase_id"])
-            elif command in SUMMARY_COMMANDS:
+            elif command in SUMMARY_COMMANDS or intent_hint == "summary":
                 summary = self._weekly_summary(conn, SUMMARY_WINDOW_DAYS, tenant)
                 reply = weekly_summary_reply(summary, SUMMARY_WINDOW_DAYS)
                 result["action"] = "weekly_summary"
@@ -755,6 +1136,29 @@ class PostgresStore:
                 # untouched and no purchase line is filed.
                 reply = stock_answer["body"]
                 result["action"] = "stock_answer"
+            elif tenant and not draft and (opname := self.parse_opname(payload["text"], tenant, conn=conn)):
+                # A physical stock count proposal. Parsed deterministically
+                # against the ledger; the API may have pre-phrased the reply
+                # with locked figures, but the proposal itself is re-derived
+                # here so the stored state can never diverge from the parse.
+                previous_group = thread.get("pending_opname_id")
+                if previous_group:
+                    self.cancel_opname(conn, tenant, previous_group)
+                group_id = self.create_opname_proposal(conn, tenant, opname["items"])
+                thread["pending_opname_id"] = group_id
+                prephrased = opname_answer or {}
+                prephrased_ids = [item.get("ingredient_id") for item in prephrased.get("items") or []]
+                if prephrased.get("body") and prephrased_ids == [item["ingredient_id"] for item in opname["items"]]:
+                    reply = prephrased["body"]
+                else:
+                    reply = opname_reply(opname["items"], opname["invalid"])
+                result["action"] = "opname_proposed"
+            elif opname_answer:
+                # A physical count proposal re-derived above; the API's
+                # pre-phrased body applies only when the ingredient set
+                # matches the re-derivation.
+                reply = opname_answer["body"]
+                result["action"] = "opname_proposed"
             elif draft:
                 reply = draft_reply(draft, names)
                 result["action"] = "active_draft_exists"
@@ -770,8 +1174,8 @@ class PostgresStore:
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
             self._execute(
                 conn,
-                "UPDATE whatsapp_threads SET active_draft_id=%s, active_version=%s, pending_followup=%s WHERE id=%s",
-                (thread["active_draft_id"], thread["active_version"], thread.get("pending_followup"), thread["id"]),
+                "UPDATE whatsapp_threads SET active_draft_id=%s, active_version=%s, pending_followup=%s, pending_opname_id=%s WHERE id=%s",
+                (thread["active_draft_id"], thread["active_version"], thread.get("pending_followup"), thread.get("pending_opname_id"), thread["id"]),
             )
             draft_id = draft["id"] if draft else None
             if extracted_photo:
@@ -1020,6 +1424,32 @@ class PostgresStore:
                 draft["source"] = sources_by_draft[draft["id"]]
         purchase_days = [self._as_datetime(purchase["created_at"]).astimezone(RESTAURANT_TIMEZONE).date() for purchase in purchase_rows]
 
+        # Dashboard charts, from the same ledger rows above: WIB daily
+        # purchase totals for 14 days, and the top ingredients by recorded
+        # spend over the trailing 30 days.
+        today_wib = datetime.now(RESTAURANT_TIMEZONE).date()
+        daily_totals = {}
+        ingredient_totals = {}
+        cutoff_30 = datetime.now(timezone.utc) - timedelta(days=30)
+        for purchase in purchase_rows:
+            created = self._as_datetime(purchase["created_at"]).astimezone(RESTAURANT_TIMEZONE)
+            day = created.date()
+            total = purchase["body"].get("total_idr")
+            if isinstance(total, int) and not isinstance(total, bool) and 0 < total <= 1_000_000_000_000:
+                daily_totals[day] = daily_totals.get(day, 0) + total
+            if created >= datetime.now(timezone.utc) - timedelta(days=30):
+                for item in purchase["body"].get("items") or []:
+                    amount = item.get("line_total_idr")
+                    if isinstance(amount, int) and not isinstance(amount, bool) and 0 < amount <= 1_000_000_000_000:
+                        key = item.get("ingredient_id") or "unknown"
+                        ingredient_totals[key] = ingredient_totals.get(key, 0) + amount
+        daily_spend = [{"date": (today_wib - timedelta(days=back)).isoformat(),
+                        "total_idr": daily_totals.get(today_wib - timedelta(days=back), 0)}
+                       for back in range(13, -1, -1)]
+        ingredient_spend = [{"name": (catalog["by_id"].get(key) or {}).get("name") or str(key), "total_idr": total}
+                            for key, total in sorted(ingredient_totals.items(), key=lambda pair: pair[1], reverse=True)[:7]]
+        charts = {"daily_spend": daily_spend, "ingredient_spend": ingredient_spend}
+
         activity = list(activity)
         for entry in activity:
             if isinstance(entry["created_at"], datetime):
@@ -1032,6 +1462,7 @@ class PostgresStore:
         payload = {
             "restaurant": dict(restaurant),
             "whatsapp_numbers": numbers,
+            "charts": charts,
             "mode": {"transport": "manual", "extraction": "rules", "storage": "supabase", "identity": "session"},
             "metrics": {"purchases_today_idr": sum(purchase["body"].get("total_idr") or 0 for purchase in purchase_rows if isinstance(purchase["body"].get("total_idr"), int) and self._as_datetime(purchase["created_at"]).astimezone(RESTAURANT_TIMEZONE).date() == today),
                         "purchases_yesterday_idr": sum(purchase["body"].get("total_idr") or 0 for purchase in purchase_rows if isinstance(purchase["body"].get("total_idr"), int) and self._as_datetime(purchase["created_at"]).astimezone(RESTAURANT_TIMEZONE).date() == today - timedelta(days=1)),
@@ -1101,13 +1532,13 @@ class PostgresStore:
 
     # ---- WhatsApp allowlist -------------------------------------------------
 
-    def restaurant_for_sender(self, phone):
+    def restaurant_for_sender(self, phone, platform="whatsapp"):
         with pg_connection() as conn:
             cur = self._execute(
                 conn,
                 "SELECT l.slug, r.name FROM whatsapp_links l JOIN tenants t ON t.slug=l.slug "
-                "JOIN restaurants r ON r.id=t.restaurant_id WHERE l.phone=%s",
-                (str(phone or "").strip(),),
+                "JOIN restaurants r ON r.id=t.restaurant_id WHERE l.phone=%s AND l.platform=%s",
+                (str(phone or "").strip(), platform),
             )
             row = cur.fetchone()
         return {"id": row[0], "name": row[1]} if row else None
@@ -1117,7 +1548,7 @@ class PostgresStore:
         """linked_numbers on an existing connection (for inside transactions)."""
         rows = PostgresStore._rows(PostgresStore._execute(
             conn,
-            "SELECT phone, label, created_at FROM whatsapp_links WHERE slug=%s ORDER BY created_at, id",
+            "SELECT phone, platform, label, created_at FROM whatsapp_links WHERE slug=%s ORDER BY created_at, id",
             (restaurant_id,),
         ))
         for row in rows:
@@ -1129,7 +1560,7 @@ class PostgresStore:
         with pg_connection() as conn:
             cur = self._execute(
                 conn,
-                "SELECT phone, label, created_at FROM whatsapp_links WHERE slug=%s ORDER BY created_at, id",
+                "SELECT phone, platform, label, created_at FROM whatsapp_links WHERE slug=%s ORDER BY created_at, id",
                 (restaurant_id,),
             )
             rows = self._rows(cur)
@@ -1199,7 +1630,7 @@ class PostgresStore:
             if cur.fetchone():
                 raise DomainError("username_taken", "That owner username is already in use.", 409)
             if phone:
-                cur = self._execute(conn, "SELECT 1 FROM whatsapp_links WHERE phone=%s", (phone,))
+                cur = self._execute(conn, "SELECT 1 FROM whatsapp_links WHERE phone=%s AND platform='whatsapp'", (phone,))
                 if cur.fetchone():
                     raise DomainError("phone_already_linked", "That WhatsApp number is already linked to a restaurant.", 409)
             slug = uuid.uuid4().hex[:12]
@@ -1263,33 +1694,35 @@ class PostgresStore:
 
     def add_whatsapp_number(self, restaurant_id, key, payload):
         phone = validate_phone_number(payload.get("whatsapp_number"))
+        platform = validate_platform(payload.get("platform"))
         label = str(payload.get("label") or "").strip()[:100] or None
 
         def action(conn):
             cur = self._execute(conn, "SELECT 1 FROM tenants WHERE slug=%s", (restaurant_id,))
             if not cur.fetchone():
                 raise DomainError("not_found", "Restaurant not found.", 404)
-            cur = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s", (phone,))
+            cur = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s AND platform=%s", (phone, platform))
             existing = cur.fetchone()
             if existing:
                 if existing[0] == restaurant_id:
-                    raise DomainError("phone_already_linked", "That WhatsApp number is already linked to this restaurant.", 409)
-                raise DomainError("phone_already_linked", "That WhatsApp number is already linked to another restaurant.", 409)
+                    raise DomainError("phone_already_linked", f"That {platform} sender is already linked to this restaurant.", 409)
+                raise DomainError("phone_already_linked", f"That {platform} sender is already linked to another restaurant.", 409)
             self._execute(
                 conn,
-                "INSERT INTO whatsapp_links (id, slug, phone, label) VALUES (%s, %s, %s, %s)",
-                (uuid.uuid4().hex, restaurant_id, phone, label),
+                "INSERT INTO whatsapp_links (id, slug, phone, platform, label) VALUES (%s, %s, %s, %s, %s)",
+                (uuid.uuid4().hex, restaurant_id, phone, platform, label),
             )
-            self._audit(conn, "whatsapp_number_linked", f"WhatsApp number {phone} linked to this restaurant.", restaurant_id)
+            self._audit(conn, "sender_linked", f"{platform} sender {phone} linked to this restaurant.", restaurant_id)
             return self._restaurant_detail(conn, restaurant_id)
 
-        return self._idempotent(key, f"admin:add_number:{restaurant_id}", {"whatsapp_number": phone, "label": label}, action)
+        return self._idempotent(key, f"admin:add_number:{restaurant_id}", {"whatsapp_number": phone, "platform": platform, "label": label}, action)
 
-    def remove_whatsapp_number(self, restaurant_id, phone, key):
+    def remove_whatsapp_number(self, restaurant_id, phone, key, platform="whatsapp"):
         phone = validate_phone_number(phone)
+        platform = validate_platform(platform)
 
         def action(conn):
-            cur = self._execute(conn, "DELETE FROM whatsapp_links WHERE slug=%s AND phone=%s", (restaurant_id, phone))
+            cur = self._execute(conn, "DELETE FROM whatsapp_links WHERE slug=%s AND phone=%s AND platform=%s", (restaurant_id, phone, platform))
             if cur.rowcount != 1:
                 raise DomainError("not_found", "That WhatsApp number is not linked to this restaurant.", 404)
             self._audit(conn, "whatsapp_number_unlinked", f"WhatsApp number {phone} unlinked; its messages are no longer processed.", restaurant_id)

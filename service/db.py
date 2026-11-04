@@ -52,6 +52,16 @@ PLATFORMS = ("whatsapp", "telegram")
 # A physical stock count is stated with one of these markers; everything
 # after the marker is parsed as plain item clauses ("cabai 2 kg").
 _OPNAME_MARKER = re.compile(r"(?i)(?:stok\s*opname|opname|stok\s*fisik|stok\s*aktual|hitung\s*fisik|catat\s*stok)")
+
+
+def opname_remainder(text):
+    """The opname markers stripped, with multi-item lists split to lines.
+
+    Shared by the SQLite and Postgres stores so both parse opname messages
+    identically (the rules parser takes one item clause per line).
+    """
+    remainder = _OPNAME_MARKER.sub(" ", str(text or "").strip())
+    return re.sub(r"(?i)(?:\s+dan\s+|\s*,\s*)", "\n", remainder)
 SCHEMA_VERSION = "2"
 PBKDF2_ITERATIONS = 200_000
 SESSION_TTL = timedelta(days=7)
@@ -1290,7 +1300,7 @@ class Store:
         candidate = str(text or "").strip()
         if not candidate or not _OPNAME_MARKER.search(candidate):
             return None
-        remainder = _OPNAME_MARKER.sub(" ", candidate)
+        remainder = opname_remainder(candidate)
         # The rules parser takes one item per line; an opname listing several
         # ingredients ("cabai 2 kg dan bawang 1 kg") becomes one line each.
         remainder = re.sub(r"(?i)(?:\s+dan\s+|\s*,\s*)", "\n", remainder)
