@@ -74,8 +74,12 @@ async function api(path, {method='GET', body, key, timeout=15000} = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    const response = await fetch(path, {method, signal:controller.signal, headers:{Accept:'application/json', ...(body ? {'Content-Type':'application/json'} : {}), ...(key ? {'Idempotency-Key':key} : {})}, ...(body ? {body:JSON.stringify(body)} : {})});
-    const payload = await response.json();
+    // ngrok-skip-browser-warning keeps the free-tier interstitial from
+    // hijacking fetch() calls with a non-JSON warning page.
+    const response = await fetch(path, {method, signal:controller.signal, headers:{Accept:'application/json', 'ngrok-skip-browser-warning':'1', ...(body ? {'Content-Type':'application/json'} : {}), ...(key ? {'Idempotency-Key':key} : {})}, ...(body ? {body:JSON.stringify(body)} : {})});
+    let payload;
+    try { payload = await response.json(); }
+    catch { throw new Error(t('Gateway mengembalikan halaman bukan-JSON (halaman peringatan ngrok?). Muat ulang halaman, setujui peringatannya, lalu coba lagi.','The gateway returned a non-JSON page (ngrok warning?). Reload the page, accept the warning, then retry.')); }
     if (!response.ok) {
       const error = new Error(payload.error?.message || 'The request could not be completed.'); error.status=response.status; throw error;
       }

@@ -232,3 +232,13 @@ test('empty chart data renders a friendly empty state', () => {
   assert.match(run(`dailySpendChart([])`), /Belum ada data grafik/);
   assert.match(run(`ingredientSpendChart(null)`), /Belum ada data grafik/);
 });
+
+test('api calls send the ngrok skip header and report non-JSON gateway pages clearly', async () => {
+  let capturedHeaders;
+  const h = harness({fetchImpl: async (path, options) => {
+    capturedHeaders = options.headers;
+    return {ok:false, status:403, json:async () => { throw new SyntaxError('ngrok gateway error page'); }};
+  }});
+  await assert.rejects(h.run(`api('/v1/links')`), /Gateway mengembalikan halaman bukan-JSON/);
+  assert.equal(capturedHeaders['ngrok-skip-browser-warning'], '1');
+});
