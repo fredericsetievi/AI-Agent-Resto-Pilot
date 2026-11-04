@@ -58,7 +58,7 @@ test('no-item extraction has a useful title and rejection is never shown in revi
 
 test('superseded failing refresh cannot discard a newer successful refresh',async()=>{
   const h=harness();
-  h.run(`var rejectOld;api=()=>new Promise((_,reject)=>{rejectOld=reject});var oldRefresh=refresh();`);
+  h.run(`state.user={role:'owner'};var rejectOld;api=()=>new Promise((_,reject)=>{rejectOld=reject});var oldRefresh=refresh();`);
   h.run(`state.refreshId++;state.online=true;rejectOld(new Error('Old network failure'));`);
   await h.run('oldRefresh');
   assert.equal(h.run('state.online'),true);

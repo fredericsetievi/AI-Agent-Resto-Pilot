@@ -183,7 +183,7 @@ async function boot() {
     state.user = await api('/v1/auth/me');
     showApp(true);
     navigate();refresh();
-    setInterval(() => {if(!document.hidden && !state.busy)refresh();},5000);
+    startAutoRefresh();
   } catch(error) { showLogin(); }
 }
 function showLogin() {
@@ -208,7 +208,7 @@ async function login(event) {
     state.page = state.user.role==='admin' ? 'admin' : 'overview';
     if(location.hash.slice(1)!==state.page)location.hash='#'+state.page; // hashchange fires navigate()
     navigate(); refresh();
-    setInterval(() => {if(!document.hidden && !state.busy)refresh();},5000);
+    startAutoRefresh();
   } catch(error) { showError('login-error', error.message); }
   finally { if(button)button.disabled = false; }
 }
@@ -442,30 +442,45 @@ async function deleteRule(id) {
   catch(error) { toast('Gagal menghapus peraturan: '+error.message); }
   finally { state.rulesBusy=false; }
 }
+let autoRefreshTimer = null, refreshInFlight = false;
+function startAutoRefresh() {
+  // Exactly one interval no matter how many logins; each tick is skipped
+  // while a request is still in flight so a slow tunnel never piles up
+  // overlapping /overview requests.
+  if (autoRefreshTimer) return;
+  autoRefreshTimer = setInterval(async () => {
+    if (!document.hidden && !state.busy && !refreshInFlight) await refresh();
+  }, 5000);
+}
 async function refresh() {
-  // Admins have no restaurant of their own: refresh their console views
-  // instead of the owner overview (which would 404 and clobber the page).
-  if(state.user?.role==='admin'){
-    if(state.page==='admin-detail')refreshAdminOverview();
-    else if(state.page==='admin')loadAdminList().catch(()=>{});
-    return;
-  }
-  const id=++state.refreshId;
+  if (refreshInFlight || document.hidden || state.busy) return;
+  if (!state.user) return; // logged out: nothing to poll
+  refreshInFlight = true;
   try {
-    const data=await api('/v1/overview');
-    if(id!==state.refreshId)return;
-    state.data=data;state.online=true;
-    if(!WHATSAPP_SENDER && data.whatsapp_numbers?.length)WHATSAPP_SENDER=state.whatsappNumber||data.whatsapp_numbers[0].phone;
-    $('#sync-status').textContent=t(`Diperbarui ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`,`Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`);
-    showError('connection-error','');render();
-    if(state.draft && $('#review-dialog').open && !state.busy) updateApprovalButton();
-  } catch(error) {
-    if(id!==state.refreshId)return;
-    state.online=false;$('#sync-status').textContent=t('Koneksi terputus','Connection lost');
-    showError('connection-error',`${error.message} ${state.data?t('Menampilkan data terakhir yang dimuat. Keputusan dinonaktifkan sampai terhubung kembali.','Showing the last loaded data. Decisions are disabled until reconnected.'):''}`);
-    if (!state.data && state.user?.role!=='admin') $('#content').innerHTML=`<div class="empty"><strong>${t('Dapur sedang offline sementara.','The kitchen is temporarily offline.')}</strong>${t('Gunakan tombol refresh setelah server lokal berjalan.','Use the refresh button after starting the local server.')}</div>`;
-    updateApprovalButton();
-  }
+    // Admins have no restaurant of their own: refresh their console views
+    // instead of the owner overview (which would 404 and clobber the page).
+    if(state.user?.role==='admin'){
+      if(state.page==='admin-detail')refreshAdminOverview();
+      else if(state.page==='admin')loadAdminList().catch(()=>{});
+      return;
+    }
+    const id=++state.refreshId;
+    try {
+      const data=await api('/v1/overview');
+      if(id!==state.refreshId)return;
+      state.data=data;state.online=true;
+      if(!WHATSAPP_SENDER && data.whatsapp_numbers?.length)WHATSAPP_SENDER=state.whatsappNumber||data.whatsapp_numbers[0].phone;
+      $('#sync-status').textContent=t(`Diperbarui ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`,`Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`);
+      showError('connection-error','');render();
+      if(state.draft && $('#review-dialog').open && !state.busy) updateApprovalButton();
+    } catch(error) {
+      if(id!==state.refreshId)return;
+      state.online=false;$('#sync-status').textContent=t('Koneksi terputus','Connection lost');
+      showError('connection-error',`${error.message} ${state.data?t('Menampilkan data terakhir yang dimuat. Keputusan dinonaktifkan sampai terhubung kembali.','Showing the last loaded data. Decisions are disabled until reconnected.'):''}`);
+      if (!state.data && state.user?.role!=='admin') $('#content').innerHTML=`<div class="empty"><strong>${t('Dapur sedang offline sementara.','The kitchen is temporarily offline.')}</strong>${t('Gunakan tombol refresh setelah server lokal berjalan.','Use the refresh button after starting the local server.')}</div>`;
+      updateApprovalButton();
+    }
+  } finally { refreshInFlight = false; }
 }
 function openIntake() { showError('intake-error',''); $('#intake-dialog').showModal(); $('#purchase-text').focus(); }
 async function openReview(id) {
