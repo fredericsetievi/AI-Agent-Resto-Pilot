@@ -450,7 +450,7 @@ function startAutoRefresh() {
   if (autoRefreshTimer) return;
   autoRefreshTimer = setInterval(async () => {
     if (!document.hidden && !state.busy && !refreshInFlight) await refresh();
-  }, 5000);
+  }, 60000);
 }
 async function refresh() {
   if (refreshInFlight || document.hidden || state.busy) return;
