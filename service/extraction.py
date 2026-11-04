@@ -89,6 +89,9 @@ _SOURCE_ONLY_MODIFIERS = re.compile(
 )
 _CURRENCY_MARKER = re.compile(r"(?i)\brp\s*[\d.,]+\s*$")
 _MULTI_CLAUSE = re.compile(r"(?i)\b(?:dan|lalu|kemudian|serta)\b")
+# Trailing "dari <name>" names the supplier ("beli garam 1 kg 10rb dari Toko
+# Sebelah"). The name must start with a letter so trailing prices never match.
+_SUPPLIER_SUFFIX = re.compile(r"(?i)\s+dari\s+(?P<supplier>[a-z][^,;\r\n]{0,59})\s*$")
 
 
 def _decimal_text(value: str) -> Decimal | None:
@@ -283,12 +286,28 @@ def extract_purchase(text: str) -> dict[str, Any]:
         warnings.append("Input exceeds the 20-item limit; split the invoice into separate inputs before continuing.")
         return {"items": [], "warnings": warnings}
     items = []
+    supplier = None
     for line_number, line in nonempty:
+        # A trailing "dari <name>" clause names the supplier; strip it before
+        # line parsing so the name never corrupts the item match.
+        supplier_match = _SUPPLIER_SUFFIX.search(line)
+        if supplier_match:
+            candidate = supplier_match.group("supplier").strip().rstrip(".,!")
+            line = line[: supplier_match.start()].rstrip()
+            if supplier is None and candidate:
+                supplier = candidate
+        if not line:
+            # A supplier-only line ("dari Toko Sebelah") records the name and
+            # carries no item to parse.
+            continue
         item, line_warnings = _parse_clause(line, line_number)
         if item is not None:
             items.append(item)
         warnings.extend(line_warnings)
-    return {"items": items, "warnings": warnings}
+    result: dict[str, Any] = {"items": items, "warnings": warnings}
+    if supplier:
+        result["supplier"] = supplier
+    return result
 
 
 def normalize_item(item: dict[str, Any]) -> dict[str, Any]:

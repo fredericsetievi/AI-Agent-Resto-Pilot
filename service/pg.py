@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -49,64 +50,90 @@ def db_config():
     port_text = (env("SUPABASE_DB_PORT") or "5432").strip()
     if not port_text.isdigit() or not 0 < int(port_text) < 65536:
         raise RuntimeError("SUPABASE_DB_PORT must be a TCP port number.")
+    # TCP keepalives: the session pooler drops idle connections mid-flight,
+    # which surfaces as "server closed the connection unexpectedly".
     return {"host": (env("SUPABASE_DB_HOST") or "").strip() or f"db.{ref}.supabase.co",
             "port": int(port_text), "dbname": "postgres",
             "user": (env("SUPABASE_DB_USER") or "").strip() or "postgres",
-            "password": password}
+            "password": password,
+            "keepalives": 1, "keepalives_idle": 30,
+            "keepalives_interval": 10, "keepalives_count": 5}
 
 
 def reset_pool():
-    """Drop cached config and pool (used after a failed hosted bootstrap and by tests)."""
-    global _pool
+    """Drop this thread's ambient connection and cached config (used after a
+    failed hosted bootstrap and by tests). The ambient design has no global
+    pool: each worker thread owns one long-lived connection."""
     db_config.cache_clear()
-    with _pool_lock:
-        if _pool is not None:
-            try:
-                _pool.closeall()
-            except Exception:
-                pass
-        _pool = None
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    _local.conn = None
 
 
-# A small persistent pool: opening a fresh TLS connection to Supabase per
-# query costs a full handshake, which made multi-query reads time out.
-_pool = None
-_pool_lock = threading.Lock()
+# The session pooler is far from this machine (Tokyo), and on a mobile
+# hotspot a fresh TLS connection costs 3-5s. A small pool does not help
+# because pooler connections die between borrows, so every operation paid
+# a fresh handshake. Instead, each worker thread keeps ONE long-lived
+# connection; a cheap health check replaces it when the pooler drops it.
+_local = threading.local()
 
 
-def _get_pool():
-    global _pool
-    with _pool_lock:
-        if _pool is None:
-            from psycopg2.pool import SimpleConnectionPool
-
-            _pool = SimpleConnectionPool(1, 8, sslmode="require", connect_timeout=15, **db_config())
-        return _pool
-
-
-def _borrow():
-    """Take a live connection from the pool, replacing stale ones once."""
+def _ambient():
+    """This thread's long-lived Postgres connection, replaced when dead."""
     import psycopg2
 
-    last_error = None
-    for _attempt in range(2):
-        conn = _get_pool().getconn()
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
         try:
             cur = conn.cursor()
             cur.execute("SELECT 1")
             cur.close()
             conn.rollback()
             return conn
+        except psycopg2.OperationalError:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _local.conn = None
+    last_error = None
+    for attempt in range(3):
+        try:
+            conn = psycopg2.connect(sslmode="require", connect_timeout=15, **db_config())
+            _local.conn = conn
+            return conn
         except psycopg2.OperationalError as error:
             last_error = error
-            _get_pool().putconn(conn, close=True)
+            time.sleep(0.5 * (attempt + 1))
     raise last_error
+
+
+class _AmbientPool:
+    """Pool-like adapter over the per-thread ambient connection, so every
+    borrower (and hosted-mode tests) goes through one uniform entry point."""
+
+    def getconn(self):
+        return _ambient()
+
+    def putconn(self, conn, close=False):
+        pass  # ambient connections stay bound to their thread
+
+
+_AMBIENT_POOL = _AmbientPool()
+
+
+def _get_pool():
+    return _AMBIENT_POOL
 
 
 @contextmanager
 def pg_connection():
-    """One pooled connection; callers commit or roll back explicitly."""
-    conn = _borrow()
+    """One live connection; callers commit or roll back explicitly."""
+    conn = _get_pool().getconn()
     try:
         conn.autocommit = False
         yield conn
@@ -117,8 +144,6 @@ def pg_connection():
         except Exception:
             pass
         raise
-    finally:
-        _get_pool().putconn(conn)
 
 
 @contextmanager

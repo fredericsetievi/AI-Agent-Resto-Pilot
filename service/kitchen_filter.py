@@ -96,8 +96,10 @@ async def classify_items(names, *, api_key, model=DEFAULT_MODEL, base_url=DEFAUL
     """Ask the model which purchased items are kitchen supplies.
 
     Returns {"kitchen": [index], "non_kitchen": [index]}; indices refer to the
-    `names` list positions. Raises StepFunTextError on any configuration,
-    transport, or validation problem so the caller keeps the items untouched.
+    caller's original positions (the global item indices when `(index, name)`
+    tuples are passed, so upstream catalog-mapped gaps are preserved). Raises
+    StepFunTextError on any configuration, transport, or validation problem
+    so the caller keeps the items untouched.
     """
     if not api_key or not api_key.strip():
         raise StepFunTextError("Kitchen filter is not configured.", 503)
@@ -106,9 +108,11 @@ async def classify_items(names, *, api_key, model=DEFAULT_MODEL, base_url=DEFAUL
     # `names` entries are (global_index, name) pairs or plain strings; the
     # model always answers in the index space of the payload it receives.
     if names and isinstance(names[0], (tuple, list)):
-        payload_names = [(int(index), str(name)) for index, name in names]
+        global_indices = [int(index) for index, _name in names]
+        entry_names = [str(name) for _index, name in names]
     else:
-        payload_names = list(enumerate(names))
+        global_indices = list(range(len(names)))
+        entry_names = [str(name) for name in names]
     base_url = validate_base_url(base_url)
     model = validate_model(model)
     payload = {
@@ -117,8 +121,8 @@ async def classify_items(names, *, api_key, model=DEFAULT_MODEL, base_url=DEFAUL
         "messages": [{
             "role": "user",
             "content": PROMPT + "\nItems (JSON):\n" + json.dumps(
-                [{"index": index, "name": name[:100]} for index, name in payload_names],
-                ensure_ascii=False)[:MAX_MESSAGE_CHARS],
+                        [{"index": position, "name": name[:100]} for position, name in enumerate(entry_names)],
+                        ensure_ascii=False)[:MAX_MESSAGE_CHARS],
         }],
     }
     import httpx
@@ -139,4 +143,12 @@ async def classify_items(names, *, api_key, model=DEFAULT_MODEL, base_url=DEFAUL
     if response.status_code != 200:
         status = 429 if response.status_code == 429 else 502
         raise StepFunTextError(f"Kitchen filter rejected the request (HTTP {response.status_code}).", status)
-    return validate_classification(_content_json(response), max(index for index, _name in payload_names) + 1)
+    verdict = validate_classification(_content_json(response), len(entry_names))
+    # The model answers in the payload space it sees (0..n-1); map back to the
+    # caller's global item indices, which can be non-contiguous when upstream
+    # catalog matching already resolved some names (api.py passes only the
+    # unknown ones, keyed by their position in the full draft).
+    return {
+        "kitchen": [global_indices[position] for position in verdict["kitchen"]],
+        "non_kitchen": [global_indices[position] for position in verdict["non_kitchen"]],
+    }

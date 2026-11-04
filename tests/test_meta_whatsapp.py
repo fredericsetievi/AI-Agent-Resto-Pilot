@@ -334,6 +334,42 @@ def test_inbound_photo_is_read_by_vision_and_becomes_a_draft(tmp_path, provider)
         assert draft["items"][0]["ingredient_id"] == "cabai"
 
 
+def test_purchase_caption_overrides_the_printed_invoice_title(tmp_path, provider):
+    vision = FakeVisionClient()
+    # A supplier invoice headed "Sales Invoice" is still a purchase for the
+    # warung when the owner captions it as one: the classifier is skipped
+    # (its answer would have been a sale) and the purchase pipeline runs.
+    vision.responses.append(vision_completion({
+        "supplier": "Petik Segar",
+        "items": [{"raw_name": "Cabai merah", "quantity": "3", "unit": "kg", "line_total_idr": 150000, "confidence": "high"}],
+        "unreadable": [],
+    }))
+    vision.responses.append(vision_completion({
+        "document_type": "sale_receipt", "lines": [], "unresolved": [],
+    }))
+    provider.responses.extend([
+        FakeResponse(body={"url": "https://lookaside.example/media/three", "mime_type": "image/jpeg"}),
+        FakeResponse(content=b"\xff\xd8\xff\xe0" + b"\x00" * 64),
+    ])
+    app = photo_app(tmp_path, provider, vision)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        from conftest import login_owner
+        login_owner(client)
+        body = payload(event_id="wamid.photo-caption", message_type="image")
+        message = body["entry"][0]["changes"][0]["value"]["messages"][0]
+        message["image"]["caption"] = "nota pembelian bahan dari supplier"
+        assert webhook(client, body).status_code == 200
+
+        assert len(vision.calls) == 1
+        replies = [call for call in provider.calls if call["method"] == "POST"]
+        assert "Total: Rp150.000" in replies[0]["json"]["text"]["body"]
+        with app.state.store.transaction() as conn:
+            draft = json.loads(conn.execute("SELECT body FROM drafts ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+        assert draft["status"] == "pending_approval"
+        assert draft["supplier"] == "Petik Segar"
+        assert draft["items"][0]["ingredient_id"] == "cabai"
+
+
 def test_inbound_photo_with_a_failed_read_falls_back_to_the_safe_reply(tmp_path, provider):
     vision = FakeVisionClient()
     vision.responses.append(FakeResponse(status_code=500))

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from conftest import SENDER_NUMBER as SENDER, login_owner
 from service.api import create_app
 from service.db import RESTAURANT
-from service.whatsapp import draft_reply, parse_payment_followup
+from service.whatsapp import draft_reply, parse_payment_followup, parse_remove_request
 
 OTHER = "628999000001"
 
@@ -89,6 +89,13 @@ def test_simulator_deduplicates_keys_and_events(client):
     assert data(simulate(client, "ya", event=event)) == approved
     assert len(overview(client)["purchases"]) == 3
     assert len(data(client.get("/v1/whatsapp/messages", params={"sender": SENDER}))["messages"]) == 4
+
+
+def test_order_with_dari_supplier_prefills_draft_supplier(client):
+    created = data(simulate(client, "Beli cabai 3 kg 150rb dari Bu Sari"))
+    assert created["draft"]["supplier"] == "Bu Sari"
+    assert created["draft"]["items"][0]["raw_name"] == "cabai"
+    assert data(simulate(client, "batal"))["draft"]["status"] == "rejected"
 
 
 def test_active_draft_cannot_be_replaced_and_wrong_sender_cannot_approve(client):
@@ -286,6 +293,23 @@ def test_payment_followup_parser_matches_spec_examples():
     assert parse_payment_followup("Beli telur 2 kg 30rb") is None
     assert parse_payment_followup("halo") is None
     assert parse_payment_followup("ya") is None
+
+
+def test_parse_remove_request_modes():
+    assert parse_remove_request("hapus semua") == {"mode": "all"}
+    assert parse_remove_request("Hapus semuanya") == {"mode": "all"}
+    assert parse_remove_request("remove all") == {"mode": "all"}
+    assert parse_remove_request("hapus 2") == {"mode": "indices", "indices": [2]}
+    assert parse_remove_request("hapus item 2") == {"mode": "indices", "indices": [2]}
+    assert parse_remove_request("hapus 2, 4") == {"mode": "indices", "indices": [2, 4]}
+    assert parse_remove_request("hapus 2; 4") == {"mode": "indices", "indices": [2, 4]}
+    assert parse_remove_request("hapus 2 4") == {"mode": "indices", "indices": [2, 4]}
+    # Bare 'hapus', purchases and small talk never masquerade as removals.
+    assert parse_remove_request("hapus") is None
+    assert parse_remove_request("hapus semua cabai") is None
+    assert parse_remove_request("beli cabai 3 kg") is None
+    assert parse_remove_request("ya") is None
+    assert parse_remove_request(None) is None
 
 
 def test_draft_reply_template_is_scannable_and_confirms_as_one():
