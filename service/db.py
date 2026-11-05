@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from .inventory import InventoryMixin, SQLITE_SCHEMA
 from .operations import OperationsMixin, SQLITE_SCHEMA as OPERATIONS_SQLITE_SCHEMA
 from .purchase_sources import PurchaseSourcesMixin, SQLITE_SCHEMA as PURCHASE_SOURCES_SQLITE_SCHEMA
+from .purchase_idempotency import purchase_idempotent
 from .extraction import catalog_aliases, extract_purchase, normalize_item
 from .onboarding import restaurant_selection
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, parse_payment_followup, parse_remove_request, stock_reply, weekly_summary_reply
@@ -445,14 +446,14 @@ class Store(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
             extracted = extract_purchase(payload["text"])
         def action(conn):
             return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier") or extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=restaurant_id), restaurant_id)
-        return self._idempotent(key, "intake", payload, action)
+        return purchase_idempotent(self, key, "intake", payload, action, restaurant_id)
 
     def intake_image(self, key, image_sha256, source_label, supplier, items, warnings, restaurant_id=None):
         """Create a draft from a vision extractor; the photo digest keys idempotency."""
         payload = {"image_sha256": image_sha256, "source_label": source_label, "supplier": supplier}
         def action(conn):
             return self._present(conn, self._new_draft(conn, source_label, supplier, items, warnings, restaurant_id=restaurant_id), restaurant_id)
-        return self._idempotent(key, "intake_image", payload, action)
+        return purchase_idempotent(self, key, "intake_image", payload, action, restaurant_id)
 
     def _check_editable(self, draft, version):
         if draft["version"] != version:
@@ -472,7 +473,7 @@ class Store(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
             self._save_draft(conn, draft)
             self._audit(conn, "draft_edited", f"Draft {draft_id[:8]} reviewed and edited (version {draft['version']}).", restaurant_id)
             return self._present(conn, draft, restaurant_id)
-        return self._idempotent(key, "edit:" + draft_id, payload, action)
+        return purchase_idempotent(self, key, "edit:" + draft_id, payload, action, restaurant_id)
 
     def _post(self, conn, draft, created_at=None, restaurant_id=None):
         self._present(conn, draft, restaurant_id)
@@ -504,7 +505,7 @@ class Store(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
             draft = self._load_draft(conn, draft_id, restaurant_id)
             return self._decide(conn, draft, payload, restaurant_id)
 
-        draft = self._idempotent(key, "decision:" + draft_id, payload, action)
+        draft = purchase_idempotent(self, key, "decision:" + draft_id, payload, action, restaurant_id)
         self.maybe_cloud_mirror(draft, restaurant_id)
         return draft
 

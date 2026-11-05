@@ -129,6 +129,145 @@ def test_a_dashboard_cannot_see_or_touch_another_restaurants_drafts(app, admin, 
     assert all(row["id"] != draft["id"] for row in client.get("/v1/overview").json()["data"]["drafts"])
 
 
+def test_purchase_intake_retry_key_is_scoped_to_owner_restaurant(app, admin, client):
+    second_restaurant(admin)
+    other = second_owner(app, "lainku", "rahasia456")
+    headers = {"Idempotency-Key": "same-purchase-intake-key"}
+    payload = {"text": "Beli telur 2 kg 60000"}
+    first = client.post("/v1/intake", headers=headers, json=payload)
+    assert first.status_code == 201, first.text
+    assert client.post("/v1/intake", headers=headers, json=payload).json() == first.json()
+    second = other.post("/v1/intake", headers=headers, json=payload)
+    assert second.status_code == 201, second.text
+    assert other.post("/v1/intake", headers=headers, json=payload).json() == second.json()
+    first_id, second_id = first.json()["data"]["id"], second.json()["data"]["id"]
+    assert first_id != second_id, "A different owner received the first restaurant's cached intake response"
+    assert client.get(f"/v1/drafts/{second_id}").status_code == 404
+    assert other.get(f"/v1/drafts/{first_id}").status_code == 404
+    with app.state.store.transaction() as conn:
+        rows = conn.execute("SELECT restaurant_id FROM drafts WHERE id IN (?,?)", (first_id, second_id)).fetchall()
+        assert len({row[0] for row in rows}) == 2
+        assert conn.execute("SELECT count(*) FROM purchases").fetchone()[0] == 2  # Only seeded history.
+
+
+def test_purchase_image_intake_retry_key_is_scoped_to_owner_restaurant(tmp_path, monkeypatch):
+    from service import api
+
+    async def extracted_invoice(*unused_args, **unused_kwargs):
+        return {"supplier": "Synthetic supplier", "items": [{"ingredient_id": "telur", "raw_name": "Telur", "quantity": "2", "unit": "kg", "line_total_idr": 60000}], "warnings": []}
+
+    monkeypatch.setattr(api, "extract_invoice", extracted_invoice)
+    app = create_app(tmp_path / "image-owner-isolation.sqlite3", vision_api_key="synthetic-test-key")
+    admin = second_owner(app, "admin", "admin123")
+    second_restaurant(admin)
+    first_owner = second_owner(app, "owner", "owner123")
+    other = second_owner(app, "lainku", "rahasia456")
+    payload = {"image_base64": base64.b64encode(b"\xff\xd8\xff\xe0" + b"0" * 64).decode(), "media_type": "image/jpeg"}
+    headers = {"Idempotency-Key": "same-purchase-photo-key"}
+    first = first_owner.post("/v1/intake/image", headers=headers, json=payload)
+    assert first.status_code == 201, first.text
+    assert first_owner.post("/v1/intake/image", headers=headers, json=payload).json() == first.json()
+    second = other.post("/v1/intake/image", headers=headers, json=payload)
+    assert second.status_code == 201, second.text
+    assert other.post("/v1/intake/image", headers=headers, json=payload).json() == second.json()
+    first_id, second_id = first.json()["data"]["id"], second.json()["data"]["id"]
+    assert first_id != second_id, "A different owner received the first restaurant's cached image-intake response"
+    assert first_owner.get(f"/v1/drafts/{second_id}").status_code == 404
+    assert other.get(f"/v1/drafts/{first_id}").status_code == 404
+    with app.state.store.transaction() as conn:
+        assert conn.execute("SELECT count(*) FROM purchases").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("operation", ["edit", "decision"])
+def test_cached_purchase_mutation_cannot_replay_across_owner_restaurants(app, admin, client, operation):
+    second_restaurant(admin)
+    other = second_owner(app, "lainku", "rahasia456")
+    draft = other.post("/v1/intake", headers={"Idempotency-Key": uuid4().hex}, json={"text": "Beli telur 2 kg 60000"}).json()["data"]
+    headers = {"Idempotency-Key": "cached-private-purchase-" + operation}
+    if operation == "edit":
+        path = f"/v1/drafts/{draft['id']}"
+        payload = {"expected_version": draft["version"], "supplier": "Other restaurant supplier", "items": [{"ingredient_id": "telur", "raw_name": "Telur", "quantity": "2", "unit": "kg", "line_total_idr": 60000}]}
+        owner_request, foreign_request = other.patch, client.patch
+    else:
+        reviewed = other.patch(f"/v1/drafts/{draft['id']}", headers={"Idempotency-Key": uuid4().hex}, json={"expected_version": draft["version"], "supplier": "Other restaurant supplier", "items": [{"ingredient_id": "telur", "raw_name": "Telur", "quantity": "2", "unit": "kg", "line_total_idr": 60000}]}).json()["data"]
+        path = f"/v1/drafts/{draft['id']}/decision"
+        payload = {"expected_version": reviewed["version"], "decision": "approve", "received": True}
+        owner_request, foreign_request = other.post, client.post
+    first = owner_request(path, headers=headers, json=payload)
+    assert first.status_code == 200, first.text
+    assert owner_request(path, headers=headers, json=payload).json() == first.json()
+    with app.state.store.transaction() as conn:
+        before = {
+            "purchases": conn.execute("SELECT count(*) FROM purchases").fetchone()[0],
+            "movements": conn.execute("SELECT count(*) FROM movements").fetchone()[0],
+            "stock": [tuple(row) for row in conn.execute("SELECT restaurant_id,ingredient_id,quantity FROM inventory ORDER BY restaurant_id,ingredient_id")],
+        }
+    foreign = foreign_request(path, headers=headers, json=payload)
+    assert foreign.status_code in (404, 409), "A different owner replayed a cached purchase mutation: " + foreign.text
+    assert "data" not in foreign.json()
+    assert client.get(path.split("/decision")[0]).status_code == 404
+    assert owner_request(path, headers=headers, json=payload).json() == first.json()
+    with app.state.store.transaction() as conn:
+        after = {
+            "purchases": conn.execute("SELECT count(*) FROM purchases").fetchone()[0],
+            "movements": conn.execute("SELECT count(*) FROM movements").fetchone()[0],
+            "stock": [tuple(row) for row in conn.execute("SELECT restaurant_id,ingredient_id,quantity FROM inventory ORDER BY restaurant_id,ingredient_id")],
+        }
+    assert after == before
+
+
+@pytest.mark.parametrize("operation", ["intake", "intake_image", "edit", "decision"])
+def test_legacy_purchase_retry_cache_preserves_owner_without_cross_restaurant_replay(app, admin, client, operation):
+    from service.db import DomainError
+
+    second_restaurant(admin)
+    other = second_owner(app, "lainku", "rahasia456")
+    owner_id = client.get("/v1/auth/me").json()["data"]["restaurant_id"]
+    other_id = other.get("/v1/auth/me").json()["data"]["restaurant_id"]
+    store = app.state.store
+    extracted = {"supplier": "Legacy test supplier", "items": [{"ingredient_id": "telur", "raw_name": "Telur", "quantity": "2", "unit": "kg", "line_total_idr": 60000}], "warnings": []}
+    intake_payload = {"text": "Beli telur 2 kg 60000", "supplier": "Legacy test supplier"}
+    draft = store.intake(uuid4().hex, intake_payload, extracted=extracted, restaurant_id=owner_id)
+    if operation == "intake":
+        legacy_payload, cached = intake_payload, draft
+        invoke = lambda key, tenant: store.intake(key, intake_payload, extracted=extracted, restaurant_id=tenant)
+    elif operation == "intake_image":
+        image_digest, source_label = "a" * 64, "Synthetic legacy receipt"
+        legacy_payload = {"image_sha256": image_digest, "source_label": source_label, "supplier": extracted["supplier"]}
+        cached = store.intake_image(uuid4().hex, image_digest, source_label, extracted["supplier"], extracted["items"], [], restaurant_id=owner_id)
+        invoke = lambda key, tenant: store.intake_image(key, image_digest, source_label, extracted["supplier"], extracted["items"], [], restaurant_id=tenant)
+    elif operation == "edit":
+        legacy_payload = {"expected_version": draft["version"], "supplier": "Legacy edit supplier", "items": extracted["items"]}
+        cached = store.edit(draft["id"], uuid4().hex, legacy_payload, owner_id)
+        invoke = lambda key, tenant: store.edit(draft["id"], key, legacy_payload, tenant)
+    else:
+        legacy_payload = {"expected_version": draft["version"], "decision": "approve", "received": True}
+        cached = store.decision(draft["id"], uuid4().hex, legacy_payload, owner_id)
+        assert cached["status"] == "recorded"
+        invoke = lambda key, tenant: store.decision(draft["id"], key, legacy_payload, tenant)
+    # Seed the old, globally keyed response exactly as pre-fix versions did.
+    legacy_key = "legacy-purchase-" + operation
+    legacy_operation = operation + (":" + draft["id"] if operation in {"edit", "decision"} else "")
+    assert store._idempotent(legacy_key, legacy_operation, legacy_payload, lambda conn: cached) == cached
+    with store.transaction() as conn:
+        before = {"purchases": conn.execute("SELECT count(*) FROM purchases").fetchone()[0], "movements": conn.execute("SELECT count(*) FROM movements").fetchone()[0], "stock": [tuple(row) for row in conn.execute("SELECT restaurant_id,ingredient_id,quantity FROM inventory ORDER BY restaurant_id,ingredient_id")]}
+    assert invoke(legacy_key, owner_id) == cached
+    assert invoke(legacy_key, owner_id) == cached
+    if operation in {"intake", "intake_image"}:
+        foreign = invoke(legacy_key, other_id)
+        assert foreign["id"] != cached["id"], "Legacy cache returned the original owner's draft to another restaurant"
+        assert invoke(legacy_key, other_id) == foreign
+        assert client.get(f"/v1/drafts/{foreign['id']}").status_code == 404
+        assert other.get(f"/v1/drafts/{cached['id']}").status_code == 404
+    else:
+        with pytest.raises(DomainError) as error:
+            invoke(legacy_key, other_id)
+        assert error.value.status in (404, 409)
+    with store.transaction() as conn:
+        after = {"purchases": conn.execute("SELECT count(*) FROM purchases").fetchone()[0], "movements": conn.execute("SELECT count(*) FROM movements").fetchone()[0], "stock": [tuple(row) for row in conn.execute("SELECT restaurant_id,ingredient_id,quantity FROM inventory ORDER BY restaurant_id,ingredient_id")]}
+    assert after == before, "Legacy retries must not post purchases or stock twice"
+
+
 def test_inventory_purchases_and_activity_stay_per_restaurant(app, admin, client):
     second_restaurant(admin)
     other = second_owner(app, "lainku", "rahasia456")
@@ -177,7 +316,7 @@ def test_custom_ingredients_stay_inside_their_own_restaurant(app, admin, client)
 
     # The demo owner's catalog has no terasi: the same word stays unmapped and
     # would create a separate ingredient only for the demo restaurant.
-    assert all(row["id"] != "terasi" or True for row in [] ) or all((row.get("id") or row.get("ingredient_id")) != "terasi" for row in client.get("/v1/overview").json()["data"]["ingredients"])
+    assert all((row.get("id") or row.get("ingredient_id")) != "terasi" for row in client.get("/v1/overview").json()["data"]["ingredients"])
     mine = client.post("/v1/intake", headers={"Idempotency-Key": uuid4().hex}, json={"text": "beli terasi"}).json()["data"]
     assert mine["items"][0]["ingredient_id"] is None
     assert mine["items"][0]["raw_name"] == "terasi"

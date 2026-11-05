@@ -137,6 +137,13 @@ backend service. Keep the native frontend plugin's source path. Verify the
 vendored service is byte-identical to the pinned application source, then run
 the offline tests and native frontend build before publication.
 
+New dashboard scripts must also be registered in the native plugin's `ASSETS`
+map for both development serving and build copying. In particular,
+`/assets/i18n.js` must be exported and loaded before `app.js`. Preserve the native
+source path and port repair while applying that asset entry; do not replace the
+whole native plugin with the older export. Check every HTML-referenced asset
+over HTTP and exercise the ID/EN switch after saving and after publication.
+
 The published V7 native workspace also contains a preview startup repair in
 `app/start_app_v2.sh` and `app/frontend/vite.config.ts`: the launcher reclaims
 only its own stale project processes on the canonical ports and records the

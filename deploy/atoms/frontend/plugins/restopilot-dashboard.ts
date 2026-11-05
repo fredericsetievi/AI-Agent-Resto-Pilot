@@ -6,7 +6,7 @@ import type { Plugin } from 'vite';
  * Serve the ORIGINAL RestoPilot dashboard from this Atoms project.
  *
  * Source files in the repository root frontend/ directory are only read, never modified:
- * - build: index.html -> dist/index.html; app.js, styles.css -> dist/assets/
+ * - build: index.html -> dist/index.html; dashboard assets -> dist/assets/
  * - dev:   the same files are served by middleware, so preview and the saved
  *          build use one path (API calls go to the managed backend via /api).
  *
@@ -19,6 +19,7 @@ const shimPath = path.join(adapterDir, 'restopilot-adapter/api-base.js');
 const APP_SCRIPT = '<script src="/assets/app.js" defer></script>';
 
 const ASSETS: Record<string, { file: string; type: string }> = {
+  '/assets/i18n.js': { file: path.join(sourceDir, 'i18n.js'), type: 'text/javascript; charset=utf-8' },
   '/assets/app.js': { file: path.join(sourceDir, 'app.js'), type: 'text/javascript; charset=utf-8' },
   '/assets/styles.css': { file: path.join(sourceDir, 'styles.css'), type: 'text/css; charset=utf-8' },
   '/assets/restopilot-api-base.js': { file: shimPath, type: 'text/javascript; charset=utf-8' },
