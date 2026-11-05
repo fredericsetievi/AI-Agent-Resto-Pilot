@@ -962,20 +962,23 @@ def create_app(
         return {"data": await run_in_threadpool(store.whatsapp_ingest, idempotency_key, payload, restaurant_id=actor["restaurant_id"], open_onboarding=whatsapp_open_onboarding)}
 
     async def enrich_whatsapp_text(payload, restaurant, *, channel):
-        """Operations and active clarification take priority over purchase AI."""
+        """A physical stock count owns the message first; operations and active
+        clarification come next, purchase AI last."""
         text = payload.get("transcript") or payload.get("text") or ""
+        # The opname parse must win before the operations classifier claims
+        # the same words, so the LLM pre-phrase and the pending-opname "ya"
+        # flow stay reachable.
+        if await run_in_threadpool(store.parse_opname, text, restaurant["id"]) is not None:
+            payload["opname_answer"] = await build_opname_answer(text, restaurant["id"])
+            return
         candidate = parse_operations_text(text)
         if candidate is not None:
             payload["operation_candidate"] = candidate
             return
         if await run_in_threadpool(store.has_active_operation, payload["sender"], channel):
             return
-        # A physical stock count takes priority over stock/data questions;
-        # both are read-only pre-ingest lookups with the ledger as source.
-        payload["opname_answer"] = await build_opname_answer(text, restaurant["id"])
-        if payload["opname_answer"] is None:
-            payload["stock_answer"] = await build_stock_answer(text, restaurant["id"])
-        if payload["opname_answer"] is None and payload["stock_answer"] is None:
+        payload["stock_answer"] = await build_stock_answer(text, restaurant["id"])
+        if payload["stock_answer"] is None:
             extracted = await filter_kitchen_items(
                 await extract_text(text, restaurant["name"]), restaurant["id"])
             hint = await maybe_intent_hint(text, extracted)
@@ -1361,7 +1364,7 @@ def create_app(
                     entry["update_ids"].add(message["event_id"])
                 if replay:
                     continue  # a retried update; the flush owns the one reply
-                part = {"extracted": None}
+                part = {"extracted": None, "digest": None}
                 if message.get("media_kind") == "image" and vision_api_key and sender_restaurant and message.get("media_id"):
                     try:
                         photo, _media_type = await download_telegram_file(
@@ -1370,6 +1373,8 @@ def create_app(
                             api_base=telegram_api_base,
                             client=telegram_http_client,
                         )
+                        digest = hashlib.sha256(photo).hexdigest()
+                        part["digest"] = digest
                         part["extracted"] = await filter_kitchen_items(
                             await extract_invoice(
                                 photo,
@@ -1406,6 +1411,7 @@ def create_app(
                         max_bytes=TG_MAX_PDF_BYTES,
                     )
                     pages = render_pdf_pages(pdf_bytes)
+                    payload["operation_source"] = {"digest": hashlib.sha256(pdf_bytes).hexdigest()}
                     merged = {"items": [], "warnings": []}
                     supplier = None
                     for page in pages:
@@ -1438,6 +1444,8 @@ def create_app(
                         api_base=telegram_api_base,
                         client=telegram_http_client,
                     )
+                    digest = hashlib.sha256(photo).hexdigest()
+                    payload["operation_source"] = {"digest": digest}
                     payload["extracted"] = await filter_kitchen_items(
                         await extract_invoice(
                             photo,
@@ -1534,6 +1542,8 @@ def create_app(
                 merged_warnings.extend(part["extracted"].get("warnings") or [])
                 supplier = supplier or part["extracted"].get("supplier")
             payload["extracted"] = {"items": merged_items, "warnings": merged_warnings, "supplier": supplier}
+            digests = sorted({part["digest"] for part in extracted_parts if part.get("digest")})
+            payload["operation_source"] = {"digest": hashlib.sha256(("|".join(digests) or payload["source_label"]).encode()).hexdigest()}
             payload["source_label"] = f"{len(parts)} foto nota Telegram"
         try:
             await deliver_telegram(payload, {"sender": entry["sender"]})

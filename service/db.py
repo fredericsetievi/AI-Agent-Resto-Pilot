@@ -990,8 +990,12 @@ class Store(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
             # The payment/supplier follow-up is a one-shot offer: the very next
             # message either answers it or the opportunity lapses.
             pending_purchase = thread.get("pending_followup")
+            # A physical stock count (pending or arriving) owns the message:
+            # the operations handler must not swallow its proposal or its YA.
+            opname_pending = bool(thread.get("pending_opname_id"))
+            opname_incoming = (not opname_pending) and self.parse_opname(payload["text"], tenant, conn=conn) is not None
             operation_result = None
-            if tenant and onboarding_reply is None:
+            if tenant and onboarding_reply is None and not opname_pending and not opname_incoming:
                 operation_result = self._operation_handle(
                     conn, thread, tenant, transcript or payload["text"],
                     candidate=operation_candidate, source=operation_source,
