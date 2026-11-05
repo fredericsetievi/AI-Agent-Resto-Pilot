@@ -1,5 +1,40 @@
 # WhatsApp stock and sales reporting
 
+## Current release
+
+Published on 2026-11-05 as **Atoms V13**, containing Version 11's features with
+the translation and restaurant-isolation corrections, on the existing
+https://restopilot-dashboard.pub.atoms.world/ domain. Application import:
+`89edc13cfa8e0246fc3e7625d230c65faae13dc1`; equivalent native packaging fix:
+`d1f34bb9ee873afeea9433499aac95348d0f3ed5`.
+
+`i18n.js` is exported and all dashboard assets are registered with Rollup before
+publication. This final native fix was applied directly with Code → Submit all,
+then published with Update. V12 preview passed, but its publication exposed a
+static asset mismatch; V13 and subsequent CDN cache expiry resolved it. Final
+public browser checks verified `t` is a function, ID → EN → ID and persistence
+after reload. The proposed content-hash URL optimization is not deployed.
+
+Purchase idempotency responses are scoped to the restaurant. Legacy responses
+are replayed only after checking actual draft ownership, with a PostgreSQL lock
+protecting overlap with older in-flight requests. No migration/backfill is
+required. No migration was applied or replayed; existing 0004/0005 remain intact.
+
+Local checks: 407 Python passed, 44 skipped; all 40 disposable local PostgreSQL
+tests passed separately; 26 JavaScript checks passed. A real Vite build check
+confirmed the old copy-only plugin omitted dashboard assets from build output
+and the corrected plugin emits all four. Atoms' imported source suite reported
+404 passed/44 skipped, frontend22 and passing native lint/build; all 21 service
+modules matched the pinned application source. V13's manual build succeeded.
+
+Public hosted/Supabase health/readiness200, signed-out inventory401, owner
+login/inventory200 and asset/source checks passed. Protected table counts and
+fingerprints were preserved: stock23, purchases24, users4, links6, events2,
+recipes2 and settings1. No QA draft, approval or outbound WhatsApp message was
+created. This is not a fresh real Meta receipt/voice end-to-end test.
+
+## Previous release
+
 Published on 2026-10-29 as **Atoms V10 — WhatsApp Reliability Release** on the existing
 https://restopilot-dashboard.pub.atoms.world/ domain, from source
 `bd5aec77a23c2c4e7ed1a1a83336f29093d3f640`. This includes the dashboard inventory

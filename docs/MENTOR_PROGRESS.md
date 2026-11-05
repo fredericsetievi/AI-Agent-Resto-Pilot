@@ -28,10 +28,25 @@ multi-restaurant WhatsApp field trial remains separate user validation.
 
 ## WhatsApp to dashboard release
 
-Version 11's main features are prepared for publication with two corrections:
-the Atoms translation asset is registered for preview/build, and purchase retry
-responses cannot cross restaurants. No schema migration is needed. Publication
-status and the final saved version will be recorded after public checks pass.
+**Published on 5 November 2026 as Atoms Version 13** on the existing
+https://restopilot-dashboard.pub.atoms.world/ domain. This contains Version 11's
+features, the translation fix and the restaurant-scoped purchase retry fix.
+Application import: `89edc13cfa8e0246fc3e7625d230c65faae13dc1`.
+Equivalent native packaging correction on main:
+`d1f34bb9ee873afeea9433499aac95348d0f3ed5`.
+
+The native plugin now exports `i18n.js` and registers all dashboard assets in the
+Rollup build output. The final correction was made directly through the Code
+editor and built with Submit all; no further Atoms AI prompt was used. Version
+12's saved preview passed but publication exposed missing/stale static assets.
+Version 13 and CDN cache expiry resolved the public asset checks. Public browser
+checks confirmed Indonesian → English → Indonesian and persistence after reload.
+
+No migration was required or applied. Hosted Supabase health/readiness,
+signed-out inventory401, owner login and inventory readback passed. Existing
+business-table fingerprints were preserved. No business entry or WhatsApp test
+message was created during this release. A proposed content-hash URL enhancement
+remains an ignored local patch and is not part of Version 13.
 
 ## User research
 
