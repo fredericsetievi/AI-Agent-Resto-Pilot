@@ -63,6 +63,14 @@ export function restopilotDashboard(): Plugin {
         next();
       });
     },
+    generateBundle() {
+      // Register dashboard assets with Rollup as well as writing dist below.
+      // Publication must see them in the build output, not only on disk after
+      // closeBundle, when a static-asset upload manifest may already exist.
+      for (const [url, asset] of Object.entries(ASSETS)) {
+        this.emitFile({ type: 'asset', fileName: url.slice(1), source: fs.readFileSync(asset.file) });
+      }
+    },
     closeBundle() {
       if (!outDir) return;
       const assetsDir = path.join(outDir, 'assets');
