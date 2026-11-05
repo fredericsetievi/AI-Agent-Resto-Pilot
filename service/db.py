@@ -754,6 +754,20 @@ class Store(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
                 found.append(ingredient_id)
                 seen.add(ingredient_id)
                 break
+        # A matched name also covers its prefix family: asking "bawang" when
+        # bawang and bawang_putih both exist surfaces every plausibly-meant
+        # row instead of one arbitrary sibling.
+        family = []
+        for matched in found:
+            for ingredient in self._catalog_for(restaurant_id)["list"]:
+                if ingredient["id"] in seen:
+                    continue
+                slug = str(ingredient["id"])
+                if slug.startswith(matched) or str(ingredient["name"]).casefold().startswith(matched):
+                    family.append(ingredient["id"])
+        if family:
+            seen.update(family)
+            found = found + family
         return found
 
     def restaurant_name(self, restaurant_id):

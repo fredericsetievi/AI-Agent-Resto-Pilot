@@ -14,6 +14,7 @@ import base64
 import contextlib
 import csv
 import hashlib
+import re
 import io
 import logging
 from contextlib import AsyncExitStack
@@ -548,6 +549,12 @@ def create_app(
         deterministic text. Returns None when the message is none of them,
         leaving the purchase flow alone.
         """
+        # Meta questions about the restaurant itself ("apa nama toko saya?")
+        # never touch the ledgers; the name comes straight from the store.
+        if re.search(r"(?i)\b(?:apa|siapa)?\s*(?:nama\s+)?(?:toko|resto|restaurant)\s*(?:saya|kita|ini)\b", text):
+            name = store.restaurant_name(restaurant_id)
+            if name:
+                return {"body": f"Nama toko Anda: {name}."}
         data = store.data_facts(text, restaurant_id)
         if data is not None:
             if not data["facts"]:
@@ -570,12 +577,19 @@ def create_app(
         facts = store.stock_facts(text, restaurant_id)
         if facts is None:
             return None
-        reply = stock_reply(facts["facts"])
+        facts_list = facts["facts"]
+        # "apa saja stok yang di bawah ambang?" asks for a filtered view:
+        # only rows below their reorder threshold belong in that answer.
+        if re.search(r"(?i)\b(?:ambang|threshold|reorder|pesan ulang|menipis)\b", text):
+            facts_list = [fact for fact in facts_list if fact.get("low_stock")]
+            if not facts_list:
+                return {"body": "Semua stok masih di atas ambang pesan ulang. 👍"}
+        reply = stock_reply(facts_list)
         if stock_llm_enabled and vision_api_key:
             try:
                 reply = await phrase_stock_answer(
                     facts["question"],
-                    facts["facts"],
+                    facts_list,
                     restaurant=facts.get("restaurant_name"),
                     api_key=vision_api_key,
                     model=text_llm_model,
