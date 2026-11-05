@@ -137,6 +137,22 @@ backend service. Keep the native frontend plugin's source path. Verify the
 vendored service is byte-identical to the pinned application source, then run
 the offline tests and native frontend build before publication.
 
+New dashboard scripts must also be registered in the native plugin's `ASSETS`
+map for development serving and emitted as Rollup assets in `generateBundle`,
+as well as copied to the final output. Files written only in `closeBundle`
+can be absent from publication's asset list even when saved preview serves them.
+In particular,
+`/assets/i18n.js` must be exported and loaded before `app.js`. Preserve the native
+source path and port repair while applying that asset entry; do not replace the
+whole native plugin with the older export. Check every HTML-referenced asset
+over HTTP and exercise the ID/EN switch after saving and after publication.
+
+Small native packaging fixes can be made directly in Atoms' **Code** editor,
+then **Submit all** to save/build, followed by the same preview and public checks.
+An Atoms AI prompt is not required for an edit that can be applied and verified
+directly. Preserve the native file first, review its exact diff and save the
+equivalent export change in GitHub; do not replace native paths or startup code.
+
 The published V7 native workspace also contains a preview startup repair in
 `app/start_app_v2.sh` and `app/frontend/vite.config.ts`: the launcher reclaims
 only its own stale project processes on the canonical ports and records the

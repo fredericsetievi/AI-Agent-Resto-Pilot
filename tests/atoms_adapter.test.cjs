@@ -6,6 +6,21 @@ const vm = require('node:vm');
 
 const shim = fs.readFileSync(path.join(__dirname, '../deploy/atoms/frontend/restopilot-adapter/api-base.js'), 'utf8');
 
+test('Atoms registers every dashboard script and stylesheet for preview and publication', () => {
+  const frontendDir = path.join(__dirname, '../frontend');
+  const html = fs.readFileSync(path.join(frontendDir, 'index.html'), 'utf8');
+  const plugin = fs.readFileSync(path.join(__dirname, '../deploy/atoms/frontend/plugins/restopilot-dashboard.ts'), 'utf8');
+  const registry = plugin.slice(plugin.indexOf('const ASSETS:'), plugin.indexOf('function dashboardHtml'));
+  const required = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+\.(?:js|css))"/g)].map(match => match[1]);
+  assert.ok(required.length, 'dashboard must declare its local assets');
+  for (const asset of required) {
+    const filename = asset.slice('/assets/'.length);
+    assert.ok(fs.existsSync(path.join(frontendDir, filename)), `${asset} source is missing`);
+    const escaped = asset.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(registry, new RegExp(`["']${escaped}["']\\s*:`), `${asset} must be served and copied by Atoms`);
+  }
+});
+
 function setup() {
   const calls = [];
   const window = { fetch: (...args) => { calls.push(args); return Promise.resolve('ok'); } };

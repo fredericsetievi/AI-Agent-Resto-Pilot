@@ -34,6 +34,7 @@ from .data_qa import (
 from .inventory import InventoryMixin
 from .operations import OperationsMixin
 from .purchase_sources import PurchaseSourcesMixin
+from .purchase_idempotency import purchase_idempotent
 from .db import (
     APPROVE_COMMANDS, CATALOG, CATALOG_BY_ID, DEMO_NUMBERS, DEMO_USERS,
     DomainError, RESTAURANT, RESTAURANT_TIMEZONE, REJECT_COMMANDS,
@@ -396,13 +397,13 @@ class PostgresStore(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
             extracted = extract_purchase(payload["text"])
         def action(conn):
             return self._present(conn, self._new_draft(conn, payload["text"], payload.get("supplier") or extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=restaurant_id), restaurant_id)
-        return self._idempotent(key, "intake", payload, action)
+        return purchase_idempotent(self, key, "intake", payload, action, restaurant_id)
 
     def intake_image(self, key, image_sha256, source_label, supplier, items, warnings, restaurant_id=None):
         payload = {"image_sha256": image_sha256, "source_label": source_label, "supplier": supplier}
         def action(conn):
             return self._present(conn, self._new_draft(conn, source_label, supplier, items, warnings, restaurant_id=restaurant_id), restaurant_id)
-        return self._idempotent(key, "intake_image", payload, action)
+        return purchase_idempotent(self, key, "intake_image", payload, action, restaurant_id)
 
     def _check_editable(self, draft, version):
         if draft["version"] != version:
@@ -422,7 +423,7 @@ class PostgresStore(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
             self._save_draft(conn, draft)
             self._audit(conn, "draft_edited", f"Draft {draft_id[:8]} reviewed and edited (version {draft['version']}).", restaurant_id)
             return self._present(conn, draft, restaurant_id)
-        return self._idempotent(key, "edit:" + draft_id, payload, action)
+        return purchase_idempotent(self, key, "edit:" + draft_id, payload, action, restaurant_id)
 
     # ---- approval / ledger --------------------------------------------------
 
@@ -473,7 +474,7 @@ class PostgresStore(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
         def action(conn):
             draft = self._load_draft(conn, draft_id, restaurant_id)
             return self._decide(conn, draft, payload, restaurant_id)
-        draft = self._idempotent(key, "decision:" + draft_id, payload, action)
+        draft = purchase_idempotent(self, key, "decision:" + draft_id, payload, action, restaurant_id)
         return draft
 
     @staticmethod
