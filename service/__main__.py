@@ -96,7 +96,11 @@ def main():
     }
     meta_configured = public_base_url and all(meta_settings.values())
     vision_api_key = setting("STEPFUN_API_KEY")
-    text_llm_enabled = vision_api_key and (setting("LLM_TEXT_EXTRACTION") or "").strip().casefold() in {"1", "true", "yes", "on"}
+    # Language-model features default ON with STEPFUN_API_KEY (deterministic
+    # parsing always runs first); set the matching key to 0/off to disable.
+    def llm_disabled(name):
+        return (setting(name) or "").strip().casefold() in {"0", "false", "no", "off"}
+    text_llm_enabled = bool(vision_api_key) and not llm_disabled("LLM_TEXT_EXTRACTION")
     text_llm_model = setting("STEPFUN_TEXT_MODEL")
     asr_api_key = setting("AUDIO_ASR_API_KEY")
     asr_base_url = setting("AUDIO_ASR_BASE_URL")
@@ -105,8 +109,8 @@ def main():
     asr_prompt = (setting("AUDIO_ASR_PROMPT") or "").strip() or None
     custom_asr = bool(asr_api_key and asr_base_url)
     asr_model_setting = (asr_model_override if custom_asr else None) or setting("STEPFUN_ASR_MODEL")
-    stock_llm_enabled = vision_api_key and (setting("LLM_STOCK_ANSWER") or "").strip().casefold() in {"1", "true", "yes", "on"}
-    intent_llm_enabled = vision_api_key and (setting("LLM_INTENT") or "").strip().casefold() in {"1", "true", "yes", "on"}
+    stock_llm_enabled = bool(vision_api_key) and not llm_disabled("LLM_STOCK_ANSWER")
+    intent_llm_enabled = bool(vision_api_key) and not llm_disabled("LLM_INTENT")
     telegram_settings = {
         "telegram_bot_token": setting("TELEGRAM_BOT_TOKEN"),
         "telegram_webhook_secret": setting("TELEGRAM_WEBHOOK_SECRET"),
@@ -138,13 +142,13 @@ def main():
     else:
         print(f"Voice note ASR: StepFun (set AUDIO_ASR_BASE_URL/AUDIO_ASR_API_KEY/AUDIO_ASR_MODEL to override{', language ' + asr_language if asr_language else ''})")
     if stock_llm_enabled:
-        print(f"StepFun stock phrasing: enabled (model {text_llm_model or 'default'}; numbers stay from the database)")
+        print(f"StepFun stock phrasing: enabled (model {text_llm_model or 'default'}; numbers stay from the database; set LLM_STOCK_ANSWER=0 to disable)")
     else:
-        print("StepFun stock phrasing: disabled (set STEPFUN_API_KEY and LLM_STOCK_ANSWER=1; deterministic replies stay on)")
+        print("StepFun stock phrasing: disabled (STEPFUN_API_KEY missing or LLM_STOCK_ANSWER=0; deterministic replies stay on)")
     if intent_llm_enabled:
-        print(f"Intent routing: enabled (model {text_llm_model or 'default'}; exact commands stay first, purchases never routed)")
+        print(f"Intent routing: enabled (model {text_llm_model or 'default'}; exact commands stay first, purchases never routed; set LLM_INTENT=0 to disable)")
     else:
-        print("Intent routing: disabled (set STEPFUN_API_KEY and LLM_INTENT=1)")
+        print("Intent routing: disabled (STEPFUN_API_KEY missing or LLM_INTENT=0; exact commands stay first)")
     uvicorn.run(
         create_app(
             str(args.db),

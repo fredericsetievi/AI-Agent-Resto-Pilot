@@ -40,6 +40,10 @@ _REQUEST_DROP = {"host", "content-length"}
 _METHODS = ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS", "HEAD"]
 
 router = APIRouter(prefix=PREFIX, tags=["restopilot"])
+
+# Language-model features default ON with STEPFUN_API_KEY; set the matching
+# key to 0/off to disable. Deterministic parsing always runs first.
+_LLM_OFF = {"0", "false", "no", "off"}
 _app = None
 
 
@@ -74,10 +78,10 @@ def _restopilot_app():
             asr_base_url=env("AUDIO_ASR_BASE_URL"),
             asr_language=(env("AUDIO_ASR_LANGUAGE") or "").strip() or None,
             asr_prompt=(env("AUDIO_ASR_PROMPT") or "").strip() or None,
-            text_llm_enabled=env("LLM_TEXT_EXTRACTION", "").strip().casefold() in {"1", "true", "yes", "on"},
+            text_llm_enabled=bool(env("STEPFUN_API_KEY")) and (env("LLM_TEXT_EXTRACTION", "1").strip().casefold() not in _LLM_OFF),
             text_llm_model=env("STEPFUN_TEXT_MODEL"),
-            stock_llm_enabled=env("LLM_STOCK_ANSWER", "").strip().casefold() in {"1", "true", "yes", "on"},
-            intent_llm_enabled=env("LLM_INTENT", "").strip().casefold() in {"1", "true", "yes", "on"},
+            stock_llm_enabled=bool(env("STEPFUN_API_KEY")) and (env("LLM_STOCK_ANSWER", "1").strip().casefold() not in _LLM_OFF),
+            intent_llm_enabled=bool(env("STEPFUN_API_KEY")) and (env("LLM_INTENT", "1").strip().casefold() not in _LLM_OFF),
             telegram_bot_token=env("TELEGRAM_BOT_TOKEN"),
             telegram_webhook_secret=env("TELEGRAM_WEBHOOK_SECRET"),
             telegram_api_base=env("TELEGRAM_API_BASE") or None,
