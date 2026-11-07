@@ -713,7 +713,7 @@ const I18N = {
 let LANG = 'id';
 try { const stored = localStorage.getItem('restopilot_lang'); if (stored === 'en' || stored === 'id') LANG = stored; } catch (error) { /* storage unavailable */ }
 function t(idText, enText) {
-  if (enText !== undefined) return LANG === 'en' ? enText : idText;
+  if (typeof enText === 'string' && enText) return LANG === 'en' ? enText : idText;
   return I18N[LANG]?.[idText] ?? I18N.en?.[idText] ?? idText;
 }
 function applyI18nStatic(root = document) {

@@ -54,7 +54,7 @@ test('retries reuse keys and distinct decisions never share keys',()=>{
 });
 
 test('no-item extraction has a useful title and rejection is never shown in review queue',()=>{
-  const h=harness();assert.equal(h.run('itemSummary([])'),'Pembelian perlu detail');
+  const h=harness();h.run('LANG="id"');assert.equal(h.run('itemSummary([])'),'Pembelian perlu detail');
   h.run('LANG="en"');
   assert.equal(h.run('itemSummary([])'),'Purchase needs details');
   h.run(`state.data={drafts:[{status:'rejected'},{status:'recorded'},{status:'needs_clarification'},{status:'pending_approval'}]}`);
@@ -96,6 +96,7 @@ test('simulated chat history escapes untrusted message text',()=>{
 
 test('WhatsApp simulator renders the requested route and follows the language toggle',()=>{
   const h=harness({hash:'#whatsapp'});
+  h.run('LANG="id"');
   h.run(`state.data={restaurant:{name:'Demo kitchen'},drafts:[]};state.whatsappLoaded=true;navigate()`);
   // Default language: Indonesian.
   assert.equal(h.element('#page-title').textContent,'Alur WhatsApp yang bisa dilatih.');
@@ -244,6 +245,7 @@ test('api calls send the ngrok skip header and report non-JSON gateway pages cle
     capturedHeaders = options.headers;
     return {ok:false, status:403, json:async () => { throw new SyntaxError('ngrok gateway error page'); }};
   }});
+  h.run('LANG="id"');
   await assert.rejects(h.run(`api('/v1/links')`), /Gateway mengembalikan halaman bukan-JSON/);
   assert.equal(capturedHeaders['ngrok-skip-browser-warning'], '1');
 });

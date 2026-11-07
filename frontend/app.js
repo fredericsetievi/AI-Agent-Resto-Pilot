@@ -100,8 +100,8 @@ async function loadAdminList() {
   renderAdmin();
 }
 function renderAdmin() {
-  const page=state.page, [title,subtitle]=ADMIN_TITLES[page] || ADMIN_TITLES.admin;
-  $('#page-title').textContent=title; $('#page-subtitle').textContent=subtitle; $('#breadcrumb').textContent=page==='admin'?t('Resto','Restaurants'):t('Detail resto','Restaurant detail');
+  const page=state.page, [title,subtitle]=(ADMIN_TITLES[page] || ADMIN_TITLES.admin).map(t);
+  $('#page-title').textContent=title; $('#page-subtitle').textContent=subtitle; $('#breadcrumb').textContent=t(page==='admin'?'nav_admin':'crumb_admin_detail');
   const navCount=$('#nav-count');if(navCount)navCount.textContent='—';
   if(!state.adminList && !state.adminLoading){state.adminLoading=true;loadAdminList().finally(() => state.adminLoading=false);$('#content').innerHTML='<div class="loading-state"><span class="spinner"></span> '+t('load_resto')+'</div>';return;}
   if(page==='admin')renderAdminList(); else renderAdminDetail();

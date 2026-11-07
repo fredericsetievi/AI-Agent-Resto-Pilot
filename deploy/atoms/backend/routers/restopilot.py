@@ -48,6 +48,11 @@ def _restopilot_app():
     global _app
     if _app is None:
         env = os.environ.get
+        proactive_raw = (env("PROACTIVE_CHECK_HOURS") or "6").strip()
+        try:
+            proactive_hours = float(proactive_raw)
+        except ValueError:
+            raise SystemExit("PROACTIVE_CHECK_HOURS must be a number of hours (0 disables the proactive checks).")
         _app = create_app(
             None,
             seed=False,
@@ -67,11 +72,18 @@ def _restopilot_app():
             asr_model=(env("AUDIO_ASR_MODEL") if env("AUDIO_ASR_API_KEY") and env("AUDIO_ASR_BASE_URL") else None) or env("STEPFUN_ASR_MODEL"),
             asr_api_key=env("AUDIO_ASR_API_KEY"),
             asr_base_url=env("AUDIO_ASR_BASE_URL"),
+            asr_language=(env("AUDIO_ASR_LANGUAGE") or "").strip() or None,
+            asr_prompt=(env("AUDIO_ASR_PROMPT") or "").strip() or None,
             text_llm_enabled=env("LLM_TEXT_EXTRACTION", "").strip().casefold() in {"1", "true", "yes", "on"},
             text_llm_model=env("STEPFUN_TEXT_MODEL"),
             stock_llm_enabled=env("LLM_STOCK_ANSWER", "").strip().casefold() in {"1", "true", "yes", "on"},
+            intent_llm_enabled=env("LLM_INTENT", "").strip().casefold() in {"1", "true", "yes", "on"},
+            telegram_bot_token=env("TELEGRAM_BOT_TOKEN"),
+            telegram_webhook_secret=env("TELEGRAM_WEBHOOK_SECRET"),
+            telegram_api_base=env("TELEGRAM_API_BASE") or None,
             tts_model=env("STEPFUN_TTS_MODEL"),
             tts_voice=env("STEPFUN_TTS_VOICE"),
+            proactive_check_interval_seconds=(proactive_hours * 3600 if proactive_hours > 0 else None),
         )
     return _app
 
