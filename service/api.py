@@ -1619,7 +1619,10 @@ def create_app(
         return FileResponse(landing / "index.html")
 
     @app.get("/app", include_in_schema=False)
+    @app.get("/app.html", include_in_schema=False)
     def app_page():
+        # /app.html mirrors /app because the Atoms build serves the dashboard
+        # as a static app.html file next to the landing index.html.
         if not (frontend / "index.html").exists():
             return error("frontend_unavailable", "Frontend is not installed.", 503)
         return FileResponse(frontend / "index.html")

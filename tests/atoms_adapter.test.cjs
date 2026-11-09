@@ -21,6 +21,31 @@ test('Atoms registers every dashboard script and stylesheet for preview and publ
   }
 });
 
+test('Atoms serves the landing at / and the dashboard at /app.html', () => {
+  const landing = fs.readFileSync(path.join(__dirname, '../landing/index.html'), 'utf8');
+  const api = fs.readFileSync(path.join(__dirname, '../service/api.py'), 'utf8');
+  const plugin = fs.readFileSync(path.join(__dirname, '../deploy/atoms/frontend/plugins/restopilot-dashboard.ts'), 'utf8');
+
+  // The landing is script-free HTML, links only to the dashboard's real file
+  // path, and references its stylesheet through the served landing-assets prefix.
+  assert.equal([...landing.matchAll(/<script/g)].length, 0, 'landing must stay script-free');
+  assert.ok(landing.includes('href="/app.html"'), 'landing must link /app.html');
+  assert.ok(!landing.includes('href="/app"'), 'landing must not link /app (it falls back to the landing on Atoms)');
+  assert.ok(landing.includes('href="/landing-assets/styles.css"'), 'landing must reference its served stylesheet');
+
+  // The plugin serves the landing at / and emits the dashboard as a real
+  // app.html file, with the landing stylesheet registered for publication.
+  const registry = plugin.slice(plugin.indexOf('const LANDING_ASSETS:'), plugin.indexOf('function landingHtml'));
+  assert.match(registry, /["']\/landing-assets\/styles\.css["']\s*:/, 'landing stylesheet must be served and copied by Atoms');
+  assert.match(plugin, /url === '\/' \|\| url === '\/index\.html'/, 'dev middleware must serve the landing at /');
+  assert.match(plugin, /url === '\/app' \|\| url === '\/app\.html'/, 'dev middleware must serve the dashboard at /app.html');
+  assert.match(plugin, /fileName: 'app\.html', source: dashboardHtml\(\)/, 'build must emit app.html');
+  assert.match(plugin, /fs\.writeFileSync\(path\.join\(outDir, 'index\.html'\), landingHtml\(\)\)/, 'build must write the landing as index.html');
+
+  // The Python app mirrors /app at /app.html so the same landing links work locally.
+  assert.match(api, /@app\.get\("\/app\.html", include_in_schema=False\)/, 'api must serve /app.html');
+});
+
 function setup() {
   const calls = [];
   const window = { fetch: (...args) => { calls.push(args); return Promise.resolve('ok'); } };

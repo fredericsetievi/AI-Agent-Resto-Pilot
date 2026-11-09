@@ -37,7 +37,7 @@ unrequested deployments. Collaborators use their own authorized accounts.
 4. Synchronize the pinned release into the existing Atoms project. While the
    connector is unavailable, use the pinned public GitHub codeload archive and
    verify its SHA/archive root. Import tracked application files only:
-   `service/`, `frontend/`, `tests/`, `docs/`, `supabase/migrations/`,
+   `service/`, `frontend/`, `landing/`, `tests/`, `docs/`, `supabase/migrations/`,
    `requirements.txt` and `pytest.ini`, under
    `app/deploy/restopilot-integration/`. Preserve the native scaffold as described
    below. Run its existing backend sync script and verify service byte equality,
@@ -146,6 +146,14 @@ In particular,
 source path and port repair while applying that asset entry; do not replace the
 whole native plugin with the older export. Check every HTML-referenced asset
 over HTTP and exercise the ID/EN switch after saving and after publication.
+
+The native plugin serves the marketing landing page (`landing/`, imported from
+the repository) at `/` and the dashboard as a real `app.html` file next to it,
+because the static host falls back to `index.html` for unknown paths. The
+landing links to `/app.html`, and the Python app mirrors `/app` at `/app.html`
+so the same links work locally. Verify after saving and after publication that
+`/` serves the landing, `/app.html` serves the dashboard login, and
+`/landing-assets/styles.css` returns the stylesheet.
 
 Small native packaging fixes can be made directly in Atoms' **Code** editor,
 then **Submit all** to save/build, followed by the same preview and public checks.
