@@ -5,8 +5,12 @@ import type { Plugin } from 'vite';
 /**
  * Serve the ORIGINAL RestoPilot landing page and dashboard from this Atoms project.
  *
- * Source files in the repository root frontend/ and landing/ directories are only
- * read, never modified:
+ * This file is shared verbatim between the GitHub export and the native Atoms
+ * workspace, so it resolves sources from the imported application copy under
+ * app/deploy/restopilot-integration (the Atoms layout), not from a repository
+ * checkout. Nothing in the repository executes it; Atoms' vite build does.
+ *
+ * Source files are only read, never modified:
  * - build: landing/index.html -> dist/index.html (the site root), dashboard
  *          index.html -> dist/app.html, all assets -> dist/assets/ and
  *          dist/landing-assets/
@@ -20,18 +24,21 @@ import type { Plugin } from 'vite';
  *
  * The only change to the dashboard HTML is loading the API-base shim before
  * app.js and tagging <title> for Atoms overview metadata. The landing HTML is
- * served unmodified.
+ * served unmodified. Every mapped source must exist and every copied file must
+ * match its source: a published build once shipped stale assets because these
+ * checks were missing.
  */
 const adapterDir = path.resolve(__dirname, '..');
-const sourceDir = path.resolve(adapterDir, '../../../frontend');
-const landingDir = path.resolve(adapterDir, '../../../landing');
+const integrationDir = path.resolve(adapterDir, '../deploy/restopilot-integration');
+const frontendDir = path.join(integrationDir, 'frontend');
+const landingDir = path.join(integrationDir, 'landing');
 const shimPath = path.join(adapterDir, 'restopilot-adapter/api-base.js');
 const APP_SCRIPT = '<script src="/assets/app.js" defer></script>';
 
 const ASSETS: Record<string, { file: string; type: string }> = {
-  '/assets/i18n.js': { file: path.join(sourceDir, 'i18n.js'), type: 'text/javascript; charset=utf-8' },
-  '/assets/app.js': { file: path.join(sourceDir, 'app.js'), type: 'text/javascript; charset=utf-8' },
-  '/assets/styles.css': { file: path.join(sourceDir, 'styles.css'), type: 'text/css; charset=utf-8' },
+  '/assets/i18n.js': { file: path.join(frontendDir, 'i18n.js'), type: 'text/javascript; charset=utf-8' },
+  '/assets/app.js': { file: path.join(frontendDir, 'app.js'), type: 'text/javascript; charset=utf-8' },
+  '/assets/styles.css': { file: path.join(frontendDir, 'styles.css'), type: 'text/css; charset=utf-8' },
   '/assets/restopilot-api-base.js': { file: shimPath, type: 'text/javascript; charset=utf-8' },
 };
 
@@ -39,8 +46,15 @@ const LANDING_ASSETS: Record<string, { file: string; type: string }> = {
   '/landing-assets/styles.css': { file: path.join(landingDir, 'styles.css'), type: 'text/css; charset=utf-8' },
 };
 
+function readSource(file: string): Buffer {
+  if (!fs.existsSync(file)) {
+    throw new Error(`RestoPilot source is missing: ${file}. Import the application copy under app/deploy/restopilot-integration first.`);
+  }
+  return fs.readFileSync(file);
+}
+
 function dashboardHtml(): string {
-  const html = fs.readFileSync(path.join(sourceDir, 'index.html'), 'utf-8');
+  const html = readSource(path.join(frontendDir, 'index.html')).toString('utf-8');
   if (!html.includes(APP_SCRIPT)) {
     throw new Error('RestoPilot index.html no longer loads /assets/app.js; update the adapter.');
   }
@@ -50,7 +64,7 @@ function dashboardHtml(): string {
 }
 
 function landingHtml(): string {
-  const html = fs.readFileSync(path.join(landingDir, 'index.html'), 'utf-8');
+  const html = readSource(path.join(landingDir, 'index.html')).toString('utf-8');
   if (!html.includes('href="/app.html"')) {
     throw new Error('RestoPilot landing/index.html no longer links /app.html; update the adapter.');
   }
@@ -58,6 +72,10 @@ function landingHtml(): string {
     throw new Error('RestoPilot landing/index.html no longer references its stylesheet; update the adapter.');
   }
   return html;
+}
+
+function allAssets(): Record<string, { file: string; type: string }> {
+  return { ...ASSETS, ...LANDING_ASSETS };
 }
 
 export function restopilotDashboard(): Plugin {
@@ -84,11 +102,11 @@ export function restopilotDashboard(): Plugin {
           res.end(dashboardHtml());
           return;
         }
-        const asset = ASSETS[url] || LANDING_ASSETS[url];
+        const asset = allAssets()[url];
         if (asset) {
           res.setHeader('Content-Type', asset.type);
           res.setHeader('Cache-Control', 'no-store');
-          res.end(fs.readFileSync(asset.file));
+          res.end(readSource(asset.file));
           return;
         }
         next();
@@ -100,20 +118,32 @@ export function restopilotDashboard(): Plugin {
       // disk after closeBundle, when a static-asset upload manifest may
       // already exist. app.html is emitted here for the same reason: the
       // dashboard must exist as a real file next to the landing index.html.
-      for (const [url, asset] of Object.entries({ ...ASSETS, ...LANDING_ASSETS })) {
-        this.emitFile({ type: 'asset', fileName: url.slice(1), source: fs.readFileSync(asset.file) });
+      for (const [url, asset] of Object.entries(allAssets())) {
+        this.emitFile({ type: 'asset', fileName: url.slice(1), source: readSource(asset.file) });
       }
-      this.emitFile({ type: 'asset', fileName: 'app.html', source: dashboardHtml() });
+      this.emitFile({ type: 'asset', fileName: 'app.html', source: Buffer.from(dashboardHtml()) });
     },
     closeBundle() {
       if (!outDir) return;
-      fs.mkdirSync(path.join(outDir, 'assets'), { recursive: true });
-      fs.mkdirSync(path.join(outDir, 'landing-assets'), { recursive: true });
-      for (const [url, asset] of Object.entries({ ...ASSETS, ...LANDING_ASSETS })) {
-        fs.copyFileSync(asset.file, path.join(outDir, url.slice(1)));
+      for (const [url, asset] of Object.entries(allAssets())) {
+        const target = path.join(outDir, url.slice(1));
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        const source = readSource(asset.file);
+        fs.writeFileSync(target, source);
+        if (!fs.readFileSync(target).equals(source)) {
+          throw new Error(`RestoPilot build output does not match its source: ${url}`);
+        }
       }
-      fs.writeFileSync(path.join(outDir, 'index.html'), landingHtml());
-      fs.writeFileSync(path.join(outDir, 'app.html'), dashboardHtml());
+      const indexTarget = path.join(outDir, 'index.html');
+      fs.writeFileSync(indexTarget, landingHtml());
+      if (!fs.readFileSync(indexTarget).toString('utf-8').includes('/landing-assets/styles.css')) {
+        throw new Error('RestoPilot build output lost the landing index.html.');
+      }
+      const appTarget = path.join(outDir, 'app.html');
+      fs.writeFileSync(appTarget, dashboardHtml());
+      if (!fs.readFileSync(appTarget).toString('utf-8').includes(APP_SCRIPT)) {
+        throw new Error('RestoPilot build output lost the dashboard app.html.');
+      }
     },
   };
 }

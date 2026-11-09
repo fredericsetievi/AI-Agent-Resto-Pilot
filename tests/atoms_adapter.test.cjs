@@ -33,14 +33,18 @@ test('Atoms serves the landing at / and the dashboard at /app.html', () => {
   assert.ok(!landing.includes('href="/app"'), 'landing must not link /app (it falls back to the landing on Atoms)');
   assert.ok(landing.includes('href="/landing-assets/styles.css"'), 'landing must reference its served stylesheet');
 
-  // The plugin serves the landing at / and emits the dashboard as a real
-  // app.html file, with the landing stylesheet registered for publication.
-  const registry = plugin.slice(plugin.indexOf('const LANDING_ASSETS:'), plugin.indexOf('function landingHtml'));
+  // The plugin resolves sources from the Atoms integration copy, serves the
+  // landing at /, emits the dashboard as a real app.html file, and keeps the
+  // missing-source and copy-verification protections.
+  const registry = plugin.slice(plugin.indexOf('const LANDING_ASSETS:'), plugin.indexOf('function readSource'));
   assert.match(registry, /["']\/landing-assets\/styles\.css["']\s*:/, 'landing stylesheet must be served and copied by Atoms');
+  assert.match(plugin, /path\.resolve\(adapterDir, '\.\.\/deploy\/restopilot-integration'\)/, 'sources must come from the Atoms integration copy');
   assert.match(plugin, /url === '\/' \|\| url === '\/index\.html'/, 'dev middleware must serve the landing at /');
   assert.match(plugin, /url === '\/app' \|\| url === '\/app\.html'/, 'dev middleware must serve the dashboard at /app.html');
-  assert.match(plugin, /fileName: 'app\.html', source: dashboardHtml\(\)/, 'build must emit app.html');
-  assert.match(plugin, /fs\.writeFileSync\(path\.join\(outDir, 'index\.html'\), landingHtml\(\)\)/, 'build must write the landing as index.html');
+  assert.match(plugin, /fileName: 'app\.html', source: Buffer\.from\(dashboardHtml\(\)\)/, 'build must emit app.html');
+  assert.match(plugin, /fs\.writeFileSync\(indexTarget, landingHtml\(\)\)/, 'build must write the landing as index.html');
+  assert.match(plugin, /RestoPilot source is missing/, 'build must fail when a mapped source is missing');
+  assert.match(plugin, /does not match its source/, 'build must verify copied files against their sources');
 
   // The Python app mirrors /app at /app.html so the same landing links work locally.
   assert.match(api, /@app\.get\("\/app\.html", include_in_schema=False\)/, 'api must serve /app.html');
