@@ -37,6 +37,10 @@ def names(result):
     ("jualan mie ayam 15", [("sale", "mie ayam", "15", "porsi")]),
     ("tadi siang jual es teh 40", [("sale", "es teh", "40", "porsi")]),
     ("Terjual: nasi goreng 30 porsi", [("sale", "nasi goreng", "30", "porsi")]),
+    # Two dishes joined the way people actually type/say it.
+    ("terjual ayam geprek 12, es teh 20", [("sale", "ayam geprek", "12", "porsi"), ("sale", "es teh", "20", "porsi")]),
+    ("terjual 30 nasi goreng dan 15 es teh", [("sale", "nasi goreng", "30", "porsi"), ("sale", "es teh", "15", "porsi")]),
+    ("terjual 30 nasi goreng sama 15 es teh", [("sale", "nasi goreng", "30", "porsi"), ("sale", "es teh", "15", "porsi")]),
     # Drinks measured in gelas/cup stay drafts with the unit visible.
     ("terjual es teh 40 gelas", [("sale", "es teh", "40", "gelas")]),
     ("terjual kopi 12 cup", [("sale", "kopi", "12", "cup")]),
@@ -54,7 +58,6 @@ def test_realistic_sale_phrasings_parse_correctly(text, expected):
 # --- Unresolved: messy input must hold a draft, never post a wrong one -------
 
 @pytest.mark.parametrize("text", [
-    "terjual 30 nasi goreng sama 15 es teh",   # 'sama' is not a known splitter
     "penjualan goceng tadi malam",             # slang money, no digits
     "terjual ayam geprek level 3 sebanyak 5",  # menu name contains a number
     "terjual 1,5 kg sambal",                   # kg sales need owner confirmation, by design

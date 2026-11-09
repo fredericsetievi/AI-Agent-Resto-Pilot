@@ -256,7 +256,7 @@ def parse_operations_text(text, *, today=None):
     # Normalize only missing spaces, preserving decimal comma and menu words.
     source = re.sub(r"(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])", " ", source)
     default_kind = _kind(source) or _kind(detection) or ("count" if plain_stock_count else None)
-    clauses = [part.strip() for part in re.split(r"[\r\n;]+|\b(?:dan|lalu|serta|kemudian)\b|,\s*(?=[a-z])", source) if part.strip(" :.-")]
+    clauses = [part.strip() for part in re.split(r"[\r\n;]+|\b(?:dan|sama|lalu|serta|kemudian)\b|,\s*(?=[a-z])", source) if part.strip(" :.-")]
     inherited = default_kind
     explicit_total = None
     for clause in clauses:
