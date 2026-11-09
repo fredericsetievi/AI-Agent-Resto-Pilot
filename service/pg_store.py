@@ -1101,9 +1101,9 @@ class PostgresStore(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
                 if selected:
                     phone = validate_phone_number(payload["sender"])
                     self._execute(conn,
-                        "INSERT INTO whatsapp_links (id, slug, phone, label) VALUES (%s, %s, %s, %s) ON CONFLICT (phone) DO NOTHING",
-                        (uuid.uuid4().hex, selected["id"], phone, "WhatsApp self-registration"))
-                    linked = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s", (phone,)).fetchone()[0]
+                        "INSERT INTO whatsapp_links (id, slug, phone, platform, label) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (phone, platform) DO NOTHING",
+                        (uuid.uuid4().hex, selected["id"], phone, platform, "WhatsApp self-registration"))
+                    linked = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s AND platform=%s", (phone, platform)).fetchone()[0]
                     if linked != selected["id"]:
                         raise DomainError("sender_link_changed", "This number was linked elsewhere. Please send your message again.", 409)
             if restaurant_id is not None and linked != restaurant_id and not (linked is None and open_onboarding):

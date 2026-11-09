@@ -47,6 +47,16 @@ def test_invalid_selection_and_event_retries_do_not_relink_or_create_drafts(tmp_
     assert store.restaurant_for_sender(NEW_SENDER) == before
 
 
+def test_selection_links_the_whatsapp_sender_even_when_its_telegram_link_is_elsewhere(tmp_path):
+    store = Store(tmp_path / 'platforms.sqlite3')
+    other = store.create_restaurant(uuid4().hex, {'name': 'Warung Kita', 'owner_username': 'kitaku', 'owner_password': 'rahasia123'})
+    store.add_whatsapp_number(other['id'], uuid4().hex, {'whatsapp_number': NEW_SENDER, 'platform': 'telegram'})
+    assert ingest(store, 'beli cabai 2 kg 100rb')['result']['action'] == 'restaurant_selection_required'
+    assert ingest(store, RESTAURANT['name'])['result']['action'] == 'restaurant_selected'
+    assert store.restaurant_for_sender(NEW_SENDER)['id'] == RESTAURANT['id']
+    assert store.restaurant_for_sender(NEW_SENDER, 'telegram')['id'] == other['id']
+
+
 def test_duplicate_names_require_stable_code_not_menu_position():
     choices = [{'id': 'one', 'name': 'Warung Sama'}, {'id': 'two', 'name': 'Warung Sama'}]
     selected, menu = restaurant_selection(choices, 'Warung Sama')

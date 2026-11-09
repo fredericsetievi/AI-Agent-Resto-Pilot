@@ -988,9 +988,9 @@ class Store(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
                 selected, onboarding_reply = restaurant_selection(choices, payload["text"])
                 if selected:
                     phone = validate_phone_number(payload["sender"])
-                    conn.execute("INSERT OR IGNORE INTO whatsapp_links (id, restaurant_id, phone, label, created_at) VALUES (?, ?, ?, ?, ?)",
-                                 (uuid.uuid4().hex, selected["id"], phone, "WhatsApp self-registration", now()))
-                    linked = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=?", (phone,)).fetchone()[0]
+                    conn.execute("INSERT OR IGNORE INTO whatsapp_links (id, restaurant_id, phone, platform, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                                 (uuid.uuid4().hex, selected["id"], phone, platform, "WhatsApp self-registration", now()))
+                    linked = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=? AND platform=?", (phone, platform)).fetchone()[0]
                     if linked != selected["id"]:
                         raise DomainError("sender_link_changed", "This number was linked elsewhere. Please send your message again.", 409)
             if restaurant_id is not None and linked != restaurant_id and not (linked is None and open_onboarding):
