@@ -143,3 +143,65 @@ def test_simulator_answers_menu_questions(tmp_path):
         answer = messages[-1]["body"]
         assert "Nasi goreng" in answer and "Mie goreng" in answer
         assert "10 porsi" in answer
+
+
+def test_flexible_phrasings_all_reach_the_engine(tmp_path):
+    """The owner phrasings from the flexibility matrix must all answer."""
+    app = create_app(tmp_path / "flex.sqlite3")
+    store = app.state.store
+    seed_events(store, [sale("s1", "Nasi goreng", portions="10", revenue=150000, day=TODAY)])
+    good = [
+        "menu terlaris minggu ini?",
+        "menu apa yang paling laku minggu ini?",
+        "omzet minggu ini berapa?",
+        "penjualan minggu ini?",
+        "rekap penjualan 30 hari?",
+        "menu best seller minggu ini?",
+        "yang paling dicari minggu ini?",
+        "jualannya gimana minggu ini?",
+        "margin nasi goreng berapa?",
+        "untung nasi goreng?",
+    ]
+    for question in good:
+        result = store.menu_facts(question, TENANT)
+        assert result is not None, question
+        assert "Nasi goreng" in result["body"] or "Penjualan" in result["body"] or "Margin" in result["body"], question
+
+
+def test_vs_phrasing_compares_two_windows(tmp_path):
+    app = create_app(tmp_path / "vs.sqlite3")
+    store = app.state.store
+    seed_events(store, [
+        sale("s1", "Nasi goreng", portions="10", revenue=150000, day=TODAY),
+        sale("s2", "Nasi goreng", portions="8", revenue=120000,
+             day=(datetime.now(timezone.utc) - timedelta(days=8)).date().isoformat()),
+    ])
+    body = store.menu_facts("nasi goreng minggu ini vs minggu lalu?", TENANT)["body"]
+    assert "10" in body and "8" in body and "+25" in body
+
+
+def test_numbered_window_widens_the_answer(tmp_path):
+    app = create_app(tmp_path / "days.sqlite3")
+    store = app.state.store
+    seed_events(store, [
+        sale("s1", "Nasi goreng", portions="10", revenue=150000,
+             day=(datetime.now(timezone.utc) - timedelta(days=20)).date().isoformat()),
+    ])
+    body = store.menu_facts("rekap penjualan 30 hari?", TENANT)["body"]
+    assert "Nasi goreng" in body  # a 20-day-old sale only shows in a 30-day window
+    assert "30 hari" in body
+
+
+def test_trend_question_survives_the_operations_classifier(tmp_path):
+    """'penjualan nasi goreng minggu ini?' must be answered, not claimed as an operations report."""
+    app = create_app(tmp_path / "chat.sqlite3")
+    store = app.state.store
+    seed_events(store, [sale("s1", "Nasi goreng", portions="10", revenue=150000, day=TODAY)])
+    with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as client:
+        from conftest import login_owner
+        login_owner(client)
+        response = client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
+                               json={"sender": "628123456789", "text": "penjualan nasi goreng minggu ini?"})
+        assert response.status_code == 200, response.text
+        answer = response.json()["data"]["messages"][-1]["body"]
+        assert "Penjualan" in answer and "Operasi" not in answer

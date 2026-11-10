@@ -17,10 +17,10 @@ import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from .data_qa import parse_window
+from .data_qa import find_windows, parse_window
 
 _MENU_HINT_RE = re.compile(
-    r"(?i)\b(menu|terlaris|paling\s+laku|paling\s+banyak|populer|penjualan|terjual|omzet|margin|untung|laba|keuntungan|rekap\s+penjualan)\b")
+    r"(?i)(\b(menu|terlaris|paling\s+laku|paling\s+banyak|paling\s+dicari|best\s*seller|best\s*selling|populer|penjualan|terjual|omzet|margin|untung|laba|keuntungan|rekap\s+penjualan)\b|\bjualan)")
 _RANK_RE = re.compile(r"(?i)\b(terlaris|paling\s+laku|paling\s+banyak\s*terjual|populer|ranking|peringkat)\b")
 _MARGIN_RE = re.compile(r"(?i)\b(margin|untung|laba|keuntungan|profit)\b")
 _TREND_RE = re.compile(r"(?i)\b(penjualan|terjual|omzet)\b")
@@ -32,8 +32,21 @@ _OPS_PREEMPT_RE = re.compile(r"(?i)\b(terlaris|paling\s+laku|paling\s+banyak\s*t
 
 
 def menu_question_preempts_operations(text):
-    """True when the message asks about recorded sales (never a recording)."""
-    return bool(_OPS_PREEMPT_RE.search(str(text or "")))
+    """True when the message asks about recorded sales (never a recording).
+
+    Two shapes: the narrow rank/margin/recap words, and a question-shaped
+    sales phrase with a time window ("penjualan nasi goreng minggu ini?")
+    — questions never carry quantities, so recordings with numbers still
+    reach the operations parser.
+    """
+    text = str(text or "")
+    if _OPS_PREEMPT_RE.search(text):
+        return True
+    if "?" in text and re.search(r"(?i)\b(penjualan|omzet|terjual)\b", text) \
+            and re.search(r"(?i)(minggu\s+(ini|lalu|terakhir)|bulan\s+(ini|lalu)|hari\s+ini|kemarin|\d+\s*hari|\bvs\b)", text) \
+            and not re.search(r"\d", text):
+        return True
+    return False
 
 
 _STOPWORDS = {"berapa", "yang", "ini", "itu", "minggu", "hari", "bulan", "ini", "di", "dari", "untuk",
@@ -54,19 +67,39 @@ def _event_date(event):
         return None
 
 
-def _window_days(text):
-    try:
-        return max(parse_window(text, default_days=7), 1)
-    except Exception:
-        return 7
+def _window_pair(text, default_days=7):
+    """Current and previous (label, start_date, end_date_exclusive) windows.
+
+    Explicit phrases win, including comparisons ("minggu ini vs minggu
+    lalu"); otherwise the previous window is the equal-length window
+    immediately before the current one. Calendar windows ("bulan ini")
+    use the days elapsed so far.
+    """
+    today = date.today()
+    found = find_windows(text, limit=2)
+
+    def bounds(win, fallback_days):
+        start = date.fromisoformat(win["start"][:10]) if win.get("start") else today - timedelta(days=fallback_days)
+        end = date.fromisoformat(win["end"][:10]) if win.get("end") else today + timedelta(days=1)
+        label = win.get("label") or f"{fallback_days} hari terakhir"
+        return start, end, label
+
+    if found:
+        cur_start, cur_end, cur_label = bounds(found[0], default_days)
+        if len(found) > 1:
+            prev_start, prev_end, prev_label = bounds(found[1], default_days)
+        else:
+            length = max((cur_end - cur_start).days, 1)
+            prev_start, prev_end, prev_label = cur_start - timedelta(days=length), cur_start, f"{length} hari sebelumnya"
+        return (cur_start, cur_end, cur_label), (prev_start, prev_end, prev_label)
+    start = today - timedelta(days=default_days)
+    return ((start, today + timedelta(days=1), f"{default_days} hari terakhir"),
+            (start - timedelta(days=default_days), start, f"{default_days} hari sebelumnya"))
 
 
-def _in_window(day, today, days, previous=False):
-    if day is None:
-        return False
-    if previous:
-        return today - timedelta(days=2 * days) <= day < today - timedelta(days=days)
-    return today - timedelta(days=days) <= day <= today
+def _in_window(day, start, end):
+    """start inclusive, end exclusive; day may be None (never matches)."""
+    return day is not None and start <= day < end
 
 
 def _percent_change(current, previous):
@@ -94,10 +127,18 @@ class MenuInsightsMixin:
         message is not one. Detection is conservative: a purchase question
         like 'berapa pengeluaran cabai' never reaches this module."""
         text = str(text or "").strip()
-        if not _MENU_HINT_RE.search(text) or len(text) > 300:
+        if len(text) > 300:
             return None
-        # Purchase-spend questions belong to the data-question engine.
-        if re.search(r"(?i)\b(pengeluaran|belanja|beli|pembelian)\b", text) and not re.search(r"(?i)\b(penjualan|omzet|terjual|margin|untung|laba|menu|terlaris)\b", text):
+        has_hint = bool(_MENU_HINT_RE.search(text))
+        spend_guard = re.search(r"(?i)\b(pengeluaran|belanja|beli|pembelian)\b", text) and not re.search(r"(?i)\b(penjualan|omzet|terjual|margin|untung|laba|menu|terlaris)\b", text)
+        stock_guard = re.search(r"(?i)\b(sisa|stok|stock)\b", text)
+        vs_or_window = re.search(r"(?i)(\bvs\b|minggu\s+(ini|lalu|terakhir)|bulan\s+(ini|lalu)|\d+\s*hari)", text)
+        questionish = "?" in text or re.search(r"(?i)\b(berapa|gimana|bagaimana)\b", text)
+        if spend_guard:
+            # Purchase-spend questions belong to the data-question engine.
+            return None
+        if stock_guard and not vs_or_window:
+            # Stock questions ("berapa sisa cabai?") belong to stock_facts.
             return None
         if conn is None:
             with self.transaction() as conn:
@@ -108,21 +149,22 @@ class MenuInsightsMixin:
             events = self._menu_sale_events(conn, restaurant_id)
             recipes = self._menu_recipes(conn, restaurant_id)
             prices = self._ingredient_unit_prices(conn, restaurant_id)
-        today = date.today()
-        days = _window_days(text)
-
         menu_name = self._menu_name_from_text(text, events, recipes)
+        if not has_hint and not (menu_name and vs_or_window and questionish):
+            # Without a hint, only a named menu inside a window question
+            # ("nasi goreng minggu ini vs minggu lalu?") is a menu question.
+            return None
+        (cur_start, cur_end, cur_label), (prev_start, prev_end, prev_label) = _window_pair(text)
+
         if _MARGIN_RE.search(text) and (menu_name or len(text.split()) <= 6):
-            body = self._margin_answer(menu_name, events, recipes, prices, today, days)
+            body = self._margin_answer(menu_name, events, recipes, prices, cur_start, cur_end, cur_label, prev_start, prev_end)
             if body:
                 return {"body": body}
         if menu_name:
-            body = self._menu_trend_answer(menu_name, events, today, days)
+            body = self._menu_trend_answer(menu_name, events, cur_start, cur_end, cur_label, prev_start, prev_end)
             if body:
                 return {"body": body}
-        if _RANK_RE.search(text) or _TREND_RE.search(text):
-            return {"body": self._ranking_answer(events, recipes, prices, today, days, menu_name)}
-        return None
+        return {"body": self._ranking_answer(events, recipes, prices, cur_start, cur_end, cur_label, prev_start, prev_end)}
 
     # ---- storage reads ----------------------------------------------------
 
@@ -188,7 +230,7 @@ class MenuInsightsMixin:
 
     # ---- answers -----------------------------------------------------------
 
-    def _aggregate(self, events, today, days, menu_name=None, previous=False):
+    def _aggregate(self, events, start, end, menu_name=None):
         """Aggregated sale facts for one window: per-menu portions, revenue."""
         stats = {}
         total_revenue = Decimal(0)
@@ -198,7 +240,7 @@ class MenuInsightsMixin:
             if menu_name and _normalized(event.get("name") or "") != _normalized(menu_name):
                 continue
             day = _event_date(event)
-            if not _in_window(day, today, days, previous=previous):
+            if not _in_window(day, start, end):
                 continue
             name = event.get("name") or "(tanpa nama)"
             entry = stats.setdefault(name, {"portions": Decimal(0), "revenue": Decimal(0), "revenue_known": False, "events": 0})
@@ -222,34 +264,31 @@ class MenuInsightsMixin:
                     pass
         return stats, total_revenue, total_portions, revenue_known
 
-    def _ranking_answer(self, events, recipes, prices, today, days, menu_name=None):
-        current, revenue, portions, revenue_known = self._aggregate(events, today, days)
+    def _ranking_answer(self, events, recipes, prices, cur_start, cur_end, cur_label, prev_start, prev_end):
+        current, revenue, portions, revenue_known = self._aggregate(events, cur_start, cur_end)
         if not current:
-            return (f"Belum ada penjualan tercatat dalam {days} hari terakhir. "
+            return (f"Belum ada penjualan tercatat dalam {cur_label}. "
                     f"Catat dulu lewat chat, misalnya 'terjual 4 nasi goreng'.")
-        previous, prev_revenue, prev_portions, _ = self._aggregate(events, today, days, previous=True)
+        previous, prev_revenue, prev_portions, _ = self._aggregate(events, prev_start, prev_end)
         ranked = sorted(current.items(), key=lambda kv: (kv[1]["portions"], kv[1]["revenue"]), reverse=True)
-        label = f"{days} hari terakhir"
-        lines = [f"Penjualan {label}:" if not menu_name else f"Penjualan {menu_name} ({label}):"]
+        lines = [f"Penjualan {cur_label}:"]
         for index, (name, entry) in enumerate(ranked[:5], start=1):
             portions_text = f"{entry['portions']:g} porsi" if entry["portions"] else f"{entry['events']}x catatan"
             revenue_text = f" · Rp{entry['revenue']:,.0f}".replace(",", ".") if entry["revenue_known"] else ""
             lines.append(f"{index}. {name} — {portions_text}{revenue_text}")
+        lines.append(f"Total {cur_label}: {portions:g} porsi" + (f" · omzet Rp{revenue:,.0f}".replace(",", ".") if revenue_known else ""))
         change = _percent_change(portions, prev_portions)
-        if menu_name is None:
-            lines.append(f"Total {days} hari: {portions:g} porsi" + (f" · omzet Rp{revenue:,.0f}".replace(",", ".") if revenue_known else ""))
-            prev_change = _percent_change(portions, prev_portions)
-            if prev_change is not None:
-                lines.append(f"vs {days} hari sebelumnya: {prev_change:+g}%.")
+        if change is not None:
+            lines.append(f"vs periode sebelumnya ({prev_label}): {change:+g}%.")
         return "\n".join(lines)
 
-    def _menu_trend_answer(self, menu_name, events, today, days):
-        current, revenue, portions, revenue_known = self._aggregate(events, today, days, menu_name=menu_name)
-        previous, prev_revenue, prev_portions, _ = self._aggregate(events, today, days, menu_name=menu_name, previous=True)
+    def _menu_trend_answer(self, menu_name, events, cur_start, cur_end, cur_label, prev_start, prev_end):
+        current, revenue, portions, revenue_known = self._aggregate(events, cur_start, cur_end, menu_name=menu_name)
+        previous, prev_revenue, prev_portions, _ = self._aggregate(events, prev_start, prev_end, menu_name=menu_name)
         if not current and not previous:
             return (f"Belum ada penjualan tercatat untuk '{menu_name}'. "
                     f"Catat dulu, misalnya 'terjual 4 {menu_name}'.")
-        lines = [f"Penjualan {menu_name} ({days} hari terakhir):"]
+        lines = [f"Penjualan {menu_name} ({cur_label}):"]
         if current:
             portions_text = f"{portions:g} porsi" if portions else f"{sum(e['events'] for e in current.values())}x catatan"
             lines.append(f"• {portions_text}" + (f" · omzet Rp{revenue:,.0f}".replace(",", ".") if revenue_known else ""))
@@ -282,7 +321,7 @@ class MenuInsightsMixin:
                 missing.append(item.get("raw_name") or ingredient)
         return cost, missing
 
-    def _margin_answer(self, menu_name, events, recipes, prices, today, days):
+    def _margin_answer(self, menu_name, events, recipes, prices, cur_start, cur_end, cur_label, prev_start, prev_end):
         recipes_by_name = {r.get("name"): r for r in recipes if r.get("name")}
         recipe = recipes_by_name.get(menu_name) if menu_name else None
         if menu_name and recipe is None:
@@ -294,7 +333,7 @@ class MenuInsightsMixin:
             any_line = False
             for name in sorted(self._menu_names(events, recipes)):
                 recipe = recipes_by_name.get(name)
-                stats, _, _, revenue_known = self._aggregate(events, today, days, menu_name=name)
+                stats, _, _, revenue_known = self._aggregate(events, cur_start, cur_end, menu_name=name)
                 entry = stats.get(name)
                 if not recipe or not entry or not entry.get("revenue_known") or not entry["portions"]:
                     continue
@@ -313,7 +352,7 @@ class MenuInsightsMixin:
             return "\n".join(lines)
         # One named menu with a recipe.
         cost, missing = self._menu_cost_per_portion(recipe, prices)
-        stats, revenue, portions, revenue_known = self._aggregate(events, today, days, menu_name=menu_name)
+        stats, revenue, portions, revenue_known = self._aggregate(events, cur_start, cur_end, menu_name=menu_name)
         entry = stats.get(menu_name)
         lines = [f"Margin {menu_name}:"]
         if missing:
