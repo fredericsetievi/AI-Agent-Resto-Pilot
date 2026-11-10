@@ -304,7 +304,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 "CREATE TABLE IF NOT EXISTS whatsapp_threads (id TEXT PRIMARY KEY, channel TEXT NOT NULL, sender TEXT NOT NULL, transport TEXT NOT NULL, active_draft_id TEXT REFERENCES drafts(id), active_version INTEGER, pending_followup TEXT, pending_opname_id TEXT, restaurant_id TEXT REFERENCES restaurants(id), UNIQUE(channel, sender))",
                 "CREATE TABLE IF NOT EXISTS whatsapp_messages (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES whatsapp_threads(id), direction TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, transport TEXT NOT NULL, status TEXT NOT NULL, draft_id TEXT REFERENCES drafts(id))",
                 "CREATE TABLE IF NOT EXISTS whatsapp_events (channel TEXT NOT NULL, event_id TEXT NOT NULL, thread_id TEXT NOT NULL REFERENCES whatsapp_threads(id), fingerprint TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY(channel, event_id))",
-                "CREATE TABLE IF NOT EXISTS custom_ingredients (id TEXT PRIMARY KEY, name TEXT NOT NULL, unit TEXT NOT NULL, reorder_threshold TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
+                "CREATE TABLE IF NOT EXISTS custom_ingredients (id TEXT NOT NULL, name TEXT NOT NULL, unit TEXT NOT NULL, reorder_threshold TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto', PRIMARY KEY (restaurant_id, id))",
                 "CREATE TABLE IF NOT EXISTS restaurant_rules (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), rule TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS proactive_alerts (restaurant_id TEXT NOT NULL, ingredient_id TEXT NOT NULL, last_alerted_at TEXT NOT NULL, last_quantity TEXT NOT NULL, PRIMARY KEY(restaurant_id, ingredient_id))",
                 "CREATE TABLE IF NOT EXISTS stock_counts (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), ingredient_id TEXT NOT NULL, estimated_quantity TEXT NOT NULL, counted_quantity TEXT NOT NULL, delta TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, applied_at TEXT)",
@@ -378,6 +378,19 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
             conn.execute("CREATE TABLE inventory (restaurant_id TEXT NOT NULL, ingredient_id TEXT NOT NULL, quantity TEXT NOT NULL, PRIMARY KEY(restaurant_id, ingredient_id))")
             conn.execute("INSERT INTO inventory (restaurant_id, ingredient_id, quantity) SELECT ?, ingredient_id, quantity FROM inventory_legacy", (RESTAURANT["id"],))
             conn.execute("DROP TABLE inventory_legacy")
+        # Custom ingredient ids are per tenant: a global id primary key let the
+        # first restaurant to create a name block every other restaurant from
+        # auto-creating it. Rebuild when the key is still single-column.
+        pk_columns = [row[1] for row in conn.execute("PRAGMA table_info(custom_ingredients)") if row[5]]
+        if pk_columns == ["id"]:
+            conn.execute("ALTER TABLE custom_ingredients RENAME TO custom_ingredients_legacy")
+            conn.execute(
+                "CREATE TABLE custom_ingredients (id TEXT NOT NULL, name TEXT NOT NULL, unit TEXT NOT NULL, "
+                "reorder_threshold TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto', "
+                "PRIMARY KEY (restaurant_id, id))"
+            )
+            conn.execute("INSERT INTO custom_ingredients SELECT id, name, unit, reorder_threshold, created_at, restaurant_id FROM custom_ingredients_legacy")
+            conn.execute("DROP TABLE custom_ingredients_legacy")
 
     def _ensure_demo_tenant(self, conn):
         """Idempotently seed the demo restaurant, its logins, and WhatsApp number."""

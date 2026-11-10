@@ -484,6 +484,8 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         return re.sub(r"_+", "_", slug)[:100]
 
     def _resolve_new_ingredients(self, conn, draft, restaurant_id):
+        # Custom ingredient ids live per tenant (primary key (slug, id)): two
+        # restaurants may each auto-create the same name without colliding.
         catalog = self._catalog_for(restaurant_id)
         created = []
         for item in draft["items"]:

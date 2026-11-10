@@ -100,7 +100,7 @@ def migrate(db_path):
                [{"id": row["id"], "slug": row.get("restaurant_id") or RESTAURANT["id"], "name": row["name"],
                  "unit": row["unit"], "reorder_threshold": row["reorder_threshold"], "created_at": row["created_at"]}
                 for row in _sqlite_rows(db_path, "custom_ingredients", RESTAURANT["id"])],
-               "id")
+               "slug, id")
     except Exception:
         counts["custom_ingredients"] = 0
     conn.commit()
