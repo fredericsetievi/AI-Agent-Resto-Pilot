@@ -19,7 +19,7 @@ from .stock_llm import DEFAULT_BASE_URL, DEFAULT_MODEL, StepFunTextError
 from .vision import validate_base_url
 
 
-VALID_INTENTS = ("approve", "reject", "summary", "none")
+VALID_INTENTS = ("approve", "reject", "summary", "purchase_edit", "none")
 _INTENT_JSON = re.compile(r"\{[^{}]*\}")
 
 
@@ -67,11 +67,12 @@ async def classify_intent(text, *, api_key, model=DEFAULT_MODEL, base_url=DEFAUL
                 "(\"ya\", \"setuju\", \"gas\", \"setuju banget deh\", \"acc all\").\n"
                 "- reject: an unambiguous cancellation of that draft (\"batal\", \"gajadi\", \"batalin deh\").\n"
                 "- summary: a request for a recap or report (\"rekap dong\", \"ringkasan minggu ini\").\n"
+                "- purchase_edit: the sender says a RECORDED purchase is wrong and must be changed or voided (\"pembelian cabai kemarin salah, harusnya 3 kg\", \"batalin pembelian beras kemarin\").\n"
                 "- none: everything else — purchase notes, questions, greetings, thanks, and anything "
                 "ambiguous or half-said. When unsure, answer none; a wrong approve is costly, a none "
                 "is safe.\n\n"
                 f"Message:\n{text.strip()[:500]}\n\n"
-                'Return one JSON object and nothing else: {"intent": "approve" | "reject" | "summary" | "none"}'
+                'Return one JSON object and nothing else: {"intent": "approve" | "reject" | "summary" | "purchase_edit" | "none"}'
             ),
         }],
     }
