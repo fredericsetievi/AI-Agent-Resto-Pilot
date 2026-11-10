@@ -21,6 +21,8 @@ SUPPORTED_ENV_KEYS = {
     "SUPABASE_DB_PORT",
     "SUPABASE_DB_USER",
     "WHATSAPP_OPEN_ONBOARDING",
+    "WHATSAPP_ALERT_TEMPLATE",
+    "WHATSAPP_ALERT_TEMPLATE_LANG",
     "META_WHATSAPP_ACCESS_TOKEN",
     "META_APP_SECRET",
     "META_WEBHOOK_VERIFY_TOKEN",
@@ -117,6 +119,12 @@ def main():
         "telegram_api_base": setting("TELEGRAM_API_BASE") or None,
     }
     telegram_configured = bool(telegram_settings["telegram_bot_token"] and telegram_settings["telegram_webhook_secret"])
+    # Approved template for proactive alerts sent outside WhatsApp's 24-hour
+    # customer-service window; inside the window (and on Telegram) the plain
+    # free-form alert is used. The template name/language never affect the
+    # Meta-configured check above.
+    whatsapp_alert_template = (setting("WHATSAPP_ALERT_TEMPLATE") or "").strip() or None
+    whatsapp_alert_template_lang = (setting("WHATSAPP_ALERT_TEMPLATE_LANG") or "").strip() or "id"
     try:
         proactive_hours = float(setting("PROACTIVE_CHECK_HOURS", "6"))
     except ValueError:
@@ -132,6 +140,7 @@ def main():
     print("Telegram bot: configured" if telegram_configured else "Telegram bot: disabled (set TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET)")
     print("Public host access: enabled (login still required)" if public_demo else "Public host access: loopback only (set PUBLIC_DEMO=1 to serve a tunnel)")
     print(f"Proactive low-stock checks: every {proactive_hours:g} hour(s)" if proactive_hours > 0 else "Proactive low-stock checks: disabled (PROACTIVE_CHECK_HOURS=0)")
+    print(f"Proactive WhatsApp template: '{whatsapp_alert_template}' ({whatsapp_alert_template_lang}) for sends outside the 24-hour window" if whatsapp_alert_template else "Proactive WhatsApp template: not set (WHATSAPP_ALERT_TEMPLATE; free-form replies only work within 24h of the owner's last message)")
     print("StepFun Vision: configured" if vision_api_key else "StepFun Vision: disabled (set STEPFUN_API_KEY)")
     if text_llm_enabled:
         print(f"StepFun text rescue: enabled (model {text_llm_model or 'default'}; rules stay first)")
@@ -171,6 +180,8 @@ def main():
             public_demo=public_demo,
             proactive_check_interval_seconds=proactive_hours * 3600,
             whatsapp_open_onboarding=setting("WHATSAPP_OPEN_ONBOARDING", "1").strip().casefold() in {"1", "true", "yes", "on"},
+            whatsapp_alert_template=whatsapp_alert_template,
+            whatsapp_alert_template_lang=whatsapp_alert_template_lang,
             **meta_settings,
             **telegram_settings,
         ),

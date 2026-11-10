@@ -341,6 +341,31 @@ async def send_text(access_token, phone_number_id, graph_version, recipient, bod
     return await _send(access_token, phone_number_id, graph_version, recipient, payload, client=client)
 
 
+async def send_template(access_token, phone_number_id, graph_version, recipient, template_name, template_lang, body_params, *, client=None):
+    """Send an approved template message — the only delivery that reaches a
+    recipient outside the 24-hour customer-service window. ``body_params``
+    fills the template's positional {{1}}..{{n}} body placeholders in order;
+    everything else about the wording is fixed by the Meta-approved template.
+    """
+    if not isinstance(template_name, str) or not template_name.strip():
+        raise MetaWhatsAppError("No Meta WhatsApp template is configured for proactive alerts.", 503)
+    if not isinstance(template_lang, str) or not template_lang.strip():
+        template_lang = "id"
+    params = [{"type": "text", "text": str(param)} for param in body_params]
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient,
+        "type": "template",
+        "template": {
+            "name": template_name.strip(),
+            "language": {"code": template_lang.strip()},
+            "components": [{"type": "body", "parameters": params}],
+        },
+    }
+    return await _send(access_token, phone_number_id, graph_version, recipient, payload, client=client)
+
+
 async def send_audio_message(access_token, phone_number_id, graph_version, recipient, audio_id, *, client=None):
     """Send a previously uploaded audio attachment (a Meta media ID) as a reply."""
     if not isinstance(audio_id, str) or not _MEDIA_ID.fullmatch(audio_id):

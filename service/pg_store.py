@@ -1716,6 +1716,27 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
             row = cur.fetchone()
         return {"id": row[0], "name": row[1]} if row else None
 
+    def last_inbound_age_hours(self, phone, platform="whatsapp"):
+        """Hours since this sender last wrote us on the platform, or None if never.
+
+        Drives WhatsApp's 24-hour customer-service window: inside it a
+        proactive alert may be a free-form reply; outside it the alert must
+        go as an approved template. Transports never mix across platforms.
+        """
+        transports = list(("telegram_bot",) if platform == "telegram" else ("whatsapp_simulator", "meta_whatsapp_cloud"))
+        with pg_connection() as conn:
+            cur = self._execute(
+                conn,
+                "SELECT EXTRACT(EPOCH FROM (now() - max(m.created_at))) / 3600.0 "
+                "FROM whatsapp_messages m JOIN whatsapp_threads t ON t.id=m.thread_id "
+                "WHERE t.sender=%s AND m.direction='inbound' AND m.transport = ANY(%s)",
+                (str(phone or "").strip(), transports),
+            )
+            row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        return max(float(row[0]), 0.0)
+
     @staticmethod
     def _linked_numbers_conn(conn, restaurant_id):
         """linked_numbers on an existing connection (for inside transactions)."""
