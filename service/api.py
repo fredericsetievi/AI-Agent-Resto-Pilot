@@ -577,6 +577,9 @@ def create_app(
             name = store.restaurant_name(restaurant_id)
             if name:
                 return {"body": f"Nama toko Anda: {name}."}
+        menu = store.menu_facts(text, restaurant_id)
+        if menu is not None:
+            return {"body": menu["body"]}
         data = store.data_facts(text, restaurant_id)
         if data is not None:
             if not data["facts"]:
@@ -1024,6 +1027,13 @@ def create_app(
         # flow stay reachable.
         if await run_in_threadpool(store.parse_opname, text, restaurant["id"]) is not None:
             payload["opname_answer"] = await build_opname_answer(text, restaurant["id"])
+            return
+        # A sales/menu question is answered from the ledger; the operations
+        # classifier must not claim the same words ("menu paling laku" looks
+        # like a report to it).
+        menu = await run_in_threadpool(store.menu_facts, text, restaurant["id"])
+        if menu is not None:
+            payload["stock_answer"] = menu
             return
         candidate = parse_operations_text(text)
         if candidate is not None:
