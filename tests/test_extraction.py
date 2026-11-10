@@ -70,6 +70,50 @@ def test_trailing_dari_clause_becomes_supplier():
     assert any("quantity" in warning for warning in sparse["warnings"])
 
 
+def test_supplier_header_line_names_the_supplier_without_adding_an_item():
+    result = extract_purchase("Beli dari Dika:\nkembung 25 ekor Rp40000\nmas 6 ekor Rp30000")
+    assert [item["raw_name"] for item in result["items"]] == ["kembung", "mas"]
+    assert result["supplier"] == "Dika"
+    assert result["warnings"] == []
+
+    # A bare "dari <name>" header works too, and trailing punctuation is trimmed.
+    assert extract_purchase("dari Pasar Pagi.\ntelur 2 kg Rp56000")["supplier"] == "Pasar Pagi"
+
+    # A "dari" line with items on it is still a purchase line, not a header.
+    inline = extract_purchase("beli cabai 3 kg 150rb dari Bu Sari")
+    assert [item["ingredient_id"] for item in inline["items"]] == ["cabai"]
+    assert inline["supplier"] == "Bu Sari"
+
+
+def test_comma_and_dan_lists_split_into_separate_items():
+    result = extract_purchase("beli kembung 25 ekor, mas 6 ekor")
+    assert [item["raw_name"] for item in result["items"]] == ["kembung", "mas"]
+    assert [item["quantity"] for item in result["items"]] == ["25", "6"]
+
+    dan = extract_purchase("beli gula 5 kg dan telur 2 kg Rp56000")
+    assert [item["raw_name"] for item in dan["items"]] == ["gula", "telur"]
+    assert dan["items"][1]["line_total_idr"] == 56000
+
+    # Approval prefixes and digit-less clauses never split.
+    assert len(extract_purchase("setuju, beli cabai 3 kg 150rb")["items"]) == 1
+
+    # Dish-style names and digit-less conjunction lists keep the legacy
+    # single-clause rejection with its ambiguity warning.
+    dish = extract_purchase("bumbu dan rempah 3 kg Rp60000")
+    assert dish["items"] == []
+    assert any("multiple item clauses" in warning for warning in dish["warnings"])
+
+    # Decimal commas stay inside the price: the split never touches them.
+    price = extract_purchase("gula 2 kg Rp7,5rb")
+    assert price["items"][0]["raw_name"] == "gula"
+    assert price["items"][0]["line_total_idr"] == 7500
+
+    # Clauses that fail to parse fall back to the single-clause behavior.
+    fallback = extract_purchase("beli gula dan garam")
+    assert fallback["items"] == []
+    assert any("multiple item clauses" in warning for warning in fallback["warnings"])
+
+
 def test_unknown_item_and_pack_are_preserved_for_manual_selection():
     result = extract_purchase("beli daun bawang 2 ikat 10rb")
     assert result["items"][0]["ingredient_id"] is None
@@ -104,9 +148,15 @@ def test_normalization_uses_decimal_conversions_and_exact_unit_price():
 
 
 def test_ambiguous_or_instruction_like_source_is_rejected():
+    # Fully specified "dan" lists now parse as separate items.
     combined = extract_purchase("beli cabai 1 kg 20rb dan beras 2 kg 30rb")
-    assert combined["items"] == []
-    assert any("multiple item clauses" in warning for warning in combined["warnings"])
+    assert [item["ingredient_id"] for item in combined["items"]] == ["cabai", "beras"]
+    assert combined["warnings"] == []
+
+    # Clauses without a name still fall back to the ambiguity warning.
+    nameless = extract_purchase("beli gula dan garam")
+    assert nameless["items"] == []
+    assert any("multiple item clauses" in warning for warning in nameless["warnings"])
 
     for source in ("jangan beli cabai 1 kg 20rb", "rencana beli cabai 1 kg 20rb", "beli cabai 1 kg per kg 20rb", "beli cabai 1 kg diskon 20rb", "beli cabai 1 l 20rb"):
         result = extract_purchase(source)
