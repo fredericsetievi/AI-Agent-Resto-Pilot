@@ -92,6 +92,17 @@ _MULTI_CLAUSE = re.compile(r"(?i)\b(?:dan|lalu|kemudian|serta)\b")
 # Trailing "dari <name>" names the supplier ("beli garam 1 kg 10rb dari Toko
 # Sebelah"). The name must start with a letter so trailing prices never match.
 _SUPPLIER_SUFFIX = re.compile(r"(?i)\s+dari\s+(?P<supplier>[a-z][^,;\r\n]{0,59})\s*$")
+# A supplier header line ("dari Dika:", "beli dari Pasar Pagi") declares the
+# supplier for the items that follow and carries no item of its own.
+_SUPPLIER_HEADER = re.compile(
+    r"^\s*(?:(?:tolong\s+)?(?:beli|pembelian|buy)\s+)?dari\s+"
+    r"(?P<supplier>[a-z][^,;\r\n]{0,59})\s*$",
+    re.IGNORECASE,
+)
+# Owners list several items in one breath ("kembung 25 ekor, mas 6 ekor").
+# Split points are commas that are not inside a number (decimal commas such as
+# "Rp7,5" have no following space) and the shared coordinating conjunctions.
+_CLAUSE_SPLIT = re.compile(r"(?i),(?=\s)|\s+(?:dan|lalu|kemudian|serta)\s+")
 
 
 def _decimal_text(value: str) -> Decimal | None:
@@ -275,6 +286,34 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
     }, warnings
 
 
+def _parse_line_clauses(line: str, line_number: int) -> tuple[list[dict[str, Any]], list[str]]:
+    """Parse one input line, splitting comma/conjunction lists into items.
+
+    Owners write "kembung 25 ekor, mas 6 ekor" in one breath. The line is
+    split on commas followed by whitespace and on "dan/lalu/kemudian/serta",
+    but only when every clause carries a digit (a quantity or price) and
+    yields an item; approval prefixes ("setuju, beli ..."), dish-style names
+    ("bumbu dan rempah 3 kg"), and anything else fall back to the
+    single-clause parse, including its multi-clause ambiguity warning.
+    """
+    clauses = [clause.strip() for clause in _CLAUSE_SPLIT.split(line) if clause.strip()]
+    if len(clauses) > 1 and all(re.search(r"\d", clause) for clause in clauses):
+        parsed: list[tuple[dict[str, Any], list[str]]] = []
+        for clause in clauses:
+            item, clause_warnings = _parse_clause(clause, line_number)
+            if item is None:
+                parsed = []
+                break
+            parsed.append((item, clause_warnings))
+        if parsed:
+            combined_warnings: list[str] = []
+            for _, clause_warnings in parsed:
+                combined_warnings.extend(clause_warnings)
+            return [entry[0] for entry in parsed], combined_warnings
+    item, line_warnings = _parse_clause(line, line_number)
+    return ([] if item is None else [item]), line_warnings
+
+
 def extract_purchase(text: str) -> dict[str, Any]:
     """Extract at most 20 explicit purchase lines without model/provider calls."""
     if not isinstance(text, str) or not text.strip():
@@ -288,11 +327,20 @@ def extract_purchase(text: str) -> dict[str, Any]:
     items = []
     supplier = None
     for line_number, line in nonempty:
+        # A supplier header line ("dari Dika:", "beli dari Pasar Pagi") names
+        # the supplier for the following items and parses no item itself.
+        header_match = _SUPPLIER_HEADER.match(line)
+        if header_match:
+            candidate = (header_match.group("supplier") or "").strip()
+            candidate = candidate.rstrip(".,!:")
+            if supplier is None and candidate:
+                supplier = candidate
+            continue
         # A trailing "dari <name>" clause names the supplier; strip it before
         # line parsing so the name never corrupts the item match.
         supplier_match = _SUPPLIER_SUFFIX.search(line)
         if supplier_match:
-            candidate = supplier_match.group("supplier").strip().rstrip(".,!")
+            candidate = supplier_match.group("supplier").strip().rstrip(".,!:")
             line = line[: supplier_match.start()].rstrip()
             if supplier is None and candidate:
                 supplier = candidate
@@ -300,9 +348,8 @@ def extract_purchase(text: str) -> dict[str, Any]:
             # A supplier-only line ("dari Toko Sebelah") records the name and
             # carries no item to parse.
             continue
-        item, line_warnings = _parse_clause(line, line_number)
-        if item is not None:
-            items.append(item)
+        line_items, line_warnings = _parse_line_clauses(line, line_number)
+        items.extend(line_items)
         warnings.extend(line_warnings)
     result: dict[str, Any] = {"items": items, "warnings": warnings}
     if supplier:
