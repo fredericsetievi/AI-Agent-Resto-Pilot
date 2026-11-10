@@ -387,6 +387,17 @@ def create_app(
     session cookies are Secure, and the well-known demo credentials are
     rejected at login. ``store_factory`` lets offline tests inject a store.
     """
+    # Hosted (Atoms) mode builds the app from explicit settings, but the
+    # platform adapter may not forward every key. Fall back to the process
+    # environment for Telegram so a credentials-only change never needs a
+    # code change (the adapter process env carries the project Keys).
+    if hosted and not (telegram_bot_token and telegram_webhook_secret):
+        import os
+
+        telegram_bot_token = telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
+        telegram_webhook_secret = telegram_webhook_secret or os.environ.get("TELEGRAM_WEBHOOK_SECRET")
+        if telegram_api_base == TELEGRAM_DEFAULT_API_BASE:
+            telegram_api_base = os.environ.get("TELEGRAM_API_BASE") or telegram_api_base
     # The proactive loop closes over store/run_proactive_check by name; both
     # are bound below before any request (or lifespan call) can run.
     @contextlib.asynccontextmanager
