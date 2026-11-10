@@ -77,7 +77,7 @@ async function api(path, {method='GET', body, key, timeout=15000} = {}) {
     try { payload = await response.json(); }
     catch { throw new Error(t('Gateway mengembalikan halaman bukan-JSON (halaman peringatan ngrok?). Muat ulang halaman, setujui peringatannya, lalu coba lagi.','The gateway returned a non-JSON page (ngrok warning?). Reload the page, accept the warning, then retry.')); }
     if (!response.ok) {
-      const error = new Error(payload.error?.message || t('err_request')); error.status=response.status; throw error;
+      const error = new Error(payload.error?.message || t('err_request')); error.status=response.status; error.code=payload.error?.code; throw error;
       }
     return payload.data;
   } catch (error) {
@@ -87,6 +87,8 @@ async function api(path, {method='GET', body, key, timeout=15000} = {}) {
   } finally { clearTimeout(timer); }
 }
 document.addEventListener('change',event => {
+  if(event.target.id==='f-user' && event.target.selectedOptions?.[0]?.dataset.loginPhone!==undefined)$('#f-phone').value=event.target.selectedOptions[0].dataset.loginPhone;
+
   if(event.target.id==='whatsapp-sender'){WHATSAPP_SENDER=event.target.value;state.whatsappNumber=event.target.value;state.whatsappLoaded=false;state.whatsappMessages=[];state.whatsappDraft=null;state.whatsappResult=null;loadWhatsAppMessages();}
 });
 
@@ -116,7 +118,7 @@ function renderAdminDetail() {
   if(!resto){location.hash='#admin';return;}
   const numbers=resto.whatsapp_numbers.map(number => `<div class="number-row"><code>${e(number.phone)}</code><span class="badge ${number.platform==='telegram'?'amber':'green'}">${e(number.platform || 'whatsapp')}</span><span>${e(number.label || '')}</span><span class="spacer"></span><button class="text-button danger" data-admin-action="remove-number" data-phone="${e(number.phone)}" data-platform="${e(number.platform || 'whatsapp')}">Hapus</button></div>`).join('');
   const owners=resto.users.map(user => `<div class="number-row"><code>${e(user.username)}</code><span>${e(user.display_name)} · owner</span></div>`).join('');
-  $('#content').innerHTML=`<button class="text-button" data-back-to="admin">${t('btn_back_restos')}</button><div class="admin-grid"><div class="column"><section class="panel"><div class="panel-heading"><div><h2>${e(resto.name)}</h2><p>${e(resto.address || t('no_address'))}</p></div><button class="button mini" data-admin-action="edit-resto">${t('btn_edit_info')}</button></div><div class="admin-list kv-list"><div><span>ID</span><span class="inline-id">${e(resto.id)}</span></div><div><span>${t('lbl_created')}</span><span>${e(date(resto.created_at))}</span></div><div><span>${t('lbl_recorded_purchases')}</span><span>${resto.recorded_purchases}</span></div><div><span>${t('lbl_pending_drafts')}</span><span>${resto.pending_drafts}</span></div></div></section><section class="panel"><div class="panel-heading"><div><h2>${t('lbl_linked_numbers')}</h2><p>${t('linked_numbers_sub')}</p></div><button class="button mini primary" data-admin-action="add-number">${t('btn_add_number')}</button></div><div class="admin-list">${numbers || `<div class="empty">${t('empty_no_numbers')}</div>`}</div></section><section class="panel"><div class="panel-heading"><div><h2>${t('lbl_owner_logins')}</h2></div><button class="button mini" data-admin-action="reset-password">${t('btn_reset_password')}</button></div><div class="admin-list">${owners}</div></section></div><div class="column"><div class="readonly-note"><span aria-hidden="true">👁</span> ${t('admin_readonly_note')}</div><section class="panel" id="admin-overview-panel"><div class="loading-state"><span class="spinner"></span> ${t('load_dashboard')}</div></section></div></div><dialog id="admin-dialog" class="review-dialog"><div id="admin-dialog-content"></div></dialog>`;
+  $('#content').innerHTML=`<button class="text-button" data-back-to="admin">${t('btn_back_restos')}</button><div class="admin-grid"><div class="column"><section class="panel"><div class="panel-heading"><div><h2>${e(resto.name)}</h2><p>${e(resto.address || t('no_address'))}</p></div><button class="button mini" data-admin-action="edit-resto">${t('btn_edit_info')}</button></div><div class="admin-list kv-list"><div><span>ID</span><span class="inline-id">${e(resto.id)}</span></div><div><span>${t('lbl_created')}</span><span>${e(date(resto.created_at))}</span></div><div><span>${t('lbl_recorded_purchases')}</span><span>${resto.recorded_purchases}</span></div><div><span>${t('lbl_pending_drafts')}</span><span>${resto.pending_drafts}</span></div></div></section><section class="panel"><div class="panel-heading"><div><h2>${t('lbl_linked_numbers')}</h2><p>${t('linked_numbers_sub')}</p></div><button class="button mini primary" data-admin-action="add-number">${t('btn_add_number')}</button></div><div class="admin-list">${numbers || `<div class="empty">${t('empty_no_numbers')}</div>`}</div></section><section class="panel"><div class="panel-heading"><div><h2>${t('lbl_owner_logins')}</h2></div><button class="button mini" data-admin-action="owner-phone">${t('phone_admin_title')}</button><button class="button mini" data-admin-action="reset-password">${t('btn_reset_password')}</button></div><div class="admin-list">${owners}</div></section></div><div class="column"><div class="readonly-note"><span aria-hidden="true">👁</span> ${t('admin_readonly_note')}</div><section class="panel" id="admin-overview-panel"><div class="loading-state"><span class="spinner"></span> ${t('load_dashboard')}</div></section></div></div><dialog id="admin-dialog" class="review-dialog"><div id="admin-dialog-content"></div></dialog>`;
   refreshAdminOverview();
 }
 let adminOverviewTicket=0;
@@ -151,6 +153,10 @@ async function adminAction(action, button) {
       const response=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers/${encodeURIComponent(button.dataset.phone)}?platform=${encodeURIComponent(platform)}`,{method:'DELETE',key:crypto.randomUUID()});
       replaceRestoInList(response);renderAdmin();toast('Koneksi dihapus. Pesan dari situ tidak lagi diproses.');return;
     }
+    if(action==='owner-phone'){
+      const phones=await api(`/v1/admin/restaurants/${state.adminSelected}/owner-phones`);
+      return adminDialogForm(t('phone_admin_title'), `<p>${t('phone_admin_help')}</p><label for="f-user">${t('lbl_owner_username')}</label><select id="f-user" required>${phones.map(owner=>`<option value="${e(owner.username)}" data-login-phone="${e(owner.phone || '')}">${e(owner.username)} · ${e(owner.phone || t('phone_not_enrolled'))}</option>`).join('')}</select><label for="f-phone">${t('phone_label')}</label><input id="f-phone" type="tel" inputmode="tel" autocomplete="tel" value="${e(phones[0]?.phone || '')}" maxlength="40" placeholder="0812 3456 7890 / +62…"><label><input id="f-reviewed" type="checkbox" required> ${t('phone_admin_review')}</label>`, 'owner-phone');
+    }
     if(action==='reset-password')return adminDialogForm(t('dlg_reset_pw'), `<label for="f-user">${t('lbl_owner_username')}</label><input id="f-user" value="${e(resto && resto.users[0] ? resto.users[0].username : '')}" maxlength="50" required><label for="f-pass">${t('lbl_new_password')}</label><input id="f-pass" type="password" maxlength="200" required>`, 'reset-password');
   } catch(error) { toast(error.message); }
 }
@@ -167,6 +173,10 @@ document.addEventListener('submit',async event => {
     if(action==='create-resto')detail=await api('/v1/admin/restaurants',{method:'POST',body:{name:value('name'),address:value('address'),owner_username:value('user'),owner_password:value('pass'),whatsapp_number:value('phone'),number_label:value('label')},key:crypto.randomUUID()});
     else if(action==='update-resto')detail=await api(`/v1/admin/restaurants/${state.adminSelected}`,{method:'PATCH',body:{name:value('name'),address:value('address')},key:crypto.randomUUID()});
     else if(action==='add-number')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers`,{method:'POST',body:{whatsapp_number:value('phone'),platform:value('platform'),label:value('label')},key:crypto.randomUUID()});
+    else if(action==='owner-phone'){
+      await api(`/v1/admin/restaurants/${state.adminSelected}/owner-phone`,{method:'PUT',body:{username:value('user'),phone:value('phone') || null,ownership_reviewed:$('#f-reviewed').checked}});
+      $('#admin-dialog').close();toast(t('phone_admin_saved'));return;
+    }
     else if(action==='reset-password')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/reset-owner-password`,{method:'POST',body:{username:value('user'),new_password:value('pass')},key:crypto.randomUUID()});
     else return;
     replaceRestoInList(detail);
@@ -186,7 +196,9 @@ function showLogin() {
   showApp(false);
   $('#login-page').hidden = false;
   $('#login-error').hidden = true;
-  $('#login-username')?.focus?.();
+  $('#login-form').reset?.();
+  resetPhoneLogin();
+  $('#login-phone')?.focus?.();
 }
 function showApp(visible) {
   $('#login-page').hidden = true;
@@ -198,16 +210,80 @@ async function login(event) {
   const button = (event.target.querySelector && event.target.querySelector('button[type="submit"]')) || null;
   if(button)button.disabled = true; showError('login-error','');
   try {
-    state.user = await api('/v1/auth/login', {method:'POST', body:{username:$('#login-username').value.trim(), password:$('#login-password').value}});
+    const phone=$('#existing-login-phone').value.trim();
+    state.user = await api(phone?'/v1/auth/phone/connect':'/v1/auth/login', {method:'POST', body:{username:$('#login-username').value.trim(), password:$('#login-password').value,...(phone?{phone}:{})}});
     event.target.reset();
-    showApp(true);
-    state.page = state.user.role==='admin' ? 'admin' : 'overview';
-    if(location.hash.slice(1)!==state.page)location.hash='#'+state.page; // hashchange fires navigate()
-    navigate(); refresh();
-    startAutoRefresh();
-  } catch(error) { showError('login-error', error.message); }
+    finishLogin();
+  } catch(error) { showError('login-error', $('#existing-login-phone').value.trim()?t(phoneError(error)):error.message); }
   finally { if(button)button.disabled = false; }
 }
+function finishLogin() {
+  $('#login-form').reset?.();
+  resetPhoneLogin();
+  showApp(true);
+  state.page = state.user.role==='admin' ? 'admin' : 'overview';
+  if(location.hash.slice(1)!==state.page)location.hash='#'+state.page;
+  navigate();refresh();startAutoRefresh();
+}
+const phoneLogin={mode:'login',busy:false,errorKey:null};
+function resetPhoneLogin() {
+  phoneLogin.mode='login';phoneLogin.busy=false;phoneLogin.errorKey=null;
+  $('#phone-login-form').reset?.();
+  for(const id of ['login-phone','login-phone-password','signup-name','signup-restaurant','signup-password-confirm'])$('#'+id).value='';
+  renderPhoneLogin();
+}
+function renderPhoneLogin() {
+  const register=phoneLogin.mode==='register';
+  $('#phone-auth-title').textContent=t(register?'phone_create':'login_title');
+  $('#phone-auth-subtitle').textContent=t(register?'phone_signup_sub':'phone_login_sub');
+  $('#phone-register-fields').hidden=!register;$('#phone-confirm-fields').hidden=!register;
+  for(const id of ['signup-name','signup-restaurant','signup-password-confirm']){
+    $('#'+id).required=register;$('#'+id).disabled=!register || phoneLogin.busy;
+  }
+  $('#login-phone').disabled=phoneLogin.busy;$('#login-phone-password').disabled=phoneLogin.busy;
+  $('#login-phone-password').setAttribute('autocomplete',register?'new-password':'current-password');
+  if(register)$('#login-phone-password').setAttribute('minlength','8');else $('#login-phone-password').removeAttribute('minlength');
+  $('#phone-login-submit').disabled=phoneLogin.busy;
+  $('#phone-login-submit').textContent=t(phoneLogin.busy?'phone_loading':register?'phone_create':'phone_signin');
+  $('#phone-mode-toggle').disabled=phoneLogin.busy;
+  $('#phone-mode-toggle').textContent=t(register?'phone_back_login':'phone_create');
+  showError('phone-login-error',phoneLogin.errorKey?t(phoneLogin.errorKey):'');
+}
+function setPhoneMode(mode) {
+  if(phoneLogin.busy)return;
+  phoneLogin.mode=mode;phoneLogin.errorKey=null;
+  $('#login-phone-password').value='';$('#signup-password-confirm').value='';
+  renderPhoneLogin();
+}
+function phoneError(error) {
+  if(error.code==='phone_login_throttled' || error.status===429)return 'phone_err_throttled';
+  if(error.code==='invalid_login_phone')return 'phone_err_number';
+  if(error.code==='migration_required' || error.status===503)return 'phone_err_unavailable';
+  if(error.code==='invalid_credentials' || error.status===401)return 'phone_err_credentials';
+  if(error.code==='phone_account_conflict' || error.status===409)return 'phone_err_conflict';
+  if(error.status===422)return 'phone_err_fields';
+  return 'phone_err_network';
+}
+async function submitPhoneLogin(event) {
+  event.preventDefault();
+  if(phoneLogin.busy)return;
+  const register=phoneLogin.mode==='register', password=$('#login-phone-password').value;
+  phoneLogin.errorKey=null;
+  if(register && password!==$('#signup-password-confirm').value){
+    phoneLogin.errorKey='phone_err_confirm';renderPhoneLogin();return;
+  }
+  const body={phone:$('#login-phone').value.trim(),password,...(register?{restaurant_name:$('#signup-restaurant').value.trim(),display_name:$('#signup-name').value.trim()}:{})};
+  phoneLogin.busy=true;renderPhoneLogin();
+  try {
+    state.user=await api('/v1/auth/phone/'+(register?'register':'login'),{method:'POST',body});
+    finishLogin();
+  } catch(error) {phoneLogin.errorKey=phoneError(error);}
+  finally {
+    phoneLogin.busy=false;$('#login-phone-password').value='';$('#signup-password-confirm').value='';renderPhoneLogin();
+  }
+}
+$('#phone-login-form').addEventListener('submit',submitPhoneLogin);
+$('#phone-mode-toggle').addEventListener('click',()=>setPhoneMode(phoneLogin.mode==='login'?'register':'login'));
 async function logout() {
   try { await api('/v1/auth/logout', {method:'POST'}); } catch(error) { /* the session is gone either way */ }
   inventoryState.data=null;inventoryState.loaded=false;inventoryState.error='';inventoryState.snapshot=[];inventoryState.recipesSnapshot=[];
@@ -669,7 +745,6 @@ document.addEventListener('keydown',event => {
   }
 });
 document.addEventListener('submit',event => {if(event.target.id==='login-form')login(event);});
-$('#login-form').addEventListener('submit',login);
 $('#logout').addEventListener('click',logout);
 
 // Inventory dialogs live outside the polling content area, preserving unsaved input.

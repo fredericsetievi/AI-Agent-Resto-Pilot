@@ -170,6 +170,28 @@ class Login(Model):
     password: Annotated[str, StringConstraints(min_length=1, max_length=200)]
 
 
+class PhonePasswordLogin(Model):
+    phone: Annotated[str, StringConstraints(min_length=1, max_length=40)]
+    password: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
+class PhoneAccountCreate(Model):
+    phone: Annotated[str, StringConstraints(min_length=1, max_length=40)]
+    password: Password
+    restaurant_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+
+
+class PhoneAccountConnect(Login):
+    phone: Annotated[str, StringConstraints(min_length=1, max_length=40)]
+
+
+class OwnerPhoneEnrollment(Model):
+    username: Username
+    phone: Annotated[str, StringConstraints(min_length=1, max_length=40)] | None
+    ownership_reviewed: StrictBool
+
+
 class RestaurantCreate(Model):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     address: ShortText | None = None
@@ -799,6 +821,24 @@ def create_app(
         )
         return {"data": user}
 
+    def phone_session_response(response, result):
+        user, token = result
+        response.set_cookie(SESSION_COOKIE, token, max_age=int(SESSION_TTL.total_seconds()), httponly=True, samesite="lax", path="/", secure=secure_cookies)
+        return {"data": user}
+
+    @app.post("/v1/auth/phone/login")
+    def phone_password_login(body: PhonePasswordLogin, request: Request, response: Response):
+        # ASGI client address only; never trust arbitrary forwarded headers.
+        return phone_session_response(response, store.login_phone_password(body.phone, body.password, request.client.host if request.client else "unknown", hosted=hosted, allow_demo_owner=allow_demo_owner_login))
+
+    @app.post("/v1/auth/phone/register", status_code=201)
+    def phone_register(body: PhoneAccountCreate, request: Request, response: Response):
+        return phone_session_response(response, store.register_phone_account(body.phone, body.password, body.restaurant_name, body.display_name, request.client.host if request.client else "unknown"))
+
+    @app.post("/v1/auth/phone/connect")
+    def phone_connect(body: PhoneAccountConnect, request: Request, response: Response):
+        return phone_session_response(response, store.connect_existing_phone(body.username, body.password, body.phone, request.client.host if request.client else "unknown", hosted=hosted, allow_demo_owner=allow_demo_owner_login))
+
     @app.post("/v1/auth/logout")
     def logout(request: Request, response: Response):
         token = request.cookies.get(SESSION_COOKIE)
@@ -1115,6 +1155,16 @@ def create_app(
     @app.post("/v1/admin/restaurants/{restaurant_id}/reset-owner-password")
     def admin_reset_owner_password(restaurant_id: str, body: OwnerPasswordReset, actor=Depends(admin_actor), idempotency_key=Depends(key)):
         return {"data": store.reset_owner_password(restaurant_id, idempotency_key, body.model_dump())}
+
+    @app.put("/v1/admin/restaurants/{restaurant_id}/owner-phone")
+    def admin_owner_phone(restaurant_id: str, body: OwnerPhoneEnrollment, actor=Depends(admin_actor)):
+        if not body.ownership_reviewed:
+            raise DomainError("ownership_review_required", "Review the owner's identity and restaurant authority before assigning or revoking a login phone.", 422)
+        return {"data": store.enroll_login_phone(restaurant_id, body.username, body.phone, actor["id"])}
+
+    @app.get("/v1/admin/restaurants/{restaurant_id}/owner-phones")
+    def admin_owner_phones(restaurant_id: str, actor=Depends(admin_actor)):
+        return {"data": store.owner_login_phones(restaurant_id)}
 
     @app.get(WEBHOOK_PATH)
     async def verify_meta_whatsapp(request: Request):

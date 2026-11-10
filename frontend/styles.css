@@ -66,6 +66,12 @@
 .login-card h1{font-size:27px;margin:0 0 8px}
 .login-card .muted{margin-bottom:6px}
 .login-submit{width:100%;margin-top:22px;padding:13px}
+.login-card input{font-size:16px;min-height:44px;width:100%;box-sizing:border-box}
+.login-card details{margin-top:24px;border-top:1px solid var(--line);padding-top:16px}
+.login-card summary{cursor:pointer;padding:8px 0}
+.login-card .text-button{min-height:44px;margin-right:12px}
+.login-card input:read-only{background:#f2f5f3}
+@media(max-width:480px){.login-page{padding:16px}.login-card{padding:28px 22px}}
 #logout{margin-top:16px;width:100%;background:#ffffff10;border-color:#ffffff2a;color:#dbe7d5}
 #logout:hover{background:#ffffff1c}
 .admin-grid{display:grid;grid-template-columns:minmax(280px,1fr) minmax(0,1.8fr);gap:22px;align-items:start;margin-top:18px}

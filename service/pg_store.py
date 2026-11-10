@@ -35,6 +35,7 @@ from .inventory import InventoryMixin
 from .operations import OperationsMixin
 from .purchase_sources import PurchaseSourcesMixin
 from .purchase_idempotency import purchase_idempotent
+from .phone_auth import PhoneAuthMixin
 from .db import (
     APPROVE_COMMANDS, CATALOG, CATALOG_BY_ID, DEMO_NUMBERS, DEMO_USERS,
     DomainError, RESTAURANT, RESTAURANT_TIMEZONE, REJECT_COMMANDS,
@@ -56,7 +57,7 @@ from .whatsapp import (
 )
 
 
-class PostgresStore(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
+class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
     """The RestoPilot authority in Supabase Postgres. Same contract as Store."""
 
     inventory_postgres = True

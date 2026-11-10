@@ -56,19 +56,49 @@
   <dialog id="review-dialog" class="review-dialog" aria-labelledby="review-title"><div id="review-content"></div></dialog>
   <dialog id="inventory-dialog" class="review-dialog" aria-labelledby="inventory-dialog-title"><div id="inventory-dialog-content"></div></dialog>
   <div id="login-page" class="login-page" hidden>
-    <form id="login-form" class="login-card">
+    <div class="login-card">
       <div class="lang-toggle" role="group" data-i18n-attr="aria-label:lang_aria"><button type="button" data-lang="id">ID</button><button type="button" data-lang="en">EN</button></div>
       <span class="brand-mark login-mark" aria-hidden="true">r<span>·</span></span>
-      <h1 data-i18n="login_title">Masuk ke RestoPilot</h1>
-      <p class="muted" data-i18n="login_sub">Dashboard pembelian untuk pemilik resto dan admin platform.</p>
+      <h1 id="phone-auth-title" data-i18n="login_title">Masuk ke RestoPilot</h1>
+      <p id="phone-auth-subtitle" class="muted" data-i18n="phone_login_sub">Masuk dengan nomor ponsel dan password akun restoran Anda.</p>
+      <form id="phone-login-form">
+        <div id="phone-register-fields" hidden>
+          <label for="signup-name" data-i18n="phone_name">Nama Anda</label>
+          <input id="signup-name" name="display_name" autocomplete="name" maxlength="200" disabled>
+          <label for="signup-restaurant" data-i18n="phone_restaurant">Nama restoran</label>
+          <input id="signup-restaurant" name="restaurant_name" autocomplete="organization" maxlength="200" disabled>
+          <p class="field-help" data-i18n="phone_signup_help">Pendaftaran membuat ruang restoran baru. Sudah punya akun? Hubungkan nomor melalui login akun lama di bawah agar data Anda tetap digunakan.</p>
+        </div>
+        <label for="login-phone" data-i18n="phone_label">Nomor ponsel</label>
+        <input id="login-phone" name="phone" type="tel" autocomplete="username" maxlength="40" placeholder="0812 3456 7890 / +62…" aria-describedby="phone-help" required>
+        <p id="phone-help" class="field-help" data-i18n="phone_help">Nomor Indonesia: 08 atau +628. Negara lain: sertakan + dan kode negara.</p>
+        <label for="login-phone-password" data-i18n="login_password">Password</label>
+        <input id="login-phone-password" name="password" type="password" autocomplete="current-password" maxlength="200" required>
+        <div id="phone-confirm-fields" hidden>
+          <label for="signup-password-confirm" data-i18n="phone_confirm">Ulangi password</label>
+          <input id="signup-password-confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="8" maxlength="200" disabled>
+          <p class="field-help" data-i18n="phone_password_help">Gunakan minimal 8 karakter.</p>
+        </div>
+        <div id="phone-login-error" class="notice error" role="alert" hidden></div>
+        <button id="phone-login-submit" class="button primary login-submit" type="submit" data-i18n="phone_signin">Masuk</button>
+        <button id="phone-mode-toggle" class="text-button" type="button" data-i18n="phone_create">Buat akun restoran</button>
+      </form>
+      <details id="password-login">
+        <summary data-i18n="phone_password_fallback">Login akun lama / admin</summary>
+        <form id="login-form">
       <label for="login-username" data-i18n="login_username">Username</label>
       <input id="login-username" name="username" autocomplete="username" maxlength="50" required>
       <label for="login-password" data-i18n="login_password">Password</label>
       <input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="200" required>
+      <label for="existing-login-phone" data-i18n="phone_connect_label">Hubungkan nomor ponsel (opsional, untuk pemilik)</label>
+      <input id="existing-login-phone" name="phone" type="tel" maxlength="40" placeholder="0812 3456 7890 / +62…">
+      <p class="field-help" data-i18n="phone_connect_help">Masukkan nomor untuk login berikutnya dengan nomor dan password akun ini. Kosongkan untuk login biasa.</p>
       <div id="login-error" class="notice error" role="alert" hidden></div>
       <button class="button primary login-submit" type="submit"><span data-i18n="btn_login">Masuk</span> <span aria-hidden="true">→</span></button>
       <p class="field-help" data-i18n-html="login_demo">Masuk dengan akun pemilik restoran atau admin platform Anda.</p>
-    </form>
+        </form>
+      </details>
+    </div>
   </div>
   <div id="toast" role="status" class="toast" hidden></div>
 </body>

@@ -23,6 +23,7 @@ from .inventory import InventoryMixin, SQLITE_SCHEMA
 from .operations import OperationsMixin, SQLITE_SCHEMA as OPERATIONS_SQLITE_SCHEMA
 from .purchase_sources import PurchaseSourcesMixin, SQLITE_SCHEMA as PURCHASE_SOURCES_SQLITE_SCHEMA
 from .purchase_idempotency import purchase_idempotent
+from .phone_auth import PhoneAuthMixin, SQLITE_SCHEMA as PHONE_AUTH_SQLITE_SCHEMA
 from .extraction import catalog_aliases, extract_purchase, normalize_item
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
 from .onboarding import restaurant_selection
@@ -230,7 +231,7 @@ def normalize_items_for_catalog(items, catalog):
     return normalized, list(dict.fromkeys(warnings))
 
 
-class Store(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
+class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
     def __init__(self, path, seed=True):
         self.path = str(path)
         # Each restaurant owns a catalog: the shared base plus the ingredients
@@ -309,7 +310,7 @@ class Store(PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
                 "CREATE TABLE IF NOT EXISTS stock_counts (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), ingredient_id TEXT NOT NULL, estimated_quantity TEXT NOT NULL, counted_quantity TEXT NOT NULL, delta TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, applied_at TEXT)",
             ):
                 conn.execute(statement)
-            for statement in (*SQLITE_SCHEMA, *OPERATIONS_SQLITE_SCHEMA, *PURCHASE_SOURCES_SQLITE_SCHEMA):
+            for statement in (*SQLITE_SCHEMA, *OPERATIONS_SQLITE_SCHEMA, *PURCHASE_SOURCES_SQLITE_SCHEMA, *PHONE_AUTH_SQLITE_SCHEMA):
                 conn.execute(statement)
             movement_columns = {row[1] for row in conn.execute("PRAGMA table_info(movements)")}
             if "inventory_event_id" not in movement_columns:
