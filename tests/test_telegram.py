@@ -207,3 +207,35 @@ def test_public_demo_opens_the_dashboard_to_the_tunnel_host(tmp_path):
     assert dashboard.status_code == 200  # login page served instead of 403
     webhook = public_client.post("/webhooks/telegram", headers=HEADERS, content=json.dumps(update).encode())
     assert webhook.status_code == 200
+
+
+# --- Hosted-mode env fallback (Atoms adapter) ---------------------------------
+
+
+def test_hosted_mode_reads_telegram_credentials_from_env(tmp_path, monkeypatch):
+    """The Atoms adapter builds the app with an explicit settings allowlist and
+    (today) does not forward TELEGRAM_* kwargs. Hosted mode must fall back to
+    the process environment — the project Keys live there — or the webhook
+    stays disabled no matter what the platform configures. Regression for the
+    live 503 telegram_not_configured with keys present in the backend env."""
+    from conftest import login_admin  # noqa: F401  (parity with other suites)
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", BOT_TOKEN)
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", SECRET)
+    seed_app = create_app(tmp_path / "seed.sqlite3")
+    app = create_app(None, hosted=True, public_demo=True, store_factory=lambda: seed_app.state.store)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.post("/webhooks/telegram", headers=HEADERS, content=body(update("halo")))
+    assert response.status_code != 503, response.text
+    assert "telegram_not_configured" not in response.text
+
+
+def test_hosted_mode_stays_disabled_without_env(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_WEBHOOK_SECRET", raising=False)
+    seed_app = create_app(tmp_path / "seed.sqlite3")
+    app = create_app(None, hosted=True, public_demo=True, store_factory=lambda: seed_app.state.store)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.post("/webhooks/telegram", headers=HEADERS, content=body(update("halo")))
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "telegram_not_configured"
