@@ -5,9 +5,12 @@ using **phone number + password**. This supersedes the earlier OTP proposal.
 No OTP, SMS provider, Twilio configuration, WhatsApp decision or Telegram decision
 is required. No separate mobile application/version was created.
 
-Implementation is local on `main` based on source `0a1bb8e`. It has not been
-pushed, migrated to live Supabase, synchronized to Atoms or published. Existing
-uncommitted packaging/docs work and all branches remain intact.
+Published on 2026-11-10 as **Atoms V19**, from application source
+`6c166cadf9f196d597eb49e12252b79a832cbc21`, on the existing
+[website](https://restopilot-dashboard.pub.atoms.world/app.html). Migration 0006
+was applied once and public verification passed. See the
+[release record](RELEASE_2026-11-10_PHONE_LOGIN.md). Existing unrelated
+uncommitted documentation/handoffs and all branches remain intact.
 
 ## Website flow
 
@@ -59,7 +62,7 @@ phone enrollment neither create nor transfer WhatsApp/Telegram links. Existing
 open messaging onboarding, callbacks, test-account settings and sender links are
 preserved. Deciding WhatsApp versus Telegram later will not block or alter this
 website login. The previous optional Twilio/OTP adapter, routes, UI and configuration
-were removed from this unreleased implementation; no delivery integration remains
+were removed during implementation; no delivery integration remains
 half-configured.
 
 ## Security and storage
@@ -93,13 +96,15 @@ half-configured.
 
 ## Schema and endpoints
 
-The new, **unapplied** [0006_phone_login.sql](../supabase/migrations/0006_phone_login.sql)
+The additive [0006_phone_login.sql](../supabase/migrations/0006_phone_login.sql)
 adds only `login_phone_identities` and `login_phone_limits`, both RLS-enabled with
 no client policies. It enrolls nobody and changes no existing users, tenants,
 passwords, business records or messaging links. SQLite adds equivalent empty
 tables locally. Hosted phone endpoints return `migration_required` 503 until the
 explicit additive migration is applied during a separately authorized release;
-legacy authentication remains available.
+legacy authentication remains available. Migration 0006 was applied and verified
+on the existing Supabase project during the V19 release; no earlier migration
+was replayed.
 
 The migration was revised before any live application to reflect the switch
 from OTP to phone/password. Any local database created during the prior OTP
@@ -146,5 +151,6 @@ Final results: full Python suite **559 passed, 63 skipped**; disposable local
 PostgreSQL phone-auth suite **10 passed**; JavaScript frontend/Atoms checks
 **37 passed**; desktop Chromium and `git diff --check` passed. Existing dependency
 deprecation warnings remain. Temporary test servers were stopped, and the website
-test database was removed. No source push, live migration, publication or real
-messages occurred.
+test database was removed. These were the local implementation results before
+deployment. The subsequent V19 deployment and public checks are recorded in the release record; no real
+messages were sent.
