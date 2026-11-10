@@ -29,10 +29,10 @@ MAX_RESPONSE_CHARS = 50000
 _KINDS = {"sale", "usage", "waste", "count"}
 _DOCUMENT_TYPES = {"sales_report", "sale_receipt", "usage", "waste", "count", "mixed", "ambiguous", "purchase_invoice"}
 _NUM = r"(?:[+-]?\d+(?:[.,]\d+)?|setengah|separuh|satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh)"
-_UNITS = r"(?:kilogram|mililiter|milliliter|liter|litre|kilo|gram|porsi|portion|portions|kg|gr|ml|lt|pcs|buah|dus|karton|box|karung|tray|pack|pak|ikat|g|l)"
+_UNITS = r"(?:kilogram|mililiter|milliliter|liter|litre|kilo|gram|porsi|portion|portions|kg|gr|ml|lt|pcs|buah|dus|karton|box|karung|tray|pack|pak|ikat|gelas|cup|g|l)"
 _WORDS = {"setengah": "0.5", "separuh": "0.5", "satu": "1", "dua": "2", "tiga": "3", "empat": "4", "lima": "5", "enam": "6", "tujuh": "7", "delapan": "8", "sembilan": "9", "sepuluh": "10"}
 _SIGNALS = {
-    "sale": r"terjual|penjualan|jualan|laku|jual|sales|omzet|omset|pendapatan|struk\s+(?:pelanggan|penjualan)",
+    "sale": r"terjual|penjualan|jualan|laku\s+keras|laku|jual|sales|omzet|omset|pendapatan|struk\s+(?:pelanggan|penjualan)",
     "usage": r"pakai|pake|dipakai|terpakai|kepakai|kepake|pemakaian|penggunaan|gunakan|digunakan|usage",
     "waste": r"buang|dibuang|terbuang|waste|limbah|bahan\s+rusak",
     "count": r"sisa|tersisa|stok\s+(?:akhir|sisa|fisik)|hitung\s+(?:stok|fisik)|stock\s+count|physical\s+count",
@@ -114,13 +114,13 @@ def _text_date(text, today):
     text = re.sub(r"\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})\b", absolute, text)
     if re.search(r"\bkemarin\b", text):
         dates.append(today - timedelta(days=1))
-    if re.search(r"\b(?:hari\s+ini|malam\s+ini|pagi\s+ini|siang\s+ini|sore\s+ini)\b", text):
+    if re.search(r"\b(?:hari\s+ini|malam\s+ini|pagi\s+ini|siang\s+ini|sore\s+ini|tadi\s+(?:pagi|siang|sore|malam))\b", text):
         dates.append(today)
     if re.search(r"\b(?:besok|lusa|minggu\s+lalu|bulan\s+lalu|kemarin\s+lusa)\b", text):
         problems.append("Tanggal/periode belum jelas; tulis satu tanggal usaha YYYY-MM-DD.")
     if len(set(dates)) > 1:
         problems.append("Ada beberapa tanggal; pisahkan laporan menurut tanggal usaha.")
-    text = re.sub(r"\b(?:kemarin|hari\s+ini|malam\s+ini|pagi\s+ini|siang\s+ini|sore\s+ini|tanggal|tgl)\b", " ", text)
+    text = re.sub(r"\b(?:kemarin|hari\s+ini|malam\s+ini|pagi\s+ini|siang\s+ini|sore\s+ini|tadi\s+(?:pagi|siang|sore|malam)|tanggal|tgl)\b", " ", text)
     chosen = dates[0] if len(set(dates)) == 1 else today if not dates and not problems else None
     if chosen and chosen > today:
         problems.append("Tanggal usaha berada di masa depan; periksa tanggal laporan.")
@@ -193,7 +193,7 @@ def _text_line(text, kind, unresolved):
         unresolved.append(f"Jumlah {name} belum jelas.")
     if unit is None and kind != "sale":
         unresolved.append(f"Satuan {name} belum jelas.")
-    if kind == "sale" and unit not in {None, "porsi", "pcs", "buah"}:
+    if kind == "sale" and unit not in {None, "porsi", "pcs", "buah", "gelas", "cup"}:
         unresolved.append(f"Takaran penjualan {name} memakai {unit}; berapa porsi/menu yang terjual? Takaran bahan tidak dianggap porsi.")
     return {"kind": kind, "name": name, "quantity": quantity, "unit": unit,
             "pack_size": pack_size, "pack_unit": pack_unit, "revenue_idr": revenue, "sales_only": sales_only}
@@ -256,7 +256,7 @@ def parse_operations_text(text, *, today=None):
     # Normalize only missing spaces, preserving decimal comma and menu words.
     source = re.sub(r"(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])", " ", source)
     default_kind = _kind(source) or _kind(detection) or ("count" if plain_stock_count else None)
-    clauses = [part.strip() for part in re.split(r"[\r\n;]+|\b(?:dan|lalu|serta|kemudian)\b|,\s*(?=[a-z])", source) if part.strip(" :.-")]
+    clauses = [part.strip() for part in re.split(r"[\r\n;]+|\b(?:dan|sama|lalu|serta|kemudian)\b|,\s*(?=[a-z])", source) if part.strip(" :.-")]
     inherited = default_kind
     explicit_total = None
     for clause in clauses:
@@ -415,7 +415,7 @@ def clean_operations_document(data):
             result["unresolved"].append(f"Jumlah {name} belum terbaca atau tidak valid.")
         if unit is None and not (kind == "sale" and sales_only and quantity is None):
             result["unresolved"].append(f"Satuan {name} belum terbaca.")
-        if kind == "sale" and unit not in {None, "porsi", "pcs", "buah"}:
+        if kind == "sale" and unit not in {None, "porsi", "pcs", "buah", "gelas", "cup"}:
             result["unresolved"].append(f"Takaran penjualan {name} memakai {unit}; konfirmasi porsi/menu terjual, bukan takaran bahan.")
         if raw.get("pack_size") is not None and pack_size is None:
             result["unresolved"].append(f"Ukuran paket {name} tidak valid.")
