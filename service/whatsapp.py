@@ -419,6 +419,24 @@ UNREGISTERED_REPLY = (
     "Maaf, nomor/chat ini belum terdaftar di RestoPilot. "
     "Minta admin untuk menghubungkannya dengan resto terlebih dahulu."
 )
+
+
+def unregistered_reply(sender: str | None) -> str:
+    """Rejection with self-service context: the sender's own id and how to link it.
+
+    Owners can link their own number/chat from the dashboard links panel, so
+    the reply shows the exact identifier to paste there instead of only
+    pointing at an admin. The plain constant stays the no-sender fallback.
+    """
+    identifier = (sender or "").strip()
+    if not identifier:
+        return UNREGISTERED_REPLY
+    return (
+        "Maaf, nomor/chat ini belum terdaftar di RestoPilot. "
+        f"ID Anda: {identifier}. Untuk menghubungkan sendiri: buka dashboard RestoPilot, "
+        "buka panel Tautan, lalu tambahkan ID ini sesuai platform (Telegram atau WhatsApp). "
+        "Atau minta admin untuk menghubungkannya dengan resto."
+    )
 _PAYMENT_PAID = re.compile(r"(?i)\b(?:lunas(?:\s+semua)?|paid|sudah\s+(?:bayar|dibayar)|udah\s+(?:bayar|lunas))\b")
 _PAYMENT_UNPAID = re.compile(r"(?i)\b(?:belum\s+(?:lunas|bayar|dibayar)|utang|hutang|kredit|credit)\b")
 _PAYMENT_SKIP = ("skip", "lewati")

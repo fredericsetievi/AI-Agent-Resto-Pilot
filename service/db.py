@@ -27,7 +27,7 @@ from .phone_auth import PhoneAuthMixin, SQLITE_SCHEMA as PHONE_AUTH_SQLITE_SCHEM
 from .extraction import catalog_aliases, extract_purchase, normalize_item
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
 from .onboarding import restaurant_selection
-from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, weekly_summary_reply
+from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
 
 
 CATALOG = [
@@ -1042,7 +1042,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 # Unregistered sender: a read-only rejection. No draft, no
                 # ledger, no model call happened upstream; the admin sees the
                 # attempt in the console and can register the number.
-                reply = UNREGISTERED_REPLY
+                reply = unregistered_reply(payload["sender"])
                 result["action"] = "unregistered_sender"
             elif operation_result is not None:
                 reply = operation_result["reply"]

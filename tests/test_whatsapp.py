@@ -400,3 +400,17 @@ def test_simulator_accepts_colloquial_cancel_variants(client):
         # Re-open a fresh draft so each wording is exercised against a live one.
         first = data(simulate(client, "beli cabai 3 kg 150rb"))
         assert first["draft"]["status"] == "pending_approval"
+
+
+def test_unregistered_reply_includes_self_service_context():
+    from service.whatsapp import UNREGISTERED_REPLY, unregistered_reply
+
+    # With a sender id the reply shows it plus the dashboard linking steps.
+    reply = unregistered_reply("7345612390")
+    assert "belum terdaftar" in reply
+    assert "7345612390" in reply
+    assert "Tautan" in reply
+
+    # Without a sender id the plain admin-pointing fallback stays.
+    assert unregistered_reply(None) == UNREGISTERED_REPLY
+    assert unregistered_reply("") == UNREGISTERED_REPLY

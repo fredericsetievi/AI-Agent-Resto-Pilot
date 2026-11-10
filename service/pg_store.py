@@ -53,7 +53,7 @@ from .whatsapp import (
     FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR,
     UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply,
     parse_payment_followup, parse_remove_request, stock_reply,
-    weekly_summary_reply,
+    unregistered_reply, weekly_summary_reply,
 )
 
 
@@ -1142,7 +1142,7 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                 reply = onboarding_reply
                 result["action"] = "restaurant_selected" if tenant else "restaurant_selection_required"
             elif tenant is None:
-                reply = UNREGISTERED_REPLY
+                reply = unregistered_reply(payload["sender"])
                 result["action"] = "unregistered_sender"
             elif operation_result is not None:
                 reply = operation_result["reply"]
