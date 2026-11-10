@@ -322,6 +322,25 @@ def test_custom_ingredients_stay_inside_their_own_restaurant(app, admin, client)
     assert mine["items"][0]["raw_name"] == "terasi"
 
 
+def test_two_restaurants_can_auto_create_the_same_new_ingredient(app, admin, client):
+    second_restaurant(admin, name="Warung Kembar", username="lainku6", phone="628999000103")
+    other = second_owner(app, "lainku6", "rahasia456")
+    # Whichever restaurant approves second used to hit a global unique
+    # violation on custom_ingredients.id (HTTP 500, draft stuck pending).
+    for owner, sender in ((other, "628999000103"), (client, SENDER_NUMBER)):
+        draft = owner.post("/v1/intake", headers={"Idempotency-Key": uuid4().hex}, json={"text": "Beli teri 1 kg 30rb"}).json()["data"]
+        approved = owner.post(f"/v1/drafts/{draft['id']}/decision", headers={"Idempotency-Key": uuid4().hex}, json={
+            "expected_version": draft["version"], "decision": "approve", "received": True,
+        })
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["data"]["new_ingredients"] == ["Teri"]
+    # Each catalog keeps its own entry; neither sees the other's stock.
+    other_overview = other.get("/v1/overview").json()["data"]["ingredients"]
+    demo_overview = client.get("/v1/overview").json()["data"]["ingredients"]
+    assert [row for row in other_overview if row["id"] == "teri"][0]["name"] == "Teri"
+    assert [row for row in demo_overview if row["id"] == "teri"][0]["name"] == "Teri"
+
+
 def test_price_comparison_never_crosses_restaurants(app, admin, client):
     # The demo restaurant's seeded history prices cabai at ~43000/kg.
     second_restaurant(admin, username="lainku4", phone="628999000101")
