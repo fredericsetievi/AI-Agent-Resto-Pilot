@@ -14,6 +14,7 @@ create table if not exists public.suppliers (
     created_at timestamptz not null default now(),
     unique (slug, contact_phone)
 );
+alter table public.suppliers enable row level security;
 -- One supplier entity per distinct purchase supplier name, per restaurant.
 insert into public.suppliers (id, slug, name)
 select distinct on (p.slug, lower(trim(p.supplier)))
@@ -50,4 +51,5 @@ create table if not exists public.supplier_inquiries (
     detail jsonb,
     created_at timestamptz not null default now()
 );
+alter table public.supplier_inquiries enable row level security;
 commit;
