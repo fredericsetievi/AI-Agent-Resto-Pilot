@@ -356,6 +356,19 @@ def test_draft_reply_needs_clarification_shows_total_supplier_and_groups_notes()
     assert reply.splitlines()[-1].startswith("Balas YA untuk konfirmasi semua item")
 
 
+def test_chatter_with_money_gets_help_not_a_draft(client):
+    """A greeting/cash context with a money amount must not file a junk draft."""
+    before = len(overview(client)["drafts"])
+    result = data(simulate(client, "halo, sekarang lagi ke pasar, bawa cash 2 jt"))
+    assert "draft" not in result
+    assert result["result"]["action"] == "help_reply"
+    assert result["thread"]["active_draft_id"] is None
+    assert len(overview(client)["drafts"]) == before
+    # A short new-item line with only a price is a product, not chatter.
+    assert data(simulate(client, "beli kecap manis 30000"))["result"]["action"] in {"draft_created", "review_required"}
+    assert data(simulate(client, "batal"))["result"]["action"] == "rejected"
+
+
 def test_greeting_text_gets_help_instead_of_an_empty_draft(client):
     before = len(overview(client)["drafts"])
     result = data(simulate(client, "hello"))

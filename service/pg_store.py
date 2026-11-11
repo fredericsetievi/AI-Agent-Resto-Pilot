@@ -49,7 +49,7 @@ from .db import (
     validate_phone_number, validate_platform, validate_username,
     verify_password,
 )
-from .extraction import catalog_aliases, extract_purchase
+from .extraction import catalog_aliases, extract_purchase, is_chatter_item
 from .notifications import refill_suggestion
 from .pg import pg_connection, pg_transaction
 from .onboarding import restaurant_selection
@@ -1432,7 +1432,13 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                 result["action"] = "active_draft_exists"
             else:
                 extracted = extracted_text if extracted_text is not None else extract_purchase(payload["text"])
-                if all(item.get("ingredient_id") is None and item.get("quantity") is None and item.get("line_total_idr") is None for item in extracted["items"]):
+                # No purchase signal, or only sentence-like chatter items
+                # ("bawa cash 2 jt" with no catalog match, quantity, or unit):
+                # answer with help instead of filing a junk draft.
+                extracted_items = extracted["items"]
+                if all(item.get("ingredient_id") is None and item.get("quantity") is None and item.get("line_total_idr") is None for item in extracted_items) or (
+                    extracted_items and all(is_chatter_item(item) for item in extracted_items)
+                ):
                     reply = HELP_REPLY
                     result["action"] = "help_reply"
                 else:

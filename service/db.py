@@ -25,7 +25,7 @@ from .operations import OperationsMixin, SQLITE_SCHEMA as OPERATIONS_SQLITE_SCHE
 from .purchase_sources import PurchaseSourcesMixin, SQLITE_SCHEMA as PURCHASE_SOURCES_SQLITE_SCHEMA
 from .purchase_idempotency import purchase_idempotent
 from .phone_auth import PhoneAuthMixin, SQLITE_SCHEMA as PHONE_AUTH_SQLITE_SCHEMA
-from .extraction import catalog_aliases, extract_purchase, normalize_item
+from .extraction import catalog_aliases, extract_purchase, is_chatter_item, normalize_item
 from .notifications import refill_suggestion
 from .purchase_edits import PurchaseEditsMixin, parse_purchase_edit_command
 from .suppliers import SupplierMixin, parse_supplier_command
@@ -1346,8 +1346,14 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 # Plain text with no purchase signal (a greeting, chat noise) is
                 # an intent miss: every parsed line is a bare word with no
                 # catalog match, quantity, or price. Answer with help instead of
-                # filing an empty draft on the attention list.
-                if all(item.get("ingredient_id") is None and item.get("quantity") is None and item.get("line_total_idr") is None for item in extracted["items"]):
+                # filing an empty draft on the attention list. A sentence with a
+                # money mention ("bawa cash 2 jt") parses as one pseudo-item —
+                # no catalog match, quantity, or unit, and a sentence-length
+                # name — which is chatter, not a product line.
+                extracted_items = extracted["items"]
+                if all(item.get("ingredient_id") is None and item.get("quantity") is None and item.get("line_total_idr") is None for item in extracted_items) or (
+                    extracted_items and all(is_chatter_item(item) for item in extracted_items)
+                ):
                     reply = HELP_REPLY
                     result["action"] = "help_reply"
                 else:
