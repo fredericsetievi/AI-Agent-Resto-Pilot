@@ -432,7 +432,7 @@ function render() {
   if (page==='overview') html=overview();
   if (page==='approvals') html=`<section class="panel">${panelHeading(t('Antrean peninjauan','Review queue'),`${pendingDrafts().length} ${t('draf menunggu keputusan Anda','drafts waiting for your decision')}`)}<div class="full-list">${pendingDrafts().map(draftCard).join('') || `<div class="empty"><strong>${t('Semua beres.','All clear.')}</strong>${t('Setiap draf sudah punya keputusan.','Every draft has a decision.')}</div>`}</div></section>`;
   if (page==='purchases') html=`<p class="subtle-note">${t('Termasuk pembelian pembuka sintetis untuk demo perbandingan harga. Mencatat pembelian tidak menandai pemasok sebagai dibayar.','Includes synthetic opening purchases used to demonstrate price comparisons. Recording a purchase does not mark a supplier as paid.')}</p><section class="panel">${panelHeading(t('Riwayat pembelian','Purchase history'))}${purchaseTable(state.data.purchases)}</section>`;
-  if (page==='inventory') html=`<section class="panel">${panelHeading(t('Estimasi stok','Estimated inventory'),t('Hanya jumlah barang yang diterima dan disetujui. Koreksi angkanya dengan stok opname lewat chat atau formulir di bawah.','Approved received quantities only. Correct the numbers with a stock opname over chat or with the form below.'))}${inventoryRows(state.data.inventory)}<div class="panel-note">${t('Ambang stok rendah adalah konfigurasi demo. Bandingkan dengan hitungan fisik sebelum memesan.','Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.')}</div></section>` + opnameFormPanel() + (state.data.stock_counts?.length ? `<section class="panel">${panelHeading(t('Riwayat stok opname','Stock count history'),t('Koreksi stok fisik dari chat dan dashboard. Semua angka dari database.','Physical corrections from chat and the dashboard. Every figure comes from the database.'))}${state.data.stock_counts.map(item=>`<div class="number-row"><code>${e(item.name)}</code><span>${e(item.estimated_quantity)} → ${e(item.counted_quantity)} (${t('selisih','delta')} ${e(item.delta)})</span><span class="spacer"></span><small>${e(date(item.applied_at))}</small></div>`).join('')}</section>` : '');
+  if (page==='inventory') html=`<section class="panel">${panelHeading(t('Estimasi stok','Estimated inventory'),t('Hanya jumlah barang yang diterima dan disetujui. Koreksi angkanya dengan stok opname lewat chat atau formulir di bawah.','Approved received quantities only. Correct the numbers with a stock opname over chat or with the form below.'))}${inventoryRows(state.data.inventory)}<div class="panel-note">${t('Ambang stok rendah adalah konfigurasi demo. Bandingkan dengan hitungan fisik sebelum memesan.','Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.')}</div></section>` + opnameFormPanel() + catalogImportPanel() + (state.data.stock_counts?.length ? `<section class="panel">${panelHeading(t('Riwayat stok opname','Stock count history'),t('Koreksi stok fisik dari chat dan dashboard. Semua angka dari database.','Physical corrections from chat and the dashboard. Every figure comes from the database.'))}${state.data.stock_counts.map(item=>`<div class="number-row"><code>${e(item.name)}</code><span>${e(item.estimated_quantity)} → ${e(item.counted_quantity)} (${t('selisih','delta')} ${e(item.delta)})</span><span class="spacer"></span><small>${e(date(item.applied_at))}</small></div>`).join('')}</section>` : '');
   if (page==='activity') html=`<section class="panel">${panelHeading(t('Riwayat aktivitas','Activity history'),t('Termasuk catatan pembuka sintetis. Semua tindakan baru tersimpan.','Includes synthetic setup records. All new actions are persisted.'))}${activityRows(state.data.activity)}</section>`;
   if (page==='whatsapp') html=whatsappPage();
   if (page==='rules') html=rulesPage();
@@ -503,6 +503,16 @@ async function applyOpname() {
   try { await api('/v1/stock-counts',{method:'POST',body:{ingredient_id:ingredient,counted_quantity:counted,note},key:crypto.randomUUID()}); state.data=null; await refresh(); toast('Stok opname diterapkan.'); }
   catch(error) { showError('opname-error',error.message); }
   finally { state.opnameBusy=false; const b=document.querySelector('#opname-form button[type="submit"]'); if(b)b.disabled=false; }
+}
+function catalogImportPanel() {
+  return `<section class="panel"><div class="panel-heading"><div><h2>Impor katalog bahan</h2><p>${t('Unggah file .xlsx atau .csv berisi daftar bahan: kolom nama wajib, sedangkan satuan, jumlah stok, kode, dan ambang minimum opsional. Baris tanpa nama dilewati.','Upload an .xlsx or .csv file listing ingredients: a name column is required, while unit, stock quantity, code, and minimum threshold are optional. Rows without a name are skipped.')}</p></div><button class="button mini primary" data-catalog-import ${state.catalogImportBusy?'disabled':''}>Impor katalog</button></div><input id="catalog-import-file" type="file" accept=".xlsx,.csv" hidden><div id="catalog-import-error" class="notice error" role="alert" hidden></div><div class="panel-note">${t('Nama yang sudah ada di katalog hanya diperbarui stoknya; bahan baru masuk ke katalog resto ini.','Names already in the catalog only get their stock updated; new ingredients are added to this restaurant\'s catalog.')}</div></section>`;
+}
+async function importCatalogFile(file) {
+  if(state.catalogImportBusy)return;state.catalogImportBusy=true;showError('catalog-import-error','');
+  const button=document.querySelector('[data-catalog-import]');if(button)button.disabled=true;
+  try { const result=await api('/v1/catalog/import',{method:'POST',body:{filename:file.name,content_base64:await readPhoto(file)},timeout:60000}); state.data=null; await refresh(); toast(`${result.imported} bahan diimpor${result.skipped?` · ${result.skipped} baris dilewati`:''}.`); }
+  catch(error) { showError('catalog-import-error',error.message); }
+  finally { state.catalogImportBusy=false; const b=document.querySelector('[data-catalog-import]'); if(b)b.disabled=false; const input=$('#catalog-import-file'); if(input)input.value=''; }
 }
 function rulesPage() {
   const rows=state.rules.map(rule=>`<div class="admin-row"><div><p>${e(rule.rule)}</p><small>${rule.enabled?'Aktif':'Nonaktif'} · ${e(date(rule.created_at))}</small></div><span class="spacer"></span><button class="button mini" data-rule-toggle="${e(rule.id)}">${rule.enabled?'Nonaktifkan':'Aktifkan'}</button><button class="button mini" data-rule-delete="${e(rule.id)}">Hapus</button></div>`).join('');
@@ -720,6 +730,7 @@ document.addEventListener('click',event => {
   if(button.dataset.adminAction)adminAction(button.dataset.adminAction,button);
   if(button.dataset.ruleDelete)deleteRule(button.dataset.ruleDelete);
   if(button.dataset.ruleToggle)toggleRule(button.dataset.ruleToggle);
+  if(button.hasAttribute('data-catalog-import'))$('#catalog-import-file').click();
   if(button.dataset.linkDelete)removeLink(button.dataset.linkDelete,button.dataset.linkPlatform);
 });
 document.addEventListener('submit',async event=>{
@@ -856,6 +867,7 @@ document.addEventListener('click',event=>{
 document.addEventListener('submit',event=>{if(event.target.id==='inventory-form')saveInventoryForm(event);});
 document.addEventListener('input',event=>{if(event.target.closest('#inventory-form'))updateInventoryPreview();});
 document.addEventListener('change',event=>{
+  if(event.target.id==='catalog-import-file'&&event.target.files?.[0])importCatalogFile(event.target.files[0]);
   if(event.target.name==='saved_recipe'){
     const recipe=inventoryState.recipesSnapshot.find(row=>row.id===event.target.value),form=$('#inventory-form');
     form.elements.recipe_name.value=recipe?.name||'';
