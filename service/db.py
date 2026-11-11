@@ -25,6 +25,7 @@ from .purchase_sources import PurchaseSourcesMixin, SQLITE_SCHEMA as PURCHASE_SO
 from .purchase_idempotency import purchase_idempotent
 from .phone_auth import PhoneAuthMixin, SQLITE_SCHEMA as PHONE_AUTH_SQLITE_SCHEMA
 from .extraction import catalog_aliases, extract_purchase, normalize_item
+from .notifications import refill_suggestion
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
 from .onboarding import restaurant_selection
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
@@ -1371,6 +1372,27 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         rules = [entry["rule"] for entry in self.list_rules(restaurant_id) if entry["enabled"]]
         return "\n".join(f"- {rule}" for rule in rules)
 
+    def last_purchase_unit_prices(self, restaurant_id):
+        """Latest recorded unit price per ingredient (rupiah), from purchase history."""
+        prices = {}
+        conn = sqlite3.connect(self.path)
+        try:
+            rows = conn.execute(
+                "SELECT body FROM purchases WHERE restaurant_id=? ORDER BY created_at, id", (restaurant_id,)
+            ).fetchall()
+        finally:
+            conn.close()
+        for (body_raw,) in rows:
+            try:
+                body = json.loads(body_raw) if isinstance(body_raw, str) else (body_raw or {})
+            except (TypeError, ValueError):
+                continue
+            for item in (body or {}).get("items") or []:
+                ingredient_id, price = item.get("ingredient_id"), item.get("unit_price_idr")
+                if ingredient_id and isinstance(price, int) and not isinstance(price, bool) and price > 0:
+                    prices[ingredient_id] = price
+        return prices
+
     def low_stock_candidates(self, restaurant_id, overrides=None, cooldown_hours=PROACTIVE_COOLDOWN_HOURS):
         """Ingredients below their effective threshold, filtered by the alert cooldown.
 
@@ -1382,6 +1404,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         """
         overrides = overrides or {}
         catalog = self._catalog_for(restaurant_id)
+        prices = self.last_purchase_unit_prices(restaurant_id)
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)).isoformat()
         with self.transaction() as conn:
             previously = {row["ingredient_id"]: row for row in conn.execute(
@@ -1398,9 +1421,16 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                     continue  # alerted inside the cooldown window; stay quiet
                 if previous and previous["last_quantity"] == quantity:
                     continue  # nothing changed since the owner last heard about it
-                candidates.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
-                                   "unit": ingredient["unit"], "threshold": threshold, "reorder_threshold": ingredient["reorder_threshold"],
-                                   "low_stock": True})
+                candidate = {"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
+                             "unit": ingredient["unit"], "threshold": threshold, "reorder_threshold": ingredient["reorder_threshold"],
+                             "low_stock": True}
+                suggestion = refill_suggestion(quantity, threshold)
+                if suggestion is not None:
+                    candidate["suggest_qty"] = suggestion
+                    price = prices.get(ingredient["id"])
+                    if price is not None:
+                        candidate["suggest_est_idr"] = int(Decimal(suggestion)) * price
+                candidates.append(candidate)
         return candidates
 
     def mark_proactive_alerts(self, restaurant_id, candidates):

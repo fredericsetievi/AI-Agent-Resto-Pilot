@@ -47,6 +47,7 @@ from .db import (
     verify_password,
 )
 from .extraction import catalog_aliases, extract_purchase
+from .notifications import refill_suggestion
 from .pg import pg_connection, pg_transaction
 from .onboarding import restaurant_selection
 from .whatsapp import (
@@ -746,9 +747,28 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         rules = [entry["rule"] for entry in self.list_rules(restaurant_id) if entry["enabled"]]
         return " ".join(f"- {rule}" for rule in rules)
 
+    def last_purchase_unit_prices(self, restaurant_id):
+        """Latest recorded unit price per ingredient (rupiah), from purchase history.
+
+        Purchase rows are read in chronological order so the last write per
+        ingredient wins. Prices missing or malformed simply leave the
+        ingredient without an estimate.
+        """
+        prices = {}
+        with pg_connection() as conn:
+            cur = self._execute(conn,
+                "SELECT body FROM purchases WHERE slug=%s ORDER BY created_at, id", (restaurant_id,))
+            for row in self._rows(cur):
+                for item in (row["body"] or {}).get("items") or []:
+                    ingredient_id, price = item.get("ingredient_id"), item.get("unit_price_idr")
+                    if ingredient_id and isinstance(price, int) and not isinstance(price, bool) and price > 0:
+                        prices[ingredient_id] = price
+        return prices
+
     def low_stock_candidates(self, restaurant_id, overrides=None, cooldown_hours=24):
         overrides = overrides or {}
         catalog = self._catalog_for(restaurant_id)["list"]
+        prices = self.last_purchase_unit_prices(restaurant_id)
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)).isoformat()
         with pg_connection() as conn:
             previous = {row["ingredient_id"]: row for row in self._rows(self._execute(conn,
@@ -769,9 +789,16 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                     continue
                 if prior and str(prior["last_quantity"]) == str(quantity):
                     continue
-                candidates.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
-                                   "unit": ingredient["unit"], "threshold": threshold, "reorder_threshold": ingredient["reorder_threshold"],
-                                   "low_stock": True})
+                candidate = {"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
+                             "unit": ingredient["unit"], "threshold": threshold, "reorder_threshold": ingredient["reorder_threshold"],
+                             "low_stock": True}
+                suggestion = refill_suggestion(quantity, threshold)
+                if suggestion is not None:
+                    candidate["suggest_qty"] = suggestion
+                    price = prices.get(ingredient["id"])
+                    if price is not None:
+                        candidate["suggest_est_idr"] = int(Decimal(suggestion)) * price
+                candidates.append(candidate)
         return candidates
 
     def mark_proactive_alerts(self, restaurant_id, candidates):
@@ -928,7 +955,6 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         for row in self._rows(cur):
             created = self._as_datetime(row["created_at"])
             body = row["body"]
-            print("[dbg] row created=%r body=%r", created, str(body)[:120])
             if start_dt and created < start_dt:
                 continue
             if end_dt and created >= end_dt:
@@ -1011,7 +1037,6 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                             "empty_text": f"Belum ada pembelian {ingredient.get('name') or ingredient_id} tercatat {window['label']}."}
                 return {"question": str(text).strip(), "facts": [ingredient_spend_fact(
                     ingredient.get("name") or ingredient_id, entry["total"], entry["count"], window["label"])]}
-            print("[dbg] spend agg count=%s per=%s start=%r", agg["purchase_count"], dict(agg["per_ingredient"]), window.get("start"))
             if agg["purchase_count"] == 0:
                 return {"question": str(text).strip(), "facts": [],
                         "empty_text": f"Belum ada pembelian tercatat dalam {window['label']}."}
