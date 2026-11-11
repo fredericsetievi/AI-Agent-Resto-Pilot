@@ -35,7 +35,7 @@ _SIGNALS = {
     "sale": r"terjual|penjualan|jualan|laku\s+keras|laku|jual|sales|omzet|omset|pendapatan|struk\s+(?:pelanggan|penjualan)",
     "usage": r"pakai|pake|dipakai|terpakai|kepakai|kepake|pemakaian|penggunaan|gunakan|digunakan|usage",
     "waste": r"buang|dibuang|terbuang|waste|limbah|bahan\s+rusak",
-    "count": r"sisa|tersisa|stok\s+(?:akhir|sisa|fisik)|hitung\s+(?:stok|fisik)|stock\s+count|physical\s+count",
+    "count": r"sisa|tersisa|stok\s+(?:akhir|sisa|fisik|malam)|hitung\s+(?:stok|fisik)|stock\s+count|physical\s+count",
 }
 _SIGNAL = re.compile(r"\b(?:" + "|".join(_SIGNALS.values()) + r")\b", re.I)
 _MONEY = re.compile(r"(?i)(?:\brp\.?\s*(?P<rp>\d+(?:[.,]\d+)*)\s*(?P<rp_scale>rb|ribu|jt|juta)?\b|\b(?P<n>\d+(?:[.,]\d+)?)\s*(?P<scale>rb|ribu|jt|juta)\b)")
@@ -146,6 +146,10 @@ def _text_line(text, kind, unresolved):
     for pattern in _SIGNALS.values():
         source = re.sub(r"\b(?:" + pattern + r")\b", " ", source, flags=re.I)
     source = re.sub(r"\b(?:catat|laporan|harian|total|ada|sudah|sebanyak|yaitu|adalah|stok|stock|barang|bahan)\b", " ", source, flags=re.I)
+    if kind == "count":
+        # Day-part words are common in evening/morning count phrasing ('stok
+        # malam gula 3 kg') but are not ingredient names.
+        source = re.sub(r"\b(?:malam|pagi|siang|sore|tutup|hari\s+ini)\b", " ", source, flags=re.I)
     source = re.split(r"\b(?:karena|akibat|sebab)\b", source, flags=re.I)[0]
     revenue = None
     money = list(_MONEY.finditer(source))
