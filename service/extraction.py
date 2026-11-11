@@ -357,6 +357,24 @@ def extract_purchase(text: str) -> dict[str, Any]:
     return result
 
 
+def is_chatter_item(item: dict[str, Any]) -> bool:
+    """Detect a chat-context pseudo-item: a sentence parsed as one product.
+
+    Greetings and market chatter that mention money ("halo, lagi ke pasar,
+    bawa cash 2 jt") parse as a single item with a price but no catalog
+    match, quantity, or unit, and a sentence-length name. Real product
+    lines carry a quantity or unit, or name a short ingredient — including
+    brand-new items ("beli kecap manis 30000") which must still draft.
+    """
+    if item.get("ingredient_id") is not None or item.get("quantity") is not None:
+        return False
+    name = (item.get("raw_name") or "").strip()
+    if not name:
+        return False
+    words = [word for word in re.split(r"[\s,]+", name) if word]
+    return len(words) >= 4
+
+
 def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
     """Validate and normalize one parsed item using exact decimal arithmetic."""
     matched_from = item.get("matched_from")

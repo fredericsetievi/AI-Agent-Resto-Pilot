@@ -340,10 +340,8 @@ class SupplierMixin:
 
     def supplier_purchase_price(self, conn, restaurant_id, ingredient_id):
         """The latest recorded purchase unit price for an ingredient (evidence baseline)."""
-        rows = self._inventory_query(conn, "SELECT body, created_at FROM purchases WHERE restaurant_id=? ORDER BY created_at DESC, id DESC LIMIT 50",
+        rows = self._inventory_query(conn, f"SELECT body, created_at FROM purchases WHERE {self._tenant_col()}=? ORDER BY created_at DESC, id DESC LIMIT 50",
                                      (restaurant_id,)).fetchall()
-        import sys as _sys
-        print("DBG-PP-ROWS:", [(json.loads(r[0]).get("supplier"), json.loads(r[0]).get("items", [{}])[0].get("unit_price_idr"), r[1][:26]) for r in rows])
         for row in rows:
             try:
                 purchase = json.loads(row[0]) if isinstance(row[0], (str, bytes)) else dict(row[0])

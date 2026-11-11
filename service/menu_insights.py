@@ -120,7 +120,16 @@ def _delta_words(change):
 
 
 class MenuInsightsMixin:
-    """Chat answers from recorded sales: ranking, trends, and margin."""
+    """Chat answers from recorded sales: ranking, trends, and margin.
+
+    The tenant column is ``restaurant_id`` in SQLite and ``slug`` in the
+    hosted Postgres schema, resolved per query via ``_tenant_col()`` —
+    note ``inventory_events``/``inventory_recipes`` use ``restaurant_id``
+    on both dialects (migration 0004), while ``purchases`` does not.
+    """
+
+    def _tenant_col(self):
+        return "slug" if self.inventory_postgres else "restaurant_id"
 
     def menu_facts(self, text, restaurant_id, conn=None):
         """Return {"body": ...} for a sales/menu question, or None when the
@@ -194,7 +203,7 @@ class MenuInsightsMixin:
         window (the same evidence the price comparisons use)."""
         cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
         prices = {}
-        for row in self._inventory_query(conn, "SELECT body, created_at FROM purchases WHERE restaurant_id=? AND created_at>=? ORDER BY created_at, id", (restaurant_id, cutoff)).fetchall():
+        for row in self._inventory_query(conn, f"SELECT body, created_at FROM purchases WHERE {self._tenant_col()}=? AND created_at>=? ORDER BY created_at, id", (restaurant_id, cutoff)).fetchall():
             try:
                 purchase = json.loads(row[0]) if isinstance(row[0], (str, bytes)) else dict(row[0])
             except ValueError:
