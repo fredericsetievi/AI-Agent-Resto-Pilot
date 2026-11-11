@@ -28,6 +28,7 @@ from .phone_auth import PhoneAuthMixin, SQLITE_SCHEMA as PHONE_AUTH_SQLITE_SCHEM
 from .extraction import catalog_aliases, extract_purchase, normalize_item
 from .notifications import refill_suggestion
 from .purchase_edits import PurchaseEditsMixin, parse_purchase_edit_command
+from .suppliers import SupplierMixin, parse_supplier_command
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
 from .onboarding import restaurant_selection
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
@@ -234,7 +235,7 @@ def normalize_items_for_catalog(items, catalog):
     return normalized, list(dict.fromkeys(warnings))
 
 
-class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, MenuInsightsMixin, PurchaseEditsMixin):
+class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, MenuInsightsMixin, PurchaseEditsMixin, SupplierMixin):
     def __init__(self, path, seed=True):
         self.path = str(path)
         # Each restaurant owns a catalog: the shared base plus the ingredients
@@ -299,7 +300,10 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, expires_at TEXT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS whatsapp_links (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), phone TEXT NOT NULL, platform TEXT NOT NULL DEFAULT 'whatsapp', label TEXT, created_at TEXT NOT NULL, UNIQUE(phone, platform))",
                 "CREATE TABLE IF NOT EXISTS drafts (id TEXT PRIMARY KEY, version INTEGER NOT NULL CHECK(version>0), status TEXT NOT NULL, body TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
-                "CREATE TABLE IF NOT EXISTS purchases (id TEXT PRIMARY KEY, draft_id TEXT NOT NULL UNIQUE REFERENCES drafts(id), supplier TEXT, created_at TEXT NOT NULL, body TEXT NOT NULL, voided_at TEXT, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
+                "CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), name TEXT NOT NULL, contact_phone TEXT, contact_platform TEXT, notes TEXT, created_at TEXT NOT NULL, UNIQUE(restaurant_id, contact_phone))",
+                "CREATE TABLE IF NOT EXISTS purchases (id TEXT PRIMARY KEY, draft_id TEXT NOT NULL UNIQUE REFERENCES drafts(id), supplier TEXT, supplier_id TEXT REFERENCES suppliers(id), created_at TEXT NOT NULL, body TEXT NOT NULL, voided_at TEXT, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
+                "CREATE TABLE IF NOT EXISTS supplier_price_quotes (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), supplier_id TEXT NOT NULL REFERENCES suppliers(id), ingredient_id TEXT, ingredient_name TEXT, unit_price_idr INTEGER, note TEXT, raw_message TEXT, source TEXT NOT NULL DEFAULT 'manual', inquiry_id TEXT, created_at TEXT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS supplier_inquiries (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), request TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', detail TEXT, created_at TEXT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS inventory (restaurant_id TEXT NOT NULL DEFAULT 'demo-resto', ingredient_id TEXT NOT NULL, quantity TEXT NOT NULL, PRIMARY KEY(restaurant_id, ingredient_id))",
                 "CREATE TABLE IF NOT EXISTS movements (id TEXT PRIMARY KEY, purchase_id TEXT REFERENCES purchases(id), ingredient_id TEXT NOT NULL, quantity TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto', UNIQUE(purchase_id, ingredient_id))",
                 "CREATE TABLE IF NOT EXISTS activity (id TEXT PRIMARY KEY, event TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT)",
@@ -330,6 +334,18 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
             purchase_columns = {row[1] for row in conn.execute("PRAGMA table_info(purchases)")}
             if "voided_at" not in purchase_columns:
                 conn.execute("ALTER TABLE purchases ADD COLUMN voided_at TEXT")
+            if "suppliers" not in {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='suppliers'")}:
+                conn.execute("CREATE TABLE IF NOT EXISTS suppliers (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), name TEXT NOT NULL, contact_phone TEXT, contact_platform TEXT, notes TEXT, created_at TEXT NOT NULL, UNIQUE(restaurant_id, contact_phone))")
+                conn.execute("CREATE TABLE IF NOT EXISTS supplier_price_quotes (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), supplier_id TEXT NOT NULL REFERENCES suppliers(id), ingredient_id TEXT, ingredient_name TEXT, unit_price_idr INTEGER, note TEXT, raw_message TEXT, source TEXT NOT NULL DEFAULT 'manual', inquiry_id TEXT, created_at TEXT NOT NULL)")
+                conn.execute("CREATE TABLE IF NOT EXISTS supplier_inquiries (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), request TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', detail TEXT, created_at TEXT NOT NULL)")
+            purchase_columns = {row[1] for row in conn.execute("PRAGMA table_info(purchases)")}
+            if "supplier_id" not in purchase_columns:
+                conn.execute("ALTER TABLE purchases ADD COLUMN supplier_id TEXT REFERENCES suppliers(id)")
+            # Supplier entities from purchase history; purchase linkage backfill.
+            purchase_columns = {row[1] for row in conn.execute("PRAGMA table_info(purchases)")}
+            if "restaurant_id" in purchase_columns:
+                conn.execute("INSERT OR IGNORE INTO suppliers (id, restaurant_id, name) SELECT lower(hex(randomblob(16))), restaurant_id, trim(supplier) FROM purchases WHERE supplier IS NOT NULL AND trim(supplier)<>'' AND NOT EXISTS (SELECT 1 FROM suppliers s WHERE s.restaurant_id=purchases.restaurant_id AND lower(trim(s.name))=lower(trim(purchases.supplier)))")
+                conn.execute("UPDATE purchases SET supplier_id=(SELECT s.id FROM suppliers s WHERE s.restaurant_id=purchases.restaurant_id AND lower(trim(s.name))=lower(trim(purchases.supplier))) WHERE supplier_id IS NULL AND supplier IS NOT NULL")
             self._migrate_platform_links(conn)
             self._migrate_tenants(conn)
             self._ensure_demo_tenant(conn)
@@ -584,7 +600,8 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         purchase = {"id": purchase_id, "draft_id": draft["id"], "supplier": draft["supplier"],
                     "total_idr": draft["total_idr"], "items": draft["items"], "created_at": created_at,
                     "payment_status": "unknown"}
-        conn.execute("INSERT INTO purchases (id, draft_id, supplier, created_at, body, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)", (purchase_id, draft["id"], draft["supplier"], created_at, encode(purchase), restaurant_id))
+        supplier_id = self._supplier_ensure(conn, restaurant_id, draft["supplier"])
+        conn.execute("INSERT INTO purchases (id, draft_id, supplier, supplier_id, created_at, body, restaurant_id) VALUES (?, ?, ?, ?, ?, ?, ?)", (purchase_id, draft["id"], draft["supplier"], supplier_id, created_at, encode(purchase), restaurant_id))
         deltas = {}
         for item in draft["items"]:
             ingredient = item["ingredient_id"]
@@ -1010,6 +1027,8 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 selected, onboarding_reply = restaurant_selection(choices, payload["text"])
                 if selected:
                     phone = validate_phone_number(payload["sender"])
+                    if self._phone_is_supplier_contact(conn, phone):
+                        raise DomainError("supplier_number_not_linkable", "Nomor ini terdaftar sebagai kontak supplier, jadi tidak bisa jadi nomor pemilik.", 403)
                     conn.execute("INSERT OR IGNORE INTO whatsapp_links (id, restaurant_id, phone, platform, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                                  (uuid.uuid4().hex, selected["id"], phone, platform, "WhatsApp self-registration", now()))
                     linked = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=? AND platform=?", (phone, platform)).fetchone()[0]
@@ -1032,7 +1051,8 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
             opname_pending = bool(thread.get("pending_opname_id"))
             opname_incoming = (not opname_pending) and self.parse_opname(payload["text"], tenant, conn=conn) is not None
             operation_result = None
-            if tenant and onboarding_reply is None and not opname_pending and not opname_incoming:
+            supplier_cmd = parse_supplier_command(payload["text"]) if tenant else None
+            if tenant and onboarding_reply is None and not opname_pending and not opname_incoming and not supplier_cmd:
                 operation_result = self._operation_handle(
                     conn, thread, tenant, transcript or payload["text"],
                     candidate=operation_candidate, source=operation_source,
@@ -1089,6 +1109,10 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 if followup["skip"]:
                     reply = FOLLOWUP_ACK
                     result["action"] = "followup_skipped"
+                    # The offer lapses on skip: without clearing it, the next
+                    # purchase message would be swallowed as a supplier
+                    # correction of the previous purchase.
+                    thread["pending_followup"] = None
                 else:
                     details = []
                     if followup["payment_status"] == "paid":
@@ -1173,6 +1197,14 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 # against the restaurant's recent purchases.
                 reply, edit_result = self.propose_purchase_edit(conn, thread, tenant, edit_command, payload["text"])
                 result.update(edit_result)
+            elif tenant and not draft and (supplier_answer := payload.get("supplier_answer")) and isinstance(supplier_answer, dict) and supplier_answer.get("body"):
+                # The API layer already ran the inquiry/sends; the store only
+                # surfaces the prepared reply (read-only).
+                reply = supplier_answer["body"]
+                result["action"] = "supplier_answer"
+            elif tenant and not draft and (supplier_command := parse_supplier_command(payload["text"])):
+                reply, supplier_result = self.supplier_command(conn, tenant, supplier_command, payload["text"], key=uuid.uuid4().hex)
+                result.update(supplier_result)
             elif draft and (request := parse_remove_request(payload["text"])):
                 # 'hapus 4', 'hapus 4, 5' and 'hapus semua' drop flagged
                 # (non-kitchen) lines from the active draft — the owner's
@@ -1254,6 +1286,8 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 result["action"] = "active_draft_exists"
             else:
                 extracted = extracted_text if extracted_text is not None else extract_purchase(payload["text"])
+                import sys as _sys
+                print("DBG-EXTRACT:", payload["text"][:60], "->", [(i.get("raw_name"), i.get("canonical_quantity"), i.get("unit_price_idr")) for i in extracted.get("items", [])], "supplier:", extracted.get("supplier"), file=_sys.stderr)
                 # Plain text with no purchase signal (a greeting, chat noise) is
                 # an intent miss: every parsed line is a bare word with no
                 # catalog match, quantity, or price. Answer with help instead of
@@ -1994,6 +2028,8 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         def action(conn):
             if not conn.execute("SELECT 1 FROM restaurants WHERE id=?", (restaurant_id,)).fetchone():
                 raise DomainError("not_found", "Restaurant not found.", 404)
+            if self._phone_is_supplier_contact(conn, phone):
+                raise DomainError("phone_is_supplier_contact", "Nomor itu terdaftar sebagai kontak supplier.", 409)
             existing = conn.execute("SELECT restaurant_id FROM whatsapp_links WHERE phone=? AND platform=?", (phone, platform)).fetchone()
             if existing:
                 if existing["restaurant_id"] == restaurant_id:
