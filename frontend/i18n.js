@@ -60,7 +60,11 @@ const I18N = {
     phone_back_login:"Sudah punya akun? Masuk",
     phone_loading:"Mohon tunggu…",
     phone_password_fallback:"Login akun lama / admin",
-    phone_signup_help:"Pendaftaran membuat ruang restoran baru. Sudah punya akun? Hubungkan nomor melalui login akun lama di bawah agar data Anda tetap digunakan.",
+    phone_signup_help:"Pendaftaran membuat ruang restoran baru yang terpisah. Sudah punya akun dengan data lama? Masuk dengan username akun Anda di halaman login.",
+    login_identifier:"Username atau nomor ponsel",
+    login_identifier_help:"Akun lama dan admin: username. Akun restoran: nomor ponsel (08 atau +62).",
+    auth_to_register:"Belum punya akun? Buat akun restoran",
+    auth_register_submit:"Daftar",
     phone_connect_label:"Hubungkan nomor ponsel (opsional, untuk pemilik)",
     phone_connect_help:"Masukkan nomor untuk login berikutnya dengan nomor dan password akun ini. Kosongkan untuk login biasa.",
     phone_err_number:"Periksa nomor: gunakan 08 atau +628 untuk Indonesia; sertakan + dan kode negara lain.",
@@ -443,7 +447,11 @@ const I18N = {
     phone_back_login:"Already have an account? Sign in",
     phone_loading:"Please wait…",
     phone_password_fallback:"Existing account / admin login",
-    phone_signup_help:"Registration creates a new restaurant workspace. Already have an account? Connect your phone through existing account login below to keep using your data.",
+    phone_signup_help:"Registration creates a new, separate restaurant workspace. Already have an account with existing data? Sign in with your account’s username on the login page.",
+    login_identifier:"Username or phone number",
+    login_identifier_help:"Legacy accounts and admins: username. Restaurant accounts: phone number (08 or +62).",
+    auth_to_register:"No account yet? Create a restaurant account",
+    auth_register_submit:"Create account",
     phone_connect_label:"Connect phone number (optional, for owners)",
     phone_connect_help:"Enter a number to sign in next time with this phone and your existing password. Leave empty for ordinary account login.",
     phone_err_number:"Check your number: use 08 or +628 for Indonesia; include + and the country code elsewhere.",
@@ -800,7 +808,7 @@ window.setLang = function(lang) {
   document.title = t('doc_title');
   applyI18nStatic();
   updateLangToggle();
-  if (typeof renderPhoneLogin === 'function')renderPhoneLogin();
+  if (typeof renderAuthForms === 'function')renderAuthForms();
   if (typeof window.render === 'function') { try { window.render(); } catch (error) { /* data not loaded yet */ } }
 };
 document.addEventListener('click', event => {

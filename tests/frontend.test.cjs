@@ -154,12 +154,13 @@ test('unauthenticated boot shows the login page and hides the shell',async()=>{
 test('admin login navigates to the restaurants console and hides owner nav',async()=>{
   const requests=[];
   const h=harness({fetchImpl:async(path,options)=>{
-    requests.push(path);
+    requests.push({path,body:options.body?JSON.parse(options.body):null});
     return {ok:true,json:async()=>({data:{id:'u1',username:'admin',display_name:'Platform admin',role:'admin',restaurant_id:null,restaurant_name:null}})};
   }});
+  h.element('#login-identifier').value='admin';h.element('#login-password').value='admin123';
   await h.run(`login({preventDefault(){},target:{reset(){}}})`);
   await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(requests[0],'/v1/auth/login');
+  assert.deepEqual(requests[0],{path:'/v1/auth/login',body:{username:'admin',password:'admin123'}});
   assert.equal(h.element('#nav-admin').hidden,false);
   assert.equal(h.element('#nav-approvals').hidden,true);
   assert.equal(h.element('#nav-whatsapp').hidden,true);
@@ -167,20 +168,27 @@ test('admin login navigates to the restaurants console and hides owner nav',asyn
   assert.match(h.element('#page-title').textContent,/Restaurants/);
 });
 
-test('phone/password login directly opens the scoped restaurant dashboard',async()=>{
+test('the flexible identifier field posts username/password and opens the dashboard',async()=>{
   const requests=[];
   const h=harness({fetchImpl:async(path,options)=>{
     requests.push({path,body:JSON.parse(options.body)});
     return {ok:true,json:async()=>({data:{id:'u1',role:'owner',restaurant_id:'kitchen-beta'}})};
   }});
   h.run('navigate=()=>{};refresh=()=>{}');
-  h.element('#login-phone').value='0812 345 6789';h.element('#login-phone-password').value='secret-password';
-  await h.run('submitPhoneLogin({preventDefault(){}})');
-  assert.deepEqual(requests,[{path:'/v1/auth/phone/login',body:{phone:'0812 345 6789',password:'secret-password'}}]);
+  h.element('#login-identifier').value='0812 345 6789';h.element('#login-password').value='secret-password';
+  await h.run('login({preventDefault(){},target:{reset(){}}})');
+  assert.deepEqual(requests,[{path:'/v1/auth/login',body:{username:'0812 345 6789',password:'secret-password'}}]);
   assert.equal(h.run('state.user.restaurant_id'),'kitchen-beta');
   assert.equal(h.run('location.hash'),'#overview');
   assert.equal(h.element('#login-page').hidden,true);
-  assert.equal(h.element('#login-phone-password').value,'');
+});
+
+test('login failures show the server message in the login error slot',async()=>{
+  const h=harness();
+  h.run("api=async()=>{var err=new Error('Unknown username or wrong password.');err.status=401;throw err}");
+  h.element('#login-identifier').value='owner';h.element('#login-password').value='bad';
+  await h.run('login({preventDefault(){},target:{reset(){}}})');
+  assert.match(h.element('#login-error').textContent,/Unknown username or wrong password/);
 });
 
 test('signup sends phone/password and new restaurant fields without existing-tenant claims',async()=>{
@@ -189,70 +197,60 @@ test('signup sends phone/password and new restaurant fields without existing-ten
     requests.push({path,body:JSON.parse(options.body)});
     return {ok:true,json:async()=>({data:{id:'new-owner',role:'owner',restaurant_id:'new-restaurant'}})};
   }});
-  h.run("navigate=()=>{};refresh=()=>{};setPhoneMode('register')");
-  h.element('#login-phone').value='08123456789';
-  h.element('#login-phone-password').value='secret-password';h.element('#signup-password-confirm').value='secret-password';
+  h.run("navigate=()=>{};refresh=()=>{}");
+  h.element('#register-phone').value='08123456789';
+  h.element('#signup-password').value='secret-password';h.element('#signup-password-confirm').value='secret-password';
   h.element('#signup-name').value='Owner';h.element('#signup-restaurant').value='My Kitchen';
-  await h.run('submitPhoneLogin({preventDefault(){}})');
+  await h.run('submitPhoneRegister({preventDefault(){}})');
   assert.deepEqual(requests,[{path:'/v1/auth/phone/register',body:{phone:'08123456789',password:'secret-password',restaurant_name:'My Kitchen',display_name:'Owner'}}]);
   assert.equal(h.run('state.user.restaurant_id'),'new-restaurant');
   assert.equal(h.element('#signup-password-confirm').value,'');
 });
 
-test('password confirmation and duplicate-submit guards prevent unintended requests',async()=>{
+test('register confirmation and busy guards prevent unintended requests',async()=>{
   const h=harness();
-  h.run("var requests=0,resolveRequest;api=()=>{requests++;return new Promise(resolve=>resolveRequest=resolve)};setPhoneMode('register')");
-  h.element('#login-phone-password').value='secret-password';h.element('#signup-password-confirm').value='different';
-  await h.run('submitPhoneLogin({preventDefault(){}})');
+  h.run("var requests=0,resolveRequest;api=()=>{requests++;return new Promise(resolve=>resolveRequest=resolve)}");
+  h.element('#signup-password').value='secret-password';h.element('#signup-password-confirm').value='different';
+  await h.run('submitPhoneRegister({preventDefault(){}})');
   assert.equal(h.run('requests'),0);
-  assert.match(h.element('#phone-login-error').textContent,/passwords must match/);
-  h.run("setPhoneMode('login')");h.element('#login-phone-password').value='secret-password';
-  const pending=h.run('submitPhoneLogin({preventDefault(){}})');
-  assert.equal(h.element('#phone-login-submit').disabled,true);
-  await h.run('submitPhoneLogin({preventDefault(){}})');
+  assert.match(h.element('#phone-register-error').textContent,/passwords must match/);
+  h.element('#signup-password-confirm').value='secret-password';
+  const pending=h.run('submitPhoneRegister({preventDefault(){}})');
+  assert.equal(h.run('requests'),1);
+  await h.run('submitPhoneRegister({preventDefault(){}})');
   assert.equal(h.run('requests'),1);
   h.run("navigate=()=>{};refresh=()=>{};resolveRequest({role:'owner',restaurant_id:'one'})");
   await pending;
 });
 
-test('existing owners can connect a phone with their current credentials',async()=>{
-  const requests=[];
-  const h=harness({fetchImpl:async(path,options)=>{
-    requests.push({path,body:JSON.parse(options.body)});
-    return {ok:true,json:async()=>({data:{id:'same-owner',role:'owner',restaurant_id:'same-restaurant'}})};
-  }});
-  h.run('navigate=()=>{};refresh=()=>{}');
-  h.element('#login-username').value='owner';h.element('#login-password').value='old-password';h.element('#existing-login-phone').value='08123456789';
-  await h.run('login({preventDefault(){},target:{reset(){}}})');
-  assert.deepEqual(requests,[{path:'/v1/auth/phone/connect',body:{username:'owner',password:'old-password',phone:'08123456789'}}]);
-  assert.equal(h.run('state.user.restaurant_id'),'same-restaurant');
-});
-
-test('phone errors follow ID/EN and clear submitted passwords',async()=>{
+test('register errors follow ID/EN and never leak server details',async()=>{
   const h=harness();
-  h.run("api=async()=>{var err=new Error('private details');err.code='invalid_credentials';throw err}");
-  h.element('#login-phone-password').value='wrong-password';
-  await h.run('submitPhoneLogin({preventDefault(){}})');
-  assert.match(h.element('#phone-login-error').textContent,/wrong password/);
-  assert.equal(h.element('#login-phone-password').value,'');
+  h.run("api=async()=>{var err=new Error('private details');err.code='phone_account_conflict';err.status=409;throw err}");
+  h.element('#signup-password').value='wrong';h.element('#signup-password-confirm').value='wrong';
+  await h.run('submitPhoneRegister({preventDefault(){}})');
+  assert.match(h.element('#phone-register-error').textContent,/could not be created or connected/);
+  assert.equal(h.element('#signup-password').value,'');
   h.run("window.setLang('id')");
-  assert.match(h.element('#phone-login-error').textContent,/password salah/);
-  assert.equal(h.element('#phone-login-submit').disabled,false);
-  assert.doesNotMatch(h.element('#phone-login-error').textContent,/private details/);
+  assert.match(h.element('#phone-register-error').textContent,/tidak dapat dibuat atau dihubungkan/);
+  assert.doesNotMatch(h.element('#phone-register-error').textContent,/private details/);
 });
 
-test('mode switching clears passwords and only requires signup fields when registering',()=>{
-  const h=harness();h.element('#login-phone-password').value='private';
-  h.run("setPhoneMode('register')");
-  assert.equal(h.element('#signup-name').required,true);assert.equal(h.element('#signup-name').disabled,false);
-  assert.equal(h.element('#login-phone-password').value,'');
-  h.run("setPhoneMode('login')");
-  assert.equal(h.element('#signup-name').required,false);assert.equal(h.element('#signup-name').disabled,true);
+test('auth reset clears every login and signup field',()=>{
+  const h=harness();
+  h.element('#login-identifier').value='owner';h.element('#login-password').value='private';
+  h.element('#register-phone').value='08123456789';h.element('#signup-password').value='private';
+  h.run("resetAuthForms()");
+  assert.equal(h.element('#login-identifier').value,'');
+  assert.equal(h.element('#login-password').value,'');
+  assert.equal(h.element('#register-phone').value,'');
+  assert.equal(h.element('#signup-password').value,'');
   const html=fs.readFileSync('frontend/index.html','utf8');
-  assert.match(html,/id="login-phone"[^>]*type="tel"[^>]*autocomplete="username"/);
-  assert.match(html,/id="login-phone-password"[^>]*type="password"/);
-  assert.match(html,/<details id="password-login">/);
-  assert.doesNotMatch(html,/id="login-code"/);
+  assert.match(html,/id="login-identifier"[^>]*autocomplete="username"/);
+  assert.match(html,/id="login-password"[^>]*type="password"/);
+  assert.match(html,/id="signup-password"[^>]*type="password"[^>]*minlength="8"/);
+  assert.match(html,/id="register-view" hidden/);
+  assert.match(html,/id="login-view"/);
+  assert.doesNotMatch(html,/id="phone-login-form"|id="auth-method-toggle"|id="existing-login-phone"|id="password-login"|id="login-code"/);
 });
 
 test('admin row data attributes drive the detail navigation',()=>{

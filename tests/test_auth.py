@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 from conftest import ADMIN, OWNER, login, login_admin, login_owner
 from service.api import create_app
 
+PHONE = "+628123456789"
+
 
 @pytest.fixture
 def app(tmp_path):
@@ -101,3 +103,30 @@ def test_seeded_logins_match_the_documented_credentials(app):
     for user in (OWNER, ADMIN):
         found = store.verify_login(user["username"], user["password"])
         assert found["role"] == user["role"]
+
+
+def test_login_accepts_an_enrolled_phone_as_the_identifier(tmp_path):
+    """The flexible login field: username miss + phone-shaped value retries through the phone path."""
+    app = create_app(tmp_path / "flexible.sqlite3")
+    client = TestClient(app, base_url="http://127.0.0.1")
+    admin = TestClient(app, base_url="http://127.0.0.1")
+    login_admin(admin)
+    assert admin.put(
+        "/v1/admin/restaurants/demo-resto/owner-phone",
+        json={"username": OWNER["username"], "phone": PHONE, "ownership_reviewed": True},
+    ).status_code == 200
+    # Local format normalizes server-side; the owner signs in with the account password.
+    response = client.post("/v1/auth/login", json={"username": "0812 3456 789", "password": OWNER["password"]})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["role"] == "owner"
+    # Wrong account password stays an indistinguishable 401, unknown phone too.
+    assert client.post("/v1/auth/login", json={"username": "08123456789", "password": "not-it"}).status_code == 401
+    assert client.post("/v1/auth/login", json={"username": "+628999000111", "password": OWNER["password"]}).status_code == 401
+    # Text identifiers keep the plain username path.
+    assert client.post("/v1/auth/login", json={"username": OWNER["username"], "password": OWNER["password"]}).status_code == 200
+
+
+def test_short_numeric_identifiers_are_not_treated_as_phones(client):
+    """A short numeric username miss stays a plain 401 instead of a phone-format 422."""
+    response = client.post("/v1/auth/login", json={"username": "1234", "password": "whatever"})
+    assert response.status_code == 401

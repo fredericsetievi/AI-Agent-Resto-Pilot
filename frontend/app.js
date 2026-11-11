@@ -197,8 +197,15 @@ function showLogin() {
   $('#login-page').hidden = false;
   $('#login-error').hidden = true;
   $('#login-form').reset?.();
-  resetPhoneLogin();
-  $('#login-phone')?.focus?.();
+  resetAuthForms();
+  renderAuthView();
+}
+function renderAuthView() {
+  // Logged-out routing: #register shows the dedicated signup view, everything else the login view.
+  const register = location.hash === '#register';
+  $('#login-view').hidden = register;
+  $('#register-view').hidden = !register;
+  $(register ? '#signup-name' : '#login-identifier')?.focus?.();
 }
 function showApp(visible) {
   $('#login-page').hidden = true;
@@ -210,50 +217,32 @@ async function login(event) {
   const button = (event.target.querySelector && event.target.querySelector('button[type="submit"]')) || null;
   if(button)button.disabled = true; showError('login-error','');
   try {
-    const phone=$('#existing-login-phone').value.trim();
-    state.user = await api(phone?'/v1/auth/phone/connect':'/v1/auth/login', {method:'POST', body:{username:$('#login-username').value.trim(), password:$('#login-password').value,...(phone?{phone}:{})}});
+    state.user = await api('/v1/auth/login', {method:'POST', body:{username:$('#login-identifier').value.trim(), password:$('#login-password').value}});
     event.target.reset();
     finishLogin();
-  } catch(error) { showError('login-error', $('#existing-login-phone').value.trim()?t(phoneError(error)):error.message); }
+  } catch(error) { showError('login-error', error.message); }
   finally { if(button)button.disabled = false; }
 }
 function finishLogin() {
   $('#login-form').reset?.();
-  resetPhoneLogin();
+  resetAuthForms();
   showApp(true);
   state.page = state.user.role==='admin' ? 'admin' : 'overview';
   if(location.hash.slice(1)!==state.page)location.hash='#'+state.page;
   navigate();refresh();startAutoRefresh();
 }
-const phoneLogin={mode:'login',busy:false,errorKey:null};
-function resetPhoneLogin() {
-  phoneLogin.mode='login';phoneLogin.busy=false;phoneLogin.errorKey=null;
-  $('#phone-login-form').reset?.();
-  for(const id of ['login-phone','login-phone-password','signup-name','signup-restaurant','signup-password-confirm'])$('#'+id).value='';
-  renderPhoneLogin();
+const phoneRegister={busy:false,errorKey:null};
+function resetAuthForms() {
+  phoneRegister.busy=false;phoneRegister.errorKey=null;
+  $('#phone-register-form').reset?.();
+  for(const id of ['login-identifier','login-password','signup-name','signup-restaurant','register-phone','signup-password','signup-password-confirm'])$('#'+id).value='';
+  renderAuthForms();
 }
-function renderPhoneLogin() {
-  const register=phoneLogin.mode==='register';
-  $('#phone-auth-title').textContent=t(register?'phone_create':'login_title');
-  $('#phone-auth-subtitle').textContent=t(register?'phone_signup_sub':'phone_login_sub');
-  $('#phone-register-fields').hidden=!register;$('#phone-confirm-fields').hidden=!register;
-  for(const id of ['signup-name','signup-restaurant','signup-password-confirm']){
-    $('#'+id).required=register;$('#'+id).disabled=!register || phoneLogin.busy;
-  }
-  $('#login-phone').disabled=phoneLogin.busy;$('#login-phone-password').disabled=phoneLogin.busy;
-  $('#login-phone-password').setAttribute('autocomplete',register?'new-password':'current-password');
-  if(register)$('#login-phone-password').setAttribute('minlength','8');else $('#login-phone-password').removeAttribute('minlength');
-  $('#phone-login-submit').disabled=phoneLogin.busy;
-  $('#phone-login-submit').textContent=t(phoneLogin.busy?'phone_loading':register?'phone_create':'phone_signin');
-  $('#phone-mode-toggle').disabled=phoneLogin.busy;
-  $('#phone-mode-toggle').textContent=t(register?'phone_back_login':'phone_create');
-  showError('phone-login-error',phoneLogin.errorKey?t(phoneLogin.errorKey):'');
-}
-function setPhoneMode(mode) {
-  if(phoneLogin.busy)return;
-  phoneLogin.mode=mode;phoneLogin.errorKey=null;
-  $('#login-phone-password').value='';$('#signup-password-confirm').value='';
-  renderPhoneLogin();
+function renderAuthForms() {
+  for(const id of ['signup-name','signup-restaurant','register-phone','signup-password','signup-password-confirm'])$('#'+id).disabled=phoneRegister.busy;
+  $('#phone-register-submit').disabled=phoneRegister.busy;
+  $('#phone-register-submit').textContent=t(phoneRegister.busy?'phone_loading':'auth_register_submit');
+  showError('phone-register-error',phoneRegister.errorKey?t(phoneRegister.errorKey):'');
 }
 function phoneError(error) {
   if(error.code==='phone_login_throttled' || error.status===429)return 'phone_err_throttled';
@@ -264,26 +253,24 @@ function phoneError(error) {
   if(error.status===422)return 'phone_err_fields';
   return 'phone_err_network';
 }
-async function submitPhoneLogin(event) {
+async function submitPhoneRegister(event) {
   event.preventDefault();
-  if(phoneLogin.busy)return;
-  const register=phoneLogin.mode==='register', password=$('#login-phone-password').value;
-  phoneLogin.errorKey=null;
-  if(register && password!==$('#signup-password-confirm').value){
-    phoneLogin.errorKey='phone_err_confirm';renderPhoneLogin();return;
+  if(phoneRegister.busy)return;
+  phoneRegister.errorKey=null;
+  const password=$('#signup-password').value;
+  if(password!==$('#signup-password-confirm').value){
+    phoneRegister.errorKey='phone_err_confirm';renderAuthForms();return;
   }
-  const body={phone:$('#login-phone').value.trim(),password,...(register?{restaurant_name:$('#signup-restaurant').value.trim(),display_name:$('#signup-name').value.trim()}:{})};
-  phoneLogin.busy=true;renderPhoneLogin();
+  phoneRegister.busy=true;renderAuthForms();
   try {
-    state.user=await api('/v1/auth/phone/'+(register?'register':'login'),{method:'POST',body});
+    state.user=await api('/v1/auth/phone/register',{method:'POST',body:{phone:$('#register-phone').value.trim(),password,restaurant_name:$('#signup-restaurant').value.trim(),display_name:$('#signup-name').value.trim()}});
     finishLogin();
-  } catch(error) {phoneLogin.errorKey=phoneError(error);}
+  } catch(error) {phoneRegister.errorKey=phoneError(error);}
   finally {
-    phoneLogin.busy=false;$('#login-phone-password').value='';$('#signup-password-confirm').value='';renderPhoneLogin();
+    phoneRegister.busy=false;$('#signup-password').value='';$('#signup-password-confirm').value='';renderAuthForms();
   }
 }
-$('#phone-login-form').addEventListener('submit',submitPhoneLogin);
-$('#phone-mode-toggle').addEventListener('click',()=>setPhoneMode(phoneLogin.mode==='login'?'register':'login'));
+$('#phone-register-form').addEventListener('submit',submitPhoneRegister);
 async function logout() {
   try { await api('/v1/auth/logout', {method:'POST'}); } catch(error) { /* the session is gone either way */ }
   inventoryState.data=null;inventoryState.loaded=false;inventoryState.error='';inventoryState.snapshot=[];inventoryState.recipesSnapshot=[];
@@ -342,7 +329,7 @@ function draftCard(draft) {
 }
 function purchaseTable(purchases) {
   if (!purchases.length) return `<div class="empty"><strong>${t('Riwayat pembelian Anda dimulai di sini.','Your purchase history starts here.')}</strong>${t('Pembelian yang disetujui akan muncul di sini.','Approved purchases will appear in this view.')}</div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>${t('Pembelian','Purchase')}</th><th>${t('Pemasok','Supplier')}</th><th>${t('Jumlah','Amount')}</th><th>${t('Status','Status')}</th></tr></thead><tbody>${purchases.map(purchase => `<tr><td><button class="text-button" data-review="${e(purchase.draft_id)}">${e(itemSummary(purchase.items))}</button><small>${e(date(purchase.created_at))}</small></td><td>${e(purchase.supplier || t('Tidak disebutkan','Unspecified'))}</td><td class="money">${rupiah(purchase.total_idr)}<small>${t('Pembayaran belum diketahui','Payment unknown')}</small></td><td>${purchase.voided?`<span class="badge red">${t('Dibatalkan','Voided')}</span>`:badge('recorded')}</td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>${t('Pembelian','Purchase')}</th><th>${t('Pemasok','Supplier')}</th><th>${t('Jumlah','Amount')}</th><th>${t('Status','Status')}</th></tr></thead><tbody>${purchases.map(purchase => `<tr><td><button class="text-button" data-review="${e(purchase.draft_id)}">${e(itemSummary(purchase.items))}</button><small>${e(date(purchase.created_at))}</small></td><td>${e(purchase.supplier || t('Tidak disebutkan','Unspecified'))}</td><td class="money">${rupiah(purchase.total_idr)}<small>${t('Pembayaran belum diketahui','Payment unknown')}</small></td><td>${badge('recorded')}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function inventoryRows(inventory) {
   return `<div class="inventory-list">${inventory.map(item => `<div class="inventory-row"><span class="ingredient-icon" aria-hidden="true">${icons[item.ingredient_id] || '▦'}</span><div><strong>${e(item.name)}</strong><small>${item.low_stock?`<span class="badge red">${t('stock_low_badge')}</span>`:`<span class="badge green">${t('badge_recorded')}</span>`}</small></div><div class="stock ${item.low_stock?'low':''}">${number(item.quantity)} <span>${e(item.unit)}</span><small>${t('w_threshold')} ${number(item.reorder_threshold)} ${e(item.unit)}</small></div></div>`).join('')}</div>`;
@@ -416,7 +403,7 @@ function overview() {
   const delta=heroDelta(metrics);
   const metric=(label,value,detail,symbol,accent=false) => `<article class="metric ${accent?'metric-accent':''}"><div class="metric-label">${label}<span class="metric-symbol" aria-hidden="true">${symbol}</span></div><p class="metric-value money">${value}</p><small>${detail}</small></article>`;
   const hero=`<article class="metric metric-hero"><div class="metric-label">${t('Pembelian hari ini','Purchases today')}<span class="metric-symbol" aria-hidden="true">↗</span></div><p class="metric-value money">${rupiah(metrics.purchases_today_idr)}</p><small class="hero-delta ${delta.cls}">${e(delta.text)}</small><small>${t('Nilai invoice disetujui · WIB','Approved invoice value · WIB')}</small></article>`;
-  return `<div class="metrics">${hero}${metric(t('Menunggu Anda','Waiting for you'),number(drafts.length),t('Draf untuk ditinjau atau dilengkapi','Drafts to review or complete'),'☑',true)}${metric(t('Stok rendah','Low stock'),number(metrics.low_stock_count),t('Berdasar estimasi inventory','Based on estimated inventory'),'▦')}${metric(t('Pembelian tercatat','Recorded purchases'),number(metrics.recorded_purchases),t('Tersimpan di database lokal','Saved in your local database'),'▤')}</div><div class="main-grid"><div class="column"><section class="panel">${panelHeading(`${t('Perlu perhatian Anda','Needs your attention')} <span class="count-pill">${drafts.length}</span>`,t('Periksa cepat hari ini, besok lebih sedikit kejutan.','A quick check today, fewer surprises tomorrow.'), `<a class="text-button" href="#approvals">${t('Lihat semua →','View all →')}</a>`)}<div class="draft-list">${drafts.slice(0,3).map(draftCard).join('') || `<div class="empty"><strong>${t('Semua sudah beres.','You’re all caught up.')}</strong>${t('Draf pembelian baru akan muncul di sini.','New purchase drafts will appear here.')}</div>`}</div></section><section class="panel">${panelHeading(t('Pembelian terbaru','Recent purchases'),t('Terkonfirmasi, tercatat, mudah dicari.','Confirmed, recorded, and easy to find.'),`<a class="text-button" href="#purchases">${t('Semua pembelian →','All purchases →')}</a>`)}${purchaseTable(purchases.slice(0,5))}</section></div><div class="column"><section class="panel quick-panel"><div class="quick-icon" aria-hidden="true">✳</div><h2>${t('Satu pembelian. Satu pesan sederhana.','A purchase. A simple message.')}</h2><p>${t('Dapur tetap bergerak. Ubah catatan singkat menjadi pembelian siap tinjau.','Keep your kitchen moving. Turn a quick note into a purchase ready for your review.')}</p><div class="quick-sample">beli cabai 3 kg 150rb</div><button class="button" data-action="new-purchase">${t('Coba catat cepat →','Try a quick log →')}</button></section><section class="panel">${panelHeading(t('Stok dapur','Kitchen stock'),'',`<a class="text-button" href="#inventory">${t('Lihat semua →','View all →')}</a>`)}${inventoryRows(inventory.slice(0,3))}<div class="panel-note">${t('Estimasi dari nota yang disetujui. Hitungan fisik dan pemakaian dapur bisa berbeda.','Estimated from approved receipts. Physical counts and kitchen usage may differ.')}</div></section><section class="panel">${panelHeading(t('Aktivitas terbaru','Latest activity'))}${activityRows(activity.slice(0,3))}</section></div></div><div class="charts-grid"><section class="panel">${panelHeading(t('Pengeluaran 14 hari','14-day spending'),t('Total pembelian tercatat per hari (WIB).','Recorded purchase totals per day (WIB).'))}${dailySpendChart(state.data.charts?.daily_spend)}</section><section class="panel">${panelHeading(t('Bahan pengeluaran terbesar','Top ingredients by spend'),t('Dari pembelian 30 hari terakhir.','From purchases in the last 30 days.'))}${ingredientSpendChart(state.data.charts?.ingredient_spend)}</section></div><div class="charts-grid"><section class="panel trend-panel">${panelHeading(t('Pemakaian bahan 14 hari','Ingredient usage, 14 days'),t('Dari hitungan stok opname dan penjualan tercatat — "sisa berapa" menjadi tren penjualan dapur.','From stock counts and recorded sales — the leftover count becomes your kitchen sales trend.'))}${usageTrendChart(state.data.charts?.usage_trend)}</section></div>`;
+  return `<div class="metrics">${hero}${metric(t('Menunggu Anda','Waiting for you'),number(drafts.length),t('Draf untuk ditinjau atau dilengkapi','Drafts to review or complete'),'☑',true)}${metric(t('Stok rendah','Low stock'),number(metrics.low_stock_count),t('Berdasar estimasi inventory','Based on estimated inventory'),'▦')}${metric(t('Pembelian tercatat','Recorded purchases'),number(metrics.recorded_purchases),t('Tersimpan di database lokal','Saved in your local database'),'▤')}</div><div class="main-grid"><div class="column"><section class="panel">${panelHeading(`${t('Perlu perhatian Anda','Needs your attention')} <span class="count-pill">${drafts.length}</span>`,t('Periksa cepat hari ini, besok lebih sedikit kejutan.','A quick check today, fewer surprises tomorrow.'), `<a class="text-button" href="#approvals">${t('Lihat semua →','View all →')}</a>`)}<div class="draft-list">${drafts.slice(0,3).map(draftCard).join('') || `<div class="empty"><strong>${t('Semua sudah beres.','You’re all caught up.')}</strong>${t('Draf pembelian baru akan muncul di sini.','New purchase drafts will appear here.')}</div>`}</div></section><section class="panel">${panelHeading(t('Pembelian terbaru','Recent purchases'),t('Terkonfirmasi, tercatat, mudah dicari.','Confirmed, recorded, and easy to find.'),`<a class="text-button" href="#purchases">${t('Semua pembelian →','All purchases →')}</a>`)}${purchaseTable(purchases.slice(0,5))}</section></div><div class="column"><section class="panel quick-panel"><div class="quick-icon" aria-hidden="true">✳</div><h2>${t('Satu pembelian. Satu pesan sederhana.','A purchase. A simple message.')}</h2><p>${t('Dapur tetap bergerak. Ubah catatan singkat menjadi pembelian siap tinjau.','Keep your kitchen moving. Turn a quick note into a purchase ready for your review.')}</p><div class="quick-sample">beli cabai 3 kg 150rb</div><button class="button" data-action="new-purchase">${t('Coba catat cepat →','Try a quick log →')}</button></section><section class="panel">${panelHeading(t('Stok dapur','Kitchen stock'),'',`<a class="text-button" href="#inventory">${t('Lihat semua →','View all →')}</a>`)}${inventoryRows(inventory.slice(0,3))}<div class="panel-note">${t('Estimasi dari nota yang disetujui. Hitungan fisik dan pemakaian dapur bisa berbeda.','Estimated from approved receipts. Physical counts and kitchen usage may differ.')}</div></section><section class="panel">${panelHeading(t('Aktivitas terbaru','Latest activity'))}${activityRows(activity.slice(0,3))}</section></div></div><div class="charts-grid"><section class="panel">${panelHeading(t('Pengeluaran 14 hari','14-day spending'),t('Total pembelian tercatat per hari (WIB).','Recorded purchase totals per day (WIB).'))}${dailySpendChart(state.data.charts?.daily_spend)}</section><section class="panel">${panelHeading(t('Bahan pengeluaran terbesar','Top ingredients by spend'),t('Dari pembelian 30 hari terakhir.','From purchases in the last 30 days.'))}${ingredientSpendChart(state.data.charts?.ingredient_spend)}</section></div>`;
 }
 function render() {
   renderIdentity();
@@ -476,21 +463,6 @@ function ingredientSpendChart(items) {
   if(!items || !items.length) return '<div class="empty">Belum ada data grafik.</div>';
   const max=Math.max(...items.map(i=>i.total_idr), 1);
   return `<div class="hbars">`+items.map(i=>`<div class="hbar-row"><small class="hbar-name">${e(i.name)}</small><div class="hbar-track"><div class="hbar" style="width:${Math.max(2, Math.round(i.total_idr/max*100))}%"></div></div><span class="money hbar-value">${rupiah(i.total_idr)}</span></div>`).join('')+`</div>`;
-}
-function usageTrendChart(items) {
-  if(!items || !items.length) return `<div class="empty">${t('Belum ada pemakaian tercatat.','No recorded usage yet.')}${t(' Terapkan hitungan stok opname dan trennya muncul di sini.',' Apply a stock count and its trend appears here.')}</div>`;
-  const w=260,h=40;
-  return `<div class="trend-list">`+items.map(item=>{
-    const used=item.daily.map(d=>d.used);
-    const max=Math.max(...used,1);
-    const step=w/(used.length-1);
-    const points=used.map((v,i)=>`${(i*step).toFixed(1)},${(h-Math.max(2,Math.round(v/max*h))).toFixed(1)}`).join(' ');
-    const area=`0,${h} ${points} ${w},${h}`;
-    const thisWeek=used.slice(7).reduce((a,b)=>a+b,0), lastWeek=used.slice(0,7).reduce((a,b)=>a+b,0);
-    const delta=thisWeek-lastWeek;
-    const badge=delta>0.0001?`<span class="badge amber">▲ ${number(delta)} ${t('minggu ini','this week')}</span>`:delta<-0.0001?`<span class="badge green">▼ ${number(Math.abs(delta))} ${t('minggu ini','this week')}</span>`:'';
-    return `<div class="trend-row"><div class="trend-meta"><strong>${e(item.name)}</strong><small>${number(item.total_used)} ${e(item.unit||'')} ${t('terpakai · 14 hari','used · 14 days')}</small>${badge}</div><svg class="trend-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${e(item.name)}: ${e(item.total_used)} ${e(item.unit||'')} 14 ${t('hari','days')}"><polygon class="trend-area" points="${area}"/><polyline class="trend-line" points="${points}"/></svg></div>`;
-  }).join('')+`</div>`;
 }
 function opnameFormPanel() {
   const options=(state.data?.inventory || []).map(item=>`<option value="${e(item.ingredient_id)}">${e(item.name)} — sistem: ${e(number(item.quantity))} ${e(item.unit)}</option>`).join('');
@@ -752,7 +724,7 @@ function navigate() {
   state.page=known?hash:(state.user?.role==='admin'?'admin':'overview');
   render();
 }
-window.addEventListener('hashchange',navigate);
+window.addEventListener('hashchange',()=>{if(state.user)navigate();else renderAuthView();});
 document.addEventListener('keydown',event => {
   // A focused admin row (role=button, tabindex=0) activates on Enter or Space.
   if((event.key==='Enter'||event.key===' ') && event.target.classList && event.target.classList.contains('admin-row')){
