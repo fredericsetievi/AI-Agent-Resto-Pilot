@@ -102,6 +102,7 @@ from .whatsapp import (
     public_origin,
     opname_reply,
     send_audio_message,
+    send_template,
     send_text,
     upload_audio,
     validate_graph_version,
@@ -349,6 +350,8 @@ def create_app(
     meta_phone_number_id=None,
     meta_graph_api_version="v23.0",
     meta_http_client=None,
+    whatsapp_alert_template=None,
+    whatsapp_alert_template_lang="id",
     vision_api_key=None,
     vision_model=None,
     vision_base_url=None,
@@ -703,11 +706,29 @@ def create_app(
                     store.record_proactive_message(restaurant_id, "proactive:" + restaurant_id, phone, "proactive", body_text, "proactive_no_channel")
                     sent.append({"sender": phone, "platform": platform, "channel": None, "ok": False})
                     continue
+                # WhatsApp's 24-hour customer-service window: a free-form reply
+                # is only guaranteed while the owner wrote to us inside it.
+                # Outside the window the alert must go as an approved template;
+                # without one configured the link is recorded, not guessed.
+                use_template = False
+                if channel == "whatsapp":
+                    age_hours = await run_in_threadpool(store.last_inbound_age_hours, phone, platform)
+                    use_template = age_hours is None or age_hours >= 24.0
+                    if use_template and not (whatsapp_alert_template or "").strip():
+                        logger.warning("Proactive alert for %s: %s is outside the 24-hour window and no template is configured; recording only.", restaurant_id, phone)
+                        store.record_proactive_message(restaurant_id, "proactive:" + restaurant_id, phone, "proactive", body_text, "proactive_template_required")
+                        sent.append({"sender": phone, "platform": platform, "channel": channel, "ok": False})
+                        continue
                 message_id = store.record_proactive_message(restaurant_id, "proactive:" + restaurant_id, phone, "proactive", body_text, "proactive_pending")
                 try:
                     if channel == "whatsapp":
-                        await send_text(
-                            meta_access_token, meta_phone_number_id, meta_graph_api_version, phone, body_text, client=meta_http_client)
+                        if use_template:
+                            await send_template(
+                                meta_access_token, meta_phone_number_id, meta_graph_api_version, phone,
+                                whatsapp_alert_template, whatsapp_alert_template_lang, [body_text], client=meta_http_client)
+                        else:
+                            await send_text(
+                                meta_access_token, meta_phone_number_id, meta_graph_api_version, phone, body_text, client=meta_http_client)
                     else:
                         await send_telegram_text(telegram_bot_token, phone, body_text, api_base=telegram_api_base, client=telegram_http_client)
                 except (MetaWhatsAppError, TelegramError, ValueError) as exc:

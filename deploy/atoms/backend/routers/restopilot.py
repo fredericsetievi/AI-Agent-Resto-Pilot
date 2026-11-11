@@ -70,6 +70,8 @@ def _restopilot_app():
             meta_waba_id=env("META_WABA_ID"),
             meta_phone_number_id=env("META_PHONE_NUMBER_ID"),
             meta_graph_api_version=env("META_GRAPH_API_VERSION", "v23.0"),
+            whatsapp_alert_template=(env("WHATSAPP_ALERT_TEMPLATE") or "").strip() or None,
+            whatsapp_alert_template_lang=(env("WHATSAPP_ALERT_TEMPLATE_LANG") or "").strip() or "id",
             vision_api_key=env("STEPFUN_API_KEY"),
             vision_model=env("STEPFUN_VISION_MODEL"),
             vision_base_url=env("STEPFUN_BASE_URL"),

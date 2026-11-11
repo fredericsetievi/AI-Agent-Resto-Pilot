@@ -1859,6 +1859,30 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
             ).fetchone()
         return {"id": row["restaurant_id"], "name": row["name"]} if row else None
 
+    def last_inbound_age_hours(self, phone, platform="whatsapp"):
+        """Hours since this sender last wrote us on the platform, or None if never.
+
+        WhatsApp's 24-hour customer-service window decides whether a proactive
+        alert may be a free-form reply or must be an approved template;
+        Telegram has no such window. Platform transports never mix: the same
+        digits on WhatsApp and Telegram are separate conversations.
+        """
+        transports = ("telegram_bot",) if platform == "telegram" else ("whatsapp_simulator", "meta_whatsapp_cloud")
+        marks = ",".join("?" for _ in transports)
+        with self.transaction() as conn:
+            row = conn.execute(
+                f"SELECT max(m.created_at) FROM whatsapp_messages m JOIN whatsapp_threads t ON t.id=m.thread_id "
+                f"WHERE t.sender=? AND m.direction='inbound' AND m.transport IN ({marks})",
+                (str(phone or "").strip(), *transports),
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            delta = datetime.now(timezone.utc) - datetime.fromisoformat(str(row[0]))
+        except ValueError:
+            return None
+        return max(delta.total_seconds() / 3600.0, 0.0)
+
     def linked_numbers(self, restaurant_id):
         with self.transaction() as conn:
             return [dict(row) for row in conn.execute("SELECT phone, platform, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))]
