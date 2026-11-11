@@ -24,7 +24,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import Depends, FastAPI, Header, Query, Request, Response
+from fastapi import Body, Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -47,6 +47,8 @@ from .pg_store import PostgresStore
 from .data_qa import build_answer as build_data_answer
 from .data_qa import phrase_data_answer, phrase_opname_answer
 from .extraction import extract_purchase
+from .suppliers import parse_supplier_command
+from .suppliers import supplier_alert_hint, supplier_inquiry_send
 from .intent_llm import classify_intent
 from .operation_extraction import caption_requests_purchase, extract_operations_document, parse_operations_text
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
@@ -206,6 +208,13 @@ class RestaurantCreate(Model):
 class RestaurantUpdate(Model):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)] | None = None
     address: ShortText | None = None
+
+
+class SupplierContact(Model):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+    contact_phone: ShortText | None = None
+    contact_platform: Literal["whatsapp", "telegram"] | None = None
+    notes: ShortText | None = None
 
 
 class WhatsAppNumber(Model):
@@ -680,6 +689,9 @@ def create_app(
         if not candidates:
             return {"restaurant_id": restaurant_id, "candidates": [], "body": None, "sent": [], "dry_run": bool(dry_run)}
         body_text = build_alert_text(candidates)
+        hint = await run_in_threadpool(supplier_alert_hint, store, restaurant_id, candidates)
+        if hint:
+            body_text = body_text + "\n" + hint
         if stock_llm_enabled and vision_api_key:
             try:
                 body_text = await phrase_alert(
@@ -846,13 +858,25 @@ def create_app(
         return idempotency_key
 
     @app.post("/v1/auth/login")
-    def login(body: Login, response: Response):
+    def login(body: Login, request: Request, response: Response):
         demo_owner_exempt = allow_demo_owner_login and body.username == "owner"
         if hosted and not demo_owner_exempt and (body.username.casefold(), body.password) in default_credentials:
             # Checked before any database lookup; stored hashes are untouched.
             raise DomainError("default_credentials_rejected", "Default demo credentials are disabled on this deployment.", 401)
-        user = store.verify_login(body.username, body.password)
-        token = store.create_session(user["id"])
+        try:
+            user = store.verify_login(body.username, body.password)
+            token = store.create_session(user["id"])
+        except DomainError as error:
+            # Flexible identifier: the single login field accepts a username or an
+            # enrolled phone number. Only when the value is phone-shaped do we retry
+            # through the phone-password path, which keeps its own throttling and
+            # hosted restrictions (owner-only, demo-owner protections).
+            if error.code != "invalid_credentials":
+                raise
+            identifier = body.username.strip()
+            if not re.fullmatch(r"[+0-9 ()\-]+", identifier) or sum(character.isdigit() for character in identifier) < 8:
+                raise
+            user, token = store.login_phone_password(identifier, body.password, request.client.host if request.client else "unknown", hosted=hosted, allow_demo_owner=allow_demo_owner_login)
         response.set_cookie(
             SESSION_COOKIE, token,
             max_age=int(SESSION_TTL.total_seconds()),
@@ -1071,6 +1095,24 @@ def create_app(
         if menu is not None:
             payload["stock_answer"] = menu
             return
+        supplier_cmd = parse_supplier_command(text)
+        if supplier_cmd and supplier_cmd.get("kind") == "inquiry":
+            async def send_supplier_telegram(name, phone, inquiry_text):
+                await send_telegram_text(telegram_bot_token, phone, inquiry_text,
+                                         api_base=telegram_api_base, client=telegram_http_client)
+
+            async def send_supplier_wa(name, phone, inquiry_text):
+                import os
+                from .whatsapp import send_template
+                template = os.environ.get("WHATSAPP_INQUIRY_TEMPLATE") or "restopilot_price_inquiry"
+                lang = os.environ.get("WHATSAPP_INQUIRY_TEMPLATE_LANG") or "id"
+                await send_template(meta_access_token, meta_phone_number_id,
+                                    meta_graph_api_version, phone, template, lang,
+                                    [name, inquiry_text], client=meta_http_client)
+
+            payload["supplier_answer"] = await supplier_inquiry_send(
+                store, send_supplier_telegram, send_supplier_wa, restaurant["id"], supplier_cmd)
+            return
         candidate = parse_operations_text(text)
         if candidate is not None:
             payload["operation_candidate"] = candidate
@@ -1136,6 +1178,28 @@ def create_app(
     @app.delete("/v1/links/{phone}")
     def links_remove(phone: str, actor=Depends(owner_actor), idempotency_key=Depends(key), platform: Literal["whatsapp", "telegram"] = "whatsapp"):
         return {"data": store.remove_whatsapp_number(actor["restaurant_id"], phone, idempotency_key, platform=platform)}
+
+    # ---- Supplier contacts, price quotes, comparison (fase 2a/2b) --------
+
+    @app.get("/v1/suppliers")
+    def suppliers_list(actor=Depends(owner_actor)):
+        return {"data": {"suppliers": store.suppliers_list(actor["restaurant_id"])}}
+
+    @app.post("/v1/suppliers", status_code=201)
+    def suppliers_add(body: Annotated[SupplierContact, Body()], actor=Depends(owner_actor), idempotency_key=Depends(key)):
+        return {"data": store.supplier_add(idempotency_key, body.model_dump(), actor["restaurant_id"])}
+
+    @app.patch("/v1/suppliers/{supplier_id}")
+    def suppliers_update(supplier_id: str, body: SupplierContact, actor=Depends(owner_actor), idempotency_key=Depends(key)):
+        return {"data": store.supplier_update(actor["restaurant_id"], supplier_id, idempotency_key, body.model_dump())}
+
+    @app.delete("/v1/suppliers/{supplier_id}")
+    def suppliers_remove(supplier_id: str, actor=Depends(owner_actor), idempotency_key=Depends(key)):
+        return {"data": store.supplier_remove(actor["restaurant_id"], supplier_id, idempotency_key)}
+
+    @app.get("/v1/suppliers/{supplier_id}/quotes")
+    def suppliers_quotes(supplier_id: str, ingredient: str | None = None, actor=Depends(owner_actor)):
+        return {"data": {"quotes": store.supplier_quotes_recent(actor["restaurant_id"], ingredient, limit=20)}}
 
     def csv_attachment(rows, filename):
         buffer = io.StringIO()
@@ -1459,9 +1523,41 @@ def create_app(
             payload["_restaurant_id"] = None
             # The same allowlist as WhatsApp, scoped to the Telegram platform:
             # the same digits may belong to another restaurant on WhatsApp.
+            supplier_contact = await run_in_threadpool(store.supplier_for_phone, message["sender"])
+            if supplier_contact:
+                # A supplier reply feeds the price ledger; it never creates
+                # purchases, approvals or dashboard access.
+                intake = await run_in_threadpool(
+                    store.supplier_reply_intake, supplier_contact["restaurant_id"], supplier_contact["id"], message["text"])
+                ack = "Terima kasih! Harga dicatat: " + ", ".join(
+                    f"{q['ingredient_name']} Rp{q['price']:,}" for q in intake["stored"]) if intake["stored"] else                     "Terima kasih! Balasan diterima tapi harganya belum terbaca — sebutkan bahan dan harganya."
+                await send_telegram_text(telegram_bot_token, message["sender"], ack,
+                                         api_base=telegram_api_base, client=telegram_http_client)
+                continue
             sender_restaurant = await run_in_threadpool(store.restaurant_for_sender, message["sender"], "telegram")
             restaurant_id = sender_restaurant["id"] if sender_restaurant else None
             payload["_restaurant_id"] = restaurant_id
+            if message.get("media_kind") is None and payload["text"].strip() and restaurant_id:
+                inquiry_cmd = parse_supplier_command(payload["text"])
+                if inquiry_cmd and inquiry_cmd.get("kind") == "inquiry":
+                    async def send_supplier_tg(name, phone, inquiry_text):
+                        await send_telegram_text(telegram_bot_token, phone, inquiry_text,
+                                                 api_base=telegram_api_base, client=telegram_http_client)
+
+                    async def send_supplier_wa(name, phone, inquiry_text):
+                        import os
+                        from .whatsapp import send_template
+                        template = os.environ.get("WHATSAPP_INQUIRY_TEMPLATE") or "restopilot_price_inquiry"
+                        lang = os.environ.get("WHATSAPP_INQUIRY_TEMPLATE_LANG") or "id"
+                        await send_template(meta_access_token, meta_phone_number_id,
+                                            meta_graph_api_version, phone, template, lang,
+                                            [name, inquiry_text], client=meta_http_client)
+
+                    answer = await supplier_inquiry_send(store, send_supplier_tg, send_supplier_wa,
+                                                         restaurant_id, inquiry_cmd)
+                    await send_telegram_text(telegram_bot_token, message["sender"], answer,
+                                             api_base=telegram_api_base, client=telegram_http_client)
+                    continue
             if message.get("media_group_id") and telegram_group_seconds > 0:
                 # Part of a multi-photo send: extract now, buffer the result,
                 # and let the quiet-period flush deliver one merged draft.

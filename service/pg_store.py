@@ -35,6 +35,7 @@ from .inventory import InventoryMixin
 from .menu_insights import MenuInsightsMixin
 from .operations import OperationsMixin
 from .purchase_edits import PurchaseEditsMixin
+from .suppliers import SupplierMixin
 from .purchase_sources import PurchaseSourcesMixin
 from .purchase_idempotency import purchase_idempotent
 from .phone_auth import PhoneAuthMixin
@@ -60,7 +61,7 @@ from .whatsapp import (
 )
 
 
-class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, PurchaseEditsMixin, MenuInsightsMixin):
+class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, PurchaseEditsMixin, MenuInsightsMixin, SupplierMixin):
     """The RestoPilot authority in Supabase Postgres. Same contract as Store."""
 
     inventory_postgres = True
@@ -74,7 +75,10 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         "whatsapp_links": {"id", "slug", "phone", "label", "created_at"},
         "custom_ingredients": {"id", "slug", "name", "unit", "reorder_threshold", "created_at"},
         "drafts": {"id", "slug", "version", "status", "body", "created_at"},
-        "purchases": {"id", "slug", "draft_id", "supplier", "created_at", "body", "voided_at"},
+        "suppliers": {"id", "slug", "name", "contact_phone", "contact_platform", "notes", "created_at"},
+        "supplier_price_quotes": {"id", "slug", "supplier_id", "ingredient_id", "ingredient_name", "unit_price_idr", "note", "raw_message", "source", "inquiry_id", "created_at"},
+        "supplier_inquiries": {"id", "slug", "request", "status", "detail", "created_at"},
+        "purchases": {"id", "slug", "draft_id", "supplier", "supplier_id", "created_at", "body", "voided_at"},
         "stock": {"slug", "ingredient_id", "quantity"},
         "movements": {"id", "slug", "purchase_id", "ingredient_id", "quantity", "created_at"},
         "activity": {"id", "slug", "event", "message", "created_at"},
@@ -1963,6 +1967,8 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
             cur = self._execute(conn, "SELECT 1 FROM tenants WHERE slug=%s", (restaurant_id,))
             if not cur.fetchone():
                 raise DomainError("not_found", "Restaurant not found.", 404)
+            if self._phone_is_supplier_contact(conn, phone):
+                raise DomainError("phone_is_supplier_contact", "Nomor itu terdaftar sebagai kontak supplier.", 409)
             cur = self._execute(conn, "SELECT slug FROM whatsapp_links WHERE phone=%s AND platform=%s", (phone, platform))
             existing = cur.fetchone()
             if existing:
