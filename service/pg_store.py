@@ -60,11 +60,7 @@ from .whatsapp import (
 )
 
 
-<<<<<<< HEAD
-class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, MenuInsightsMixin):
-=======
-class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, PurchaseEditsMixin):
->>>>>>> 46dad21 (Correct or void recorded purchases from chat: ubah/batal pembelian)
+class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, PurchaseEditsMixin, MenuInsightsMixin):
     """The RestoPilot authority in Supabase Postgres. Same contract as Store."""
 
     inventory_postgres = True
