@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from conftest import login_owner
 from service.api import create_app
 from service.db import RESTAURANT, Store
+from service.operation_extraction import parse_operations_text
 
 
 TENANT = RESTAURANT["id"]
@@ -83,6 +84,34 @@ def test_parse_opname_handles_multiple_ingredients(tmp_path):
     store = Store(tmp_path / "op.sqlite3")
     parsed = store.parse_opname("stok opname cabai 2 kg dan bawang 1 kg", TENANT)
     assert {item["ingredient_id"] for item in parsed["items"]} == {"cabai", "bawang"}
+
+
+def test_parse_evening_count_does_not_glue_day_part_words_into_names():
+    # 'Stok malam gula 3 kg' once produced name 'malam gula', which missed the
+    # catalog and forced owners through a BAHAN clarification round-trip.
+    candidate = parse_operations_text("Stok malam gula 3 kg")
+    assert candidate is not None and candidate["document_type"] == "count"
+    line = candidate["lines"][0]
+    assert (line["kind"], line["name"], line["quantity"], line["unit"]) == ("count", "gula", "3", "kg")
+    assert candidate["unresolved"] == []
+
+
+def test_parse_evening_count_accepts_multi_item_one_liners():
+    candidate = parse_operations_text("stok malam: pandan 8 pcs, choco 11 pcs")
+    assert candidate is not None and candidate["document_type"] == "count"
+    assert {(line["name"], line["quantity"], line["unit"]) for line in candidate["lines"]} == {
+        ("pandan", "8", "pcs"),
+        ("choco", "11", "pcs"),
+    }
+    assert candidate["unresolved"] == []
+
+
+def test_parse_count_variants_strip_day_parts_but_keep_other_kinds():
+    assert parse_operations_text("sisa malam telur 2 kg")["lines"][0]["name"] == "telur"
+    assert parse_operations_text("gula sisa 3 kg")["lines"][0]["name"] == "gula"
+    # Sale parsing keeps day-part words where they belong to the menu context.
+    sale = parse_operations_text("terjual nasi goreng 20 porsi")
+    assert sale["lines"][0]["name"] == "nasi goreng"
 
 
 # --- Proposal and confirmation over chat ----------------------------------------

@@ -189,6 +189,12 @@ class OperationsMixin:
                 from .extraction import catalog_aliases
                 alias_id = dict(catalog_aliases()).get(normalized(name))
                 matches = [catalog["by_id"][alias_id]] if alias_id in catalog["by_id"] else []
+            if not matches and kind == "count":
+                # Evening counts often use loose names ('stok malam gula 3 kg').
+                # Accept a single unambiguous substring match instead of asking.
+                fuzzy = [item for item in catalog["list"] if normalized(name) and (normalized(name) in normalized(item["name"]) or normalized(item["name"]) in normalized(name))]
+                if len(fuzzy) == 1:
+                    matches = fuzzy
             if len(matches) != 1:
                 questions.append(f"Bahan {name or index+1} yang mana? Balas BAHAN <nama bahan persis dari dashboard>.")
                 payloads.append(p)
