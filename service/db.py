@@ -1106,8 +1106,12 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                     else:
                         applied = self.apply_opname(conn, tenant, group_id)
                         thread["pending_opname_id"] = None
+                        # A lower physical count than the estimate means the
+                        # difference left the kitchen — say so as derived usage.
                         reply = "Stok opname diterapkan: " + "; ".join(
-                            f"{item['name']} {item['estimated_quantity']} → {item['counted_quantity']} {item['unit']}" for item in applied) + "."
+                            f"{item['name']} {item['estimated_quantity']} → {item['counted_quantity']} {item['unit']}"
+                            + (f" (terpakai ±{abs(Decimal(str(item['delta'])))} {item['unit']})" if Decimal(str(item["delta"])) < 0 else "")
+                            for item in applied) + "."
                         result["action"] = "opname_applied"
                 elif not draft:
                     reply = "Tidak ada draf aktif untuk nomor ini. Kirim rincian pembelian terlebih dahulu; YA tidak mencatat pembelian lain."
@@ -1722,7 +1726,38 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                            for back in range(13, -1, -1)]
             ingredient_spend = [{"name": (catalog["by_id"].get(key) or {}).get("name") or str(key), "total_idr": total}
                                 for key, total in sorted(ingredient_totals.items(), key=lambda pair: pair[1], reverse=True)[:7]]
-            charts = {"daily_spend": daily_spend, "ingredient_spend": ingredient_spend}
+            # Usage trend: negative stock movements are consumption (opname
+            # deltas and sales deductions), mirroring the Postgres dashboard.
+            movement_rows = conn.execute(
+                "SELECT ingredient_id, quantity, created_at FROM movements WHERE restaurant_id=? AND created_at >= ?",
+                (restaurant_id, (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()),
+            ).fetchall()
+            usage_by_ingredient = {}
+            for mrow in movement_rows:
+                try:
+                    mquantity = Decimal(str(mrow["quantity"]))
+                except Exception:
+                    continue
+                if mquantity >= 0:
+                    continue
+                mday = datetime.fromisoformat(mrow["created_at"]).astimezone(RESTAURANT_TIMEZONE).date()
+                if mday < today_wib - timedelta(days=13):
+                    continue
+                mbucket = usage_by_ingredient.setdefault(mrow["ingredient_id"], {})
+                mbucket[mday] = mbucket.get(mday, Decimal(0)) + abs(mquantity)
+            usage_trend = []
+            for mkey, mbucket in sorted(usage_by_ingredient.items(), key=lambda pair: sum(pair[1].values()), reverse=True)[:6]:
+                mingredient = catalog["by_id"].get(mkey) or {}
+                usage_trend.append({
+                    "ingredient_id": str(mkey),
+                    "name": mingredient.get("name") or str(mkey),
+                    "unit": mingredient.get("unit") or "",
+                    "total_used": float(sum(mbucket.values())),
+                    "daily": [{"date": (today_wib - timedelta(days=back)).isoformat(),
+                               "used": float(mbucket.get(today_wib - timedelta(days=back), 0))}
+                              for back in range(13, -1, -1)],
+                })
+            charts = {"daily_spend": daily_spend, "ingredient_spend": ingredient_spend, "usage_trend": usage_trend}
             return {
                 "restaurant": dict(restaurant),
                 "whatsapp_numbers": [dict(row) for row in conn.execute("SELECT phone, platform, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))],

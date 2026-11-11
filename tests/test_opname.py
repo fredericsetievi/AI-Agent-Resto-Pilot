@@ -116,6 +116,19 @@ def test_ya_applies_the_counted_quantity(tmp_path):
     assert "opname_applied" in events
 
 
+def test_applied_reply_reports_derived_usage_and_overview_shows_trend(tmp_path):
+    client = owner_client(tmp_path)
+    simulate(client, OPNAME)
+    result = data(simulate(client, "ya"))
+    # The count dropped below the estimate, so the reply says how much left.
+    assert "terpakai ±1 kg" in result["messages"][-1]["body"]
+    trend = client.app.state.store.overview(TENANT)["charts"]["usage_trend"]
+    cabai = next(item for item in trend if item["ingredient_id"] == "cabai")
+    assert cabai["unit"] == "kg"
+    assert cabai["total_used"] == 1.0
+    assert sum(day["used"] for day in cabai["daily"]) == 1.0
+
+
 def test_batal_cancels_and_keeps_the_ledger(tmp_path):
     client = owner_client(tmp_path)
     simulate(client, OPNAME)
