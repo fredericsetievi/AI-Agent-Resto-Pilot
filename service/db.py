@@ -27,6 +27,7 @@ from .purchase_idempotency import purchase_idempotent
 from .phone_auth import PhoneAuthMixin, SQLITE_SCHEMA as PHONE_AUTH_SQLITE_SCHEMA
 from .extraction import catalog_aliases, extract_purchase, normalize_item
 from .notifications import refill_suggestion
+from .purchase_edits import PurchaseEditsMixin, parse_purchase_edit_command
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
 from .onboarding import restaurant_selection
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
@@ -233,7 +234,7 @@ def normalize_items_for_catalog(items, catalog):
     return normalized, list(dict.fromkeys(warnings))
 
 
-class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, MenuInsightsMixin):
+class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, MenuInsightsMixin, PurchaseEditsMixin):
     def __init__(self, path, seed=True):
         self.path = str(path)
         # Each restaurant owns a catalog: the shared base plus the ingredients
@@ -298,12 +299,12 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, expires_at TEXT NOT NULL)",
                 "CREATE TABLE IF NOT EXISTS whatsapp_links (id TEXT PRIMARY KEY, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), phone TEXT NOT NULL, platform TEXT NOT NULL DEFAULT 'whatsapp', label TEXT, created_at TEXT NOT NULL, UNIQUE(phone, platform))",
                 "CREATE TABLE IF NOT EXISTS drafts (id TEXT PRIMARY KEY, version INTEGER NOT NULL CHECK(version>0), status TEXT NOT NULL, body TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
-                "CREATE TABLE IF NOT EXISTS purchases (id TEXT PRIMARY KEY, draft_id TEXT NOT NULL UNIQUE REFERENCES drafts(id), supplier TEXT, created_at TEXT NOT NULL, body TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
+                "CREATE TABLE IF NOT EXISTS purchases (id TEXT PRIMARY KEY, draft_id TEXT NOT NULL UNIQUE REFERENCES drafts(id), supplier TEXT, created_at TEXT NOT NULL, body TEXT NOT NULL, voided_at TEXT, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto')",
                 "CREATE TABLE IF NOT EXISTS inventory (restaurant_id TEXT NOT NULL DEFAULT 'demo-resto', ingredient_id TEXT NOT NULL, quantity TEXT NOT NULL, PRIMARY KEY(restaurant_id, ingredient_id))",
                 "CREATE TABLE IF NOT EXISTS movements (id TEXT PRIMARY KEY, purchase_id TEXT REFERENCES purchases(id), ingredient_id TEXT NOT NULL, quantity TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto', UNIQUE(purchase_id, ingredient_id))",
                 "CREATE TABLE IF NOT EXISTS activity (id TEXT PRIMARY KEY, event TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT)",
                 "CREATE TABLE IF NOT EXISTS idempotency (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS whatsapp_threads (id TEXT PRIMARY KEY, channel TEXT NOT NULL, sender TEXT NOT NULL, transport TEXT NOT NULL, active_draft_id TEXT REFERENCES drafts(id), active_version INTEGER, pending_followup TEXT, pending_opname_id TEXT, restaurant_id TEXT REFERENCES restaurants(id), UNIQUE(channel, sender))",
+                "CREATE TABLE IF NOT EXISTS whatsapp_threads (id TEXT PRIMARY KEY, channel TEXT NOT NULL, sender TEXT NOT NULL, transport TEXT NOT NULL, active_draft_id TEXT REFERENCES drafts(id), active_version INTEGER, pending_followup TEXT, pending_opname_id TEXT, pending_edit TEXT, restaurant_id TEXT REFERENCES restaurants(id), UNIQUE(channel, sender))",
                 "CREATE TABLE IF NOT EXISTS whatsapp_messages (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES whatsapp_threads(id), direction TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, transport TEXT NOT NULL, status TEXT NOT NULL, draft_id TEXT REFERENCES drafts(id))",
                 "CREATE TABLE IF NOT EXISTS whatsapp_events (channel TEXT NOT NULL, event_id TEXT NOT NULL, thread_id TEXT NOT NULL REFERENCES whatsapp_threads(id), fingerprint TEXT NOT NULL, response TEXT NOT NULL, PRIMARY KEY(channel, event_id))",
                 "CREATE TABLE IF NOT EXISTS custom_ingredients (id TEXT NOT NULL, name TEXT NOT NULL, unit TEXT NOT NULL, reorder_threshold TEXT NOT NULL, created_at TEXT NOT NULL, restaurant_id TEXT NOT NULL DEFAULT 'demo-resto', PRIMARY KEY (restaurant_id, id))",
@@ -324,6 +325,11 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 conn.execute("ALTER TABLE whatsapp_threads ADD COLUMN pending_followup TEXT")
             if "pending_opname_id" not in columns:
                 conn.execute("ALTER TABLE whatsapp_threads ADD COLUMN pending_opname_id TEXT")
+            if "pending_edit" not in columns:
+                conn.execute("ALTER TABLE whatsapp_threads ADD COLUMN pending_edit TEXT")
+            purchase_columns = {row[1] for row in conn.execute("PRAGMA table_info(purchases)")}
+            if "voided_at" not in purchase_columns:
+                conn.execute("ALTER TABLE purchases ADD COLUMN voided_at TEXT")
             self._migrate_platform_links(conn)
             self._migrate_tenants(conn)
             self._ensure_demo_tenant(conn)
@@ -1095,7 +1101,13 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                     reply = "Oke, catatan diperbarui. " + " ".join(details) if details else FOLLOWUP_ACK
                     result["action"] = "purchase_updated"
             elif command in APPROVE_COMMANDS or command in REJECT_COMMANDS or intent_hint in ("approve", "reject"):
-                if not draft and thread.get("pending_opname_id"):
+                if thread.get("pending_edit") and not draft:
+                    # A purchase-correction proposal is waiting: YA applies it,
+                    # BATAL discards it. The proposal owns the confirmation.
+                    rejecting = command in REJECT_COMMANDS or (intent_hint == "reject" and command not in APPROVE_COMMANDS)
+                    reply, edit_result = self.apply_pending_purchase_edit(conn, thread, tenant, "reject" if rejecting else "approve")
+                    result.update(edit_result)
+                elif not draft and thread.get("pending_opname_id"):
                     # A physical count proposal is waiting: YA applies the
                     # counted quantities, BATAL cancels — the store enforces
                     # the same way it does for purchase drafts.
@@ -1147,6 +1159,20 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 reply = weekly_summary_reply(summary, SUMMARY_WINDOW_DAYS)
                 result["action"] = "weekly_summary"
                 result["summary"] = summary
+            elif tenant and thread.get("pending_edit"):
+                # One proposal at a time: anything other than YA/BATAL gets a
+                # reminder until the owner resolves it.
+                pending_proposal = json.loads(thread["pending_edit"])
+                reply = ("Masih ada usulan " + ("pembatalan" if pending_proposal.get("kind") == "void" else "perubahan")
+                         + f" pembelian {pending_proposal['purchase_id'][:8]} yang menunggu konfirmasi. "
+                           "Balas YA untuk terapkan atau BATAL untuk batal.")
+                result["action"] = "edit_pending_reminder"
+            elif tenant and not draft and (edit_command := parse_purchase_edit_command(payload["text"]) or ({"kind": None, "id8": None, "remainder": payload["text"]} if intent_hint == "purchase_edit" else None)):
+                # Correct or void a recorded purchase: an 8-digit id targets it
+                # precisely; plain words (item, quantity, kemarin) resolve
+                # against the restaurant's recent purchases.
+                reply, edit_result = self.propose_purchase_edit(conn, thread, tenant, edit_command, payload["text"])
+                result.update(edit_result)
             elif draft and (request := parse_remove_request(payload["text"])):
                 # 'hapus 4', 'hapus 4, 5' and 'hapus semua' drop flagged
                 # (non-kitchen) lines from the active draft — the owner's
@@ -1240,7 +1266,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
                     reply = draft_reply(draft, names)
                     result["action"] = "draft_created" if draft["status"] == "pending_approval" else "review_required"
-            conn.execute("UPDATE whatsapp_threads SET active_draft_id=?, active_version=?, pending_followup=?, pending_opname_id=? WHERE id=?", (thread["active_draft_id"], thread["active_version"], thread.get("pending_followup"), thread.get("pending_opname_id"), thread["id"]))
+            conn.execute("UPDATE whatsapp_threads SET active_draft_id=?, active_version=?, pending_followup=?, pending_opname_id=?, pending_edit=? WHERE id=?", (thread["active_draft_id"], thread["active_version"], thread.get("pending_followup"), thread.get("pending_opname_id"), thread.get("pending_edit"), thread["id"]))
             draft_id = draft["id"] if draft else None
             if extracted_photo:
                 inbound_body = f"[Foto nota] {source_label}"
@@ -1304,7 +1330,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         """Flat purchase rows for the CSV export; newest first."""
         with self.transaction() as conn:
             rows = []
-            for row in conn.execute("SELECT id, supplier, created_at, body FROM purchases WHERE restaurant_id=? ORDER BY created_at DESC, id DESC", (restaurant_id,)):
+            for row in conn.execute("SELECT id, supplier, created_at, body FROM purchases WHERE restaurant_id=? AND voided_at IS NULL ORDER BY created_at DESC, id DESC", (restaurant_id,)):
                 purchase = json.loads(row["body"])
                 total = purchase.get("total_idr")
                 rows.append({
@@ -1902,7 +1928,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         detail["whatsapp_numbers"] = [dict(item) for item in conn.execute("SELECT phone, platform, label, created_at FROM whatsapp_links WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))]
         detail["users"] = [dict(item) for item in conn.execute("SELECT username, display_name, role, created_at FROM users WHERE restaurant_id=? ORDER BY rowid", (restaurant_id,))]
         detail["pending_drafts"] = conn.execute("SELECT COUNT(*) FROM drafts WHERE restaurant_id=? AND status IN ('pending_approval','needs_clarification')", (restaurant_id,)).fetchone()[0]
-        detail["recorded_purchases"] = conn.execute("SELECT COUNT(*) FROM purchases WHERE restaurant_id=?", (restaurant_id,)).fetchone()[0]
+        detail["recorded_purchases"] = conn.execute("SELECT COUNT(*) FROM purchases WHERE restaurant_id=? AND voided_at IS NULL", (restaurant_id,)).fetchone()[0]
         return detail
 
     def create_restaurant(self, key, payload):

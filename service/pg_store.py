@@ -34,6 +34,7 @@ from .data_qa import (
 from .inventory import InventoryMixin
 from .menu_insights import MenuInsightsMixin
 from .operations import OperationsMixin
+from .purchase_edits import PurchaseEditsMixin
 from .purchase_sources import PurchaseSourcesMixin
 from .purchase_idempotency import purchase_idempotent
 from .phone_auth import PhoneAuthMixin
@@ -59,7 +60,11 @@ from .whatsapp import (
 )
 
 
+<<<<<<< HEAD
 class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, MenuInsightsMixin):
+=======
+class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, PurchaseEditsMixin):
+>>>>>>> 46dad21 (Correct or void recorded purchases from chat: ubah/batal pembelian)
     """The RestoPilot authority in Supabase Postgres. Same contract as Store."""
 
     inventory_postgres = True
@@ -73,13 +78,13 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         "whatsapp_links": {"id", "slug", "phone", "label", "created_at"},
         "custom_ingredients": {"id", "slug", "name", "unit", "reorder_threshold", "created_at"},
         "drafts": {"id", "slug", "version", "status", "body", "created_at"},
-        "purchases": {"id", "slug", "draft_id", "supplier", "created_at", "body"},
+        "purchases": {"id", "slug", "draft_id", "supplier", "created_at", "body", "voided_at"},
         "stock": {"slug", "ingredient_id", "quantity"},
         "movements": {"id", "slug", "purchase_id", "ingredient_id", "quantity", "created_at"},
         "activity": {"id", "slug", "event", "message", "created_at"},
         "idempotency": {"key", "slug", "fingerprint", "response", "created_at"},
         "whatsapp_threads": {"id", "slug", "channel", "sender", "transport", "active_draft_id",
-                             "active_version", "pending_followup"},
+                             "active_version", "pending_followup", "pending_edit"},
         "whatsapp_messages": {"id", "thread_id", "direction", "body", "created_at", "transport",
                               "status", "draft_id"},
         "whatsapp_events": {"channel", "event_id", "thread_id", "fingerprint", "response"},
@@ -1872,7 +1877,7 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
             (restaurant_id,),
         )
         detail["pending_drafts"] = cur.fetchone()[0]
-        cur = self._execute(conn, "SELECT COUNT(*) FROM purchases WHERE slug=%s", (restaurant_id,))
+        cur = self._execute(conn, "SELECT COUNT(*) FROM purchases WHERE slug=%s AND voided_at IS NULL", (restaurant_id,))
         detail["recorded_purchases"] = cur.fetchone()[0]
         return detail
 
