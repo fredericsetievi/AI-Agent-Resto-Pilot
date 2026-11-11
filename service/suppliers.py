@@ -282,8 +282,9 @@ class SupplierMixin:
 
     def supplier_for_phone(self, phone):
         """The supplier contact for this number, or None (owner numbers resolve elsewhere)."""
+        tc = self._tenant_col()
         with self.transaction() as conn:
-            row = self._inventory_query(conn, "SELECT id, name, restaurant_id FROM suppliers WHERE contact_phone=?",
+            row = self._inventory_query(conn, f"SELECT id, name, {tc} FROM suppliers WHERE contact_phone=?",
                                         (str(phone),)).fetchone()
         return {"id": row[0], "name": row[1], "restaurant_id": row[2]} if row else None
 
