@@ -345,10 +345,9 @@ async def send_template(access_token, phone_number_id, graph_version, recipient,
     """Send an approved template message — the only delivery that reaches a
     recipient outside the 24-hour customer-service window. ``body_params``
     fills the template's positional {{1}}..{{n}} body placeholders in order;
-    everything else about the wording is fixed by the Meta-approved template.
-    """
+    everything else about the wording is fixed by the approved template."""
     if not isinstance(template_name, str) or not template_name.strip():
-        raise MetaWhatsAppError("No Meta WhatsApp template is configured for proactive alerts.", 503)
+        raise MetaWhatsAppError("No WhatsApp template is configured for this message.", 503)
     if not isinstance(template_lang, str) or not template_lang.strip():
         template_lang = "id"
     params = [{"type": "text", "text": str(param)} for param in body_params]

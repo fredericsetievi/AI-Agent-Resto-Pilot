@@ -549,8 +549,7 @@ class SupplierMixin:
     # ---- inquiry send + supplier reply intake (2b) --------------------------
 
     def supplier_inquiry_targets(self, restaurant_id, conn=None):
-        """Suppliers with a Telegram contact (WA inquiries need an approved
-        template; handled separately)."""
+        """Suppliers with any contact channel, each tagged with its platform."""
         tc = self._tenant_col()
         if conn is None:
             with self.transaction() as conn:
@@ -558,9 +557,9 @@ class SupplierMixin:
         return self._supplier_inquiry_targets_conn(conn, tc, restaurant_id)
 
     def _supplier_inquiry_targets_conn(self, conn, tc, restaurant_id):
-        rows = self._inventory_query(conn, "SELECT id, name, contact_phone FROM suppliers WHERE {tc}=? AND contact_phone IS NOT NULL AND contact_platform='telegram'".format(tc=tc),
+        rows = self._inventory_query(conn, "SELECT id, name, contact_phone, contact_platform FROM suppliers WHERE {tc}=? AND contact_phone IS NOT NULL".format(tc=tc),
                                      (restaurant_id,)).fetchall()
-        return [{"id": r[0], "name": r[1], "contact_phone": r[2]} for r in rows]
+        return [{"id": r[0], "name": r[1], "contact_phone": r[2], "contact_platform": r[3] or "whatsapp"} for r in rows]
 
     def supplier_reply_intake(self, restaurant_id, supplier_id, text, *, inquiry_id=None, key=None):
         """Parse one supplier reply and store price quotes (never purchases).
@@ -606,26 +605,29 @@ def line_for_quote(text, quote):
     return (text or "")[:300]
 
 
-async def supplier_inquiry_send(store, sender_fn, restaurant_id, command):
-    """Send a price inquiry to every supplier with a Telegram contact.
+async def supplier_inquiry_send(store, tg_sender_fn, wa_sender_fn, restaurant_id, command):
+    """Send a price inquiry to every supplier with a contact channel.
 
-    WhatsApp inquiries need an approved template (suppliers rarely write
-    first, so the 24-hour window is closed); without one configured they are
-    skipped and reported honestly. Returns the owner-facing reply body.
+    ``tg_sender_fn(name, phone, text)`` sends one Telegram message;
+    ``wa_sender_fn(name, phone, text)`` sends one WhatsApp template message
+    (an approved template is required - suppliers rarely write first, so
+    the 24-hour window is closed; without one configured, WhatsApp contacts
+    are skipped and reported honestly). Returns the owner-facing reply body.
     """
     request = _inquiry_request_text_module(command.get("text") or "")
     inquiry_id, _contacts = store.supplier_inquiry_create(None, restaurant_id, request)
     targets = store.supplier_inquiry_targets(restaurant_id)
     sent, skipped = [], []
     for target in targets:
+        sender_fn = tg_sender_fn if target["contact_platform"] == "telegram" else wa_sender_fn
         try:
             await sender_fn(target["name"], target["contact_phone"],
                             f"Halo {target['name']}, mau tanya harga {request} sekarang berapa ya? Terima kasih.")
-            sent.append(target["name"])
+            sent.append(f"{target['name']} ({target['contact_platform']})")
         except Exception:
-            skipped.append(target["name"])
-    parts = [f"Permintaan harga '{request}' dikirim ke {len(sent)} supplier (Telegram)." if sent else
-             "Tidak ada supplier Telegram yang bisa dikirim."]
+            skipped.append(f"{target['name']} ({target['contact_platform']})")
+    parts = [f"Permintaan harga '{request}' dikirim ke {len(sent)} supplier." if sent else
+             "Tidak ada supplier yang bisa dikirim."]
     if skipped:
         parts.append("Dilewati: " + ", ".join(skipped) + ".")
     parts.append("Balasan mereka akan dicatat dan bisa dicek dengan 'harga <bahan> dari supplier?'.")

@@ -1100,8 +1100,18 @@ def create_app(
             async def send_supplier_telegram(name, phone, inquiry_text):
                 await send_telegram_text(telegram_bot_token, phone, inquiry_text,
                                          api_base=telegram_api_base, client=telegram_http_client)
+
+            async def send_supplier_wa(name, phone, inquiry_text):
+                import os
+                from .whatsapp import send_template
+                template = os.environ.get("WHATSAPP_INQUIRY_TEMPLATE") or "restopilot_price_inquiry"
+                lang = os.environ.get("WHATSAPP_INQUIRY_TEMPLATE_LANG") or "id"
+                await send_template(meta_access_token, meta_phone_number_id,
+                                    meta_graph_api_version, phone, template, lang,
+                                    [name, inquiry_text], client=meta_http_client)
+
             payload["supplier_answer"] = await supplier_inquiry_send(
-                store, send_supplier_telegram, restaurant["id"], supplier_cmd)
+                store, send_supplier_telegram, send_supplier_wa, restaurant["id"], supplier_cmd)
             return
         candidate = parse_operations_text(text)
         if candidate is not None:
@@ -1533,7 +1543,18 @@ def create_app(
                     async def send_supplier_tg(name, phone, inquiry_text):
                         await send_telegram_text(telegram_bot_token, phone, inquiry_text,
                                                  api_base=telegram_api_base, client=telegram_http_client)
-                    answer = await supplier_inquiry_send(store, send_supplier_tg, restaurant_id, inquiry_cmd)
+
+                    async def send_supplier_wa(name, phone, inquiry_text):
+                        import os
+                        from .whatsapp import send_template
+                        template = os.environ.get("WHATSAPP_INQUIRY_TEMPLATE") or "restopilot_price_inquiry"
+                        lang = os.environ.get("WHATSAPP_INQUIRY_TEMPLATE_LANG") or "id"
+                        await send_template(meta_access_token, meta_phone_number_id,
+                                            meta_graph_api_version, phone, template, lang,
+                                            [name, inquiry_text], client=meta_http_client)
+
+                    answer = await supplier_inquiry_send(store, send_supplier_tg, send_supplier_wa,
+                                                         restaurant_id, inquiry_cmd)
                     await send_telegram_text(telegram_bot_token, message["sender"], answer,
                                              api_base=telegram_api_base, client=telegram_http_client)
                     continue

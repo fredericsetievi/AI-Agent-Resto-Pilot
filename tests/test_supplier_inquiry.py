@@ -26,7 +26,7 @@ def _money_idr(line):
     match = __import__('re').search(r'(?i)(?:rp\.?\s*)?(\d{1,9}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(rb|ribu|jt|juta|k)?', str(line or ''))
     return _fn(match.group(0)) if match else None
 from service.db import RESTAURANT, Store
-from service.suppliers import parse_supplier_command
+from service.suppliers import parse_supplier_command, supplier_inquiry_send
 
 TENANT = RESTAURANT["id"]
 BOT_TOKEN = "123456789:AAExampleExampleExampleExampleExam"
@@ -133,3 +133,34 @@ def test_owner_numbers_are_never_supplier_contacts(tmp_path):
         raise AssertionError("owner-linked phone must not become a supplier contact")
     except Exception as exc:
         assert getattr(exc, "status", None) == 409 and "pemilik" in str(exc)
+
+
+def test_whatsapp_supplier_gets_template_and_telegram_gets_text(tmp_path):
+    import asyncio
+    from service.suppliers import supplier_inquiry_send
+
+    class StubStore:
+        def supplier_inquiry_create(self, conn, restaurant_id, request, detail=None):
+            return "inq-1", 2
+
+        def supplier_inquiry_targets(self, restaurant_id):
+            return [
+                {"id": "s-tg", "name": "Pasar Baru", "contact_phone": "628111000222",
+                 "contact_platform": "telegram"},
+                {"id": "s-wa", "name": "Pak Budi", "contact_phone": "628222000333",
+                 "contact_platform": "whatsapp"},
+            ]
+
+    store_stub = StubStore()
+    tg_calls, wa_calls = [], []
+
+    async def tg_fn(name, phone, text):
+        tg_calls.append((name, phone, text))
+
+    async def wa_fn(name, phone, text):
+        wa_calls.append((name, phone, text))
+
+    command = parse_supplier_command("tanya harga cabai ke supplier")
+    asyncio.run(supplier_inquiry_send(store_stub, tg_fn, wa_fn, "demo-rid", command))
+    assert len(tg_calls) == 1 and "Pasar Baru" in tg_calls[0][0]
+    assert len(wa_calls) == 1 and "Pak Budi" in wa_calls[0][0]
