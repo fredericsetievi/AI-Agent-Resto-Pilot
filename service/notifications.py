@@ -11,6 +11,8 @@ does not repeat every quantity, unit, and ingredient name verbatim.
 from __future__ import annotations
 
 import json
+import re
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
 import httpx
 
@@ -19,6 +21,22 @@ from .vision import validate_base_url
 
 
 MAX_PROMPT_RULES_CHARS = 2000
+
+
+def refill_suggestion(quantity, threshold):
+    """Quantity to buy so the item is back at its threshold: ceil(threshold - stock).
+
+    Returns a plain string in the ingredient's unit, or None when either
+    figure is unreadable or the stock already meets the threshold. The
+    ledger stays the only source of numbers — this is deterministic math.
+    """
+    try:
+        gap = Decimal(str(threshold)) - Decimal(str(quantity))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if gap <= 0:
+        return None
+    return format(gap.to_integral_value(rounding=ROUND_CEILING), "f")
 
 PROMPT = """You send a restaurant owner one proactive low-stock alert over \
 WhatsApp in casual Indonesian. You get the low-stock facts just read from \
@@ -41,6 +59,39 @@ Low-stock facts (JSON):
 
 Owner's rules for this restaurant:
 %s"""
+
+
+def _rp(value):
+    return f"Rp{int(value):,}".replace(",", ".")
+
+
+def build_refill_plan_text(facts):
+    """Deterministic nightly shopping plan with estimated cash (ledger-only figures).
+
+    Appended after the (possibly LLM-phrased) low-stock alert, so the plan
+    never passes through the language model — the suggested quantities come
+    from ceil(threshold - stock) and the estimates from the last recorded
+    purchase price per ingredient.
+    """
+    planned = []
+    total = 0
+    for fact in facts:
+        suggest = fact.get("suggest_qty")
+        if not suggest:
+            continue
+        est = fact.get("suggest_est_idr")
+        if isinstance(est, int) and not isinstance(est, bool) and est > 0:
+            planned.append(f"• {fact['name']} — beli ±{suggest} {fact['unit']} (~{_rp(est)})")
+            total += est
+        else:
+            planned.append(f"• {fact['name']} — beli ±{suggest} {fact['unit']} (harga belum tercatat)")
+    if not planned:
+        return None
+    lines = ["🌙 Rencana belanja besok:"] + planned
+    if total:
+        lines.append(f"Estimasi modal: {_rp(total)}")
+    lines.append("Catat pembeliannya di chat besok pagi; estimasi dihitung dari harga beli terakhir.")
+    return "\n".join(lines)
 
 
 def build_alert_text(facts):

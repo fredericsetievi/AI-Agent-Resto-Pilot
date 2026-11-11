@@ -109,6 +109,60 @@ def test_low_stock_candidates_honor_overrides(tmp_path):
     assert cabai["threshold"] == "10" and cabai["quantity"] == "3"
 
 
+def test_parse_rule_threshold_with_minimum_wording():
+    catalog = [{"id": "cabai", "name": "Cabai merah", "unit": "kg"}]
+    for text in ("kabari kalau cabai minimum 10", "cabai minimal 8 pcs", "kabari kalau cabai di bawah 3 kg"):
+        parsed = parse_rule(text, catalog)
+        assert parsed and parsed["kind"] == "threshold", text
+
+
+def test_refill_plan_text_with_estimates():
+    from service.notifications import build_refill_plan_text, refill_suggestion
+    assert refill_suggestion("8", "20") == "12"
+    assert refill_suggestion("20", "20") is None
+    assert refill_suggestion("abc", "20") is None
+    facts = [
+        {"name": "Pandan", "unit": "pcs", "suggest_qty": "12", "suggest_est_idr": 120000},
+        {"name": "Choco", "unit": "pcs", "suggest_qty": "9", "suggest_est_idr": 95000},
+        {"name": "Keju", "unit": "pcs", "suggest_qty": "4"},
+    ]
+    plan = build_refill_plan_text(facts)
+    assert "Rencana belanja besok" in plan
+    assert "beli ±12 pcs (~Rp120.000)" in plan
+    assert "beli ±4 pcs (harga belum tercatat)" in plan
+    assert "Estimasi modal: Rp215.000" in plan
+    assert build_refill_plan_text([{"name": "Gula", "unit": "kg"}]) is None
+
+
+def test_low_stock_candidates_suggest_refill_with_last_price(tmp_path):
+    from service.db import encode, now
+    store = Store(tmp_path / "r8.sqlite3")
+    # Seed has cabai at 3 kg against a 5 kg threshold; the owner's rule raises
+    # the effective threshold to 20 (same path chat thresholds take).
+    overrides = {"cabai": "20"}
+    with store.transaction() as conn:
+        draft_id = uuid4().hex
+        conn.execute("INSERT INTO drafts (id, version, status, body, restaurant_id) VALUES (?, 1, 'recorded', ?, ?)",
+                     (draft_id, encode({"items": [], "warnings": []}), TENANT))
+        purchase = {"items": [{"ingredient_id": "cabai", "quantity": "10", "unit": "kg",
+                               "unit_price_idr": 10000, "line_total_idr": 100000}]}
+        conn.execute("INSERT INTO purchases (id, draft_id, supplier, created_at, body, restaurant_id) VALUES (?,?,?,?,?,?)",
+                     (uuid4().hex, draft_id, "Dika", now(), encode(purchase), TENANT))
+    candidates = store.low_stock_candidates(TENANT, overrides)
+    cabai = next(item for item in candidates if item["ingredient_id"] == "cabai")
+    assert cabai["suggest_qty"] == "17"
+    assert cabai["suggest_est_idr"] == 170000
+    # An ingredient without purchase history still gets a quantity suggestion, no estimate.
+    with store.transaction() as conn:
+        conn.execute("INSERT INTO custom_ingredients (id, name, unit, reorder_threshold, created_at, restaurant_id) VALUES ('choco', 'Choco', 'pcs', '9', ?, ?)", (now(), TENANT))
+        conn.execute("INSERT INTO inventory (restaurant_id, ingredient_id, quantity) VALUES (?, 'choco', '2')", (TENANT,))
+    store._load_custom_ingredients()  # reload the catalog cache like a chat-created ingredient would
+    candidates = store.low_stock_candidates(TENANT, overrides)
+    choco = next(item for item in candidates if item["ingredient_id"] == "choco")
+    assert choco["suggest_qty"] == "7"
+    assert "suggest_est_idr" not in choco
+
+
 def test_proactive_cooldown_quiets_repeats_until_quantity_changes(tmp_path):
     store = Store(tmp_path / "rules.sqlite3")
     first = store.low_stock_candidates(TENANT)

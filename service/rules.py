@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 from .extraction import catalog_aliases
 
 
-_THRESHOLD = re.compile(r"(?i)(?:di\s*bawah|dibawah|kurang\s*dari|less\s*than|kureng\s*dari)\s*(?:dari\s*)?(?P<threshold>[0-9]+(?:[.,][0-9]+)?)")
+_THRESHOLD = re.compile(r"(?i)\b(?:di\s*bawah|dibawah|kurang\s*dari|less\s*than|kureng\s*dari|minimum|minimal)\s*(?:dari\s*)?(?P<threshold>[0-9]+(?:[.,][0-9]+)?)")
 _MUTE = re.compile(r"(?i)\bjangan\b[^.]{0,40}?\b(?:kabari|ingatkan|notif(?:ikasi)?|kirim|pantau|tandai)\b")
 _NUMBER_OK = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 _MAX_THRESHOLD = Decimal("1000000")

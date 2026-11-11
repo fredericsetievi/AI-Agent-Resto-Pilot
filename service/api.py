@@ -50,7 +50,7 @@ from .extraction import extract_purchase
 from .intent_llm import classify_intent
 from .operation_extraction import caption_requests_purchase, extract_operations_document, parse_operations_text
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
-from .notifications import build_alert_text, phrase_alert
+from .notifications import build_alert_text, build_refill_plan_text, phrase_alert
 from .pdfpages import PdfRenderError, render_pdf_pages
 from .rules import effective_directives
 from .text_llm import StepFunTextError, extract_message
@@ -685,6 +685,9 @@ def create_app(
                 )
             except (StepFunTextError, ValueError) as exc:
                 logger.warning("StepFun stock alert phrasing failed; keeping the deterministic alert: %s", exc)
+        plan_text = build_refill_plan_text(candidates)
+        if plan_text:
+            body_text = (body_text or "").rstrip() + "\n\n" + plan_text
         sent = []
         if not dry_run:
             # Each linked sender is reached on the platform it was linked to:
