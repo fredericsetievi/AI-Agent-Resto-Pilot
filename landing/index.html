@@ -1,14 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#183f35">
-  <meta name="description" content="RestoPilot — a WhatsApp-first AI operations assistant for Indonesian small and medium restaurants. Keep your POS; RestoPilot handles the money-out.">
-  <meta property="og:title" content="RestoPilot · From purchase to peace of mind">
-  <meta property="og:description" content="Text what you bought. Approve the draft. Every purchase, stock movement and price is recorded — over WhatsApp, Telegram, photos or voice.">
+  <meta name="description" content="RestoPilot — asisten operasi AI berbasis WhatsApp untuk resto kecil dan menengah Indonesia. Tetap pakai POS Anda; RestoPilot urus uang keluar.">
+  <meta property="og:title" content="RestoPilot · Dari pembelian ke ketenangan">
+  <meta property="og:description" content="Ketik apa yang Anda beli. Setujui drafnya. Setiap pembelian, pergerakan stok, dan harga langsung tercatat — lewat WhatsApp, Telegram, foto, atau suara.">
   <meta property="og:type" content="website">
-  <title>RestoPilot · From purchase to peace of mind</title>
+  <title>RestoPilot · Dapur Anda, terpantau</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23183f35'/%3E%3Ctext x='32' y='44' font-family='Georgia,serif' font-size='38' fill='%23d8e6ba' text-anchor='middle'%3Er%C2%B7%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/landing-assets/styles.css">
 </head>
@@ -44,15 +44,19 @@
     <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Open menu">
     <label for="nav-toggle" class="nav-burger" aria-hidden="true"><span></span><span></span><span></span></label>
     <nav aria-label="Site navigation">
-      <a href="#problem">The problem</a>
-      <a href="#solution">The solution</a>
-      <a href="#agents">Agents</a>
-      <a href="#dashboard">Dashboard</a>
-      <a href="#principles">Why it's safe</a>
-      <a href="#faq">FAQ</a>
-      <a class="nav-signin" href="/app.html">Sign in</a>
+      <a href="#problem" data-i18n="nav.problem">Masalahnya</a>
+      <a href="#solution" data-i18n="nav.solution">Solusinya</a>
+      <a href="#agents" data-i18n="nav.agents">Agen</a>
+      <a href="#dashboard" data-i18n="nav.dashboard">Dashboard</a>
+      <a href="#principles" data-i18n="nav.principles">Kenapa aman</a>
+      <a href="#faq" data-i18n="nav.faq">FAQ</a>
+      <a class="nav-signin" href="/app.html" data-i18n="nav.signin">Masuk</a>
     </nav>
-    <a class="button primary nav-cta" href="/app.html">Open the dashboard</a>
+    <div class="lang-toggle" role="group" data-i18n-attr="aria-label:lang.aria">
+      <button type="button" data-lang="id">ID</button>
+      <button type="button" data-lang="en">EN</button>
+    </div>
+    <a class="button primary nav-cta" href="/app.html" data-i18n="nav.cta">Buka dashboard</a>
   </div>
 </header>
 
@@ -66,17 +70,17 @@
     </div>
     <div class="container hero-grid">
       <div class="hero-copy">
-        <p class="eyebrow"><svg class="ico" aria-hidden="true"><use href="#i-store"/></svg>FOR INDONESIAN SMALL &amp; MEDIUM RESTAURANTS</p>
-        <h1>Your kitchen, in&nbsp;view. Your money-out, on&nbsp;record.</h1>
-        <p class="lede">RestoPilot is a WhatsApp-first AI operations assistant. Text what you bought — <em>“beli cabai 3 kg 150rb”</em> — review the draft, approve it, and every purchase, stock movement and price is recorded. No spreadsheets, no new POS.</p>
+        <p class="eyebrow"><svg class="ico" aria-hidden="true"><use href="#i-store"/></svg><span data-i18n="hero.eyebrow">UNTUK RESTO KECIL &amp; MENENGAH DI INDONESIA</span></p>
+        <h1 data-i18n="hero.title">Dapur Anda terpantau. Uang keluar Anda, tercatat.</h1>
+        <p class="lede" data-i18n-html="hero.lede">RestoPilot adalah asisten operasi AI berbasis WhatsApp. Tulis apa yang Anda beli — <em>“beli cabai 3 kg 150rb”</em> — tinjau drafnya, setujui, dan setiap pembelian, pergerakan stok, serta harga langsung tercatat. Tanpa spreadsheet, tanpa POS baru.</p>
         <div class="hero-actions">
-          <a class="button primary" href="/app.html">Open the dashboard <svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></a>
-          <a class="button" href="#problem">Why we built it</a>
+          <a class="button primary" href="/app.html"><span data-i18n="hero.cta">Buka dashboard</span> <svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          <a class="button" href="#problem" data-i18n="hero.why">Kenapa kami membangun ini</a>
         </div>
         <ul class="hero-channels" aria-label="Ways to log a purchase">
-          <li><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg>WhatsApp text</li>
-          <li><svg class="ico" aria-hidden="true"><use href="#i-camera"/></svg>Receipt photos</li>
-          <li><svg class="ico" aria-hidden="true"><use href="#i-mic"/></svg>Voice notes</li>
+          <li><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg><span data-i18n="hero.ch1">Teks WhatsApp</span></li>
+          <li><svg class="ico" aria-hidden="true"><use href="#i-camera"/></svg><span data-i18n="hero.ch2">Foto nota</span></li>
+          <li><svg class="ico" aria-hidden="true"><use href="#i-mic"/></svg><span data-i18n="hero.ch3">Catatan suara</span></li>
           <li><svg class="ico" aria-hidden="true"><use href="#i-send"/></svg>Telegram</li>
         </ul>
       </div>
@@ -88,7 +92,7 @@
             <div class="phone-status"><span>08.12</span><span>5G&nbsp;&nbsp;▮▮▮</span></div>
             <div class="phone-header">
               <span class="phone-avatar">BS</span>
-              <div><strong>RestoPilot</strong><small>business account · online</small></div>
+              <div><strong>RestoPilot</strong><small data-i18n="demo.status">akun bisnis · online</small></div>
               <svg class="ico"><use href="#i-chat"/></svg>
             </div>
             <div class="chat-messages">
@@ -103,17 +107,17 @@
         <div class="hero-card hero-price">
           <svg class="hero-card-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chart"/></svg>
           <div>
-            <p class="hero-price-label">PRICE EVIDENCE</p>
+            <p class="hero-price-label" data-i18n="demo.price_label">BUKTI HARGA</p>
             <p class="hero-price-value">Telur +16.3%</p>
-            <p class="hero-price-sub">vs. your 30-day average, from your own approved purchases</p>
+            <p class="hero-price-sub" data-i18n="demo.price_sub">vs. rata-rata 30 hari Anda, dari pembelian yang Anda setujui sendiri</p>
           </div>
         </div>
         <div class="hero-card hero-alert">
           <svg class="hero-card-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bell"/></svg>
           <div>
-            <p class="hero-price-label">PROACTIVE ALERT</p>
+            <p class="hero-price-label" data-i18n="demo.alert_label">ALERT PROAKTIF</p>
             <p class="hero-price-value hero-alert-value">Beras 8 kg</p>
-            <p class="hero-price-sub">below your reorder threshold — proposed before a stockout</p>
+            <p class="hero-price-sub" data-i18n="demo.alert_sub">di bawah ambang pesan ulang Anda — diusulkan sebelum stok habis</p>
           </div>
         </div>
       </div>
@@ -122,10 +126,10 @@
     <!-- trust strip -->
     <div class="container">
       <ul class="trust-strip">
-        <li><strong>5.28M</strong><span>F&amp;B businesses in Indonesia (BPS, 2024)</span></li>
-        <li><strong>4 ways</strong><span>to log a purchase — text, photo, voice, Telegram</span></li>
-        <li><strong>1 rule</strong><span>nothing records without the owner's <em>YA</em></span></li>
-        <li><strong>ID / EN</strong><span>dashboard and replies, in both languages</span></li>
+        <li><strong data-i18n="trust.t1n">5,28 juta</strong><span data-i18n="trust.t1">usaha F&amp;B di Indonesia (BPS, 2024)</span></li>
+        <li><strong data-i18n="trust.t2n">4 cara</strong><span data-i18n="trust.t2">mencatat pembelian — teks, foto, suara, Telegram</span></li>
+        <li><strong data-i18n="trust.t3n">1 aturan</strong><span data-i18n-html="trust.t3">tidak ada yang tercatat tanpa <em>YA</em> dari pemilik</span></li>
+        <li><strong>ID / EN</strong><span data-i18n="trust.t4">dashboard dan balasan, dalam dua bahasa</span></li>
       </ul>
     </div>
   </section>
@@ -133,25 +137,25 @@
   <!-- ================= PROBLEM ================= -->
   <section class="section" id="problem">
     <div class="container">
-      <p class="eyebrow">THE PROBLEM</p>
-      <h2 class="section-title">Small restaurants run on WhatsApp, paper and memory.</h2>
-      <p class="section-lede">Indonesia counts 5.28 million F&amp;B service businesses (BPS, 2024), yet most owners manage purchasing, stock and suppliers by hand — through invoices, WhatsApp chats, spreadsheets, or physical market visits. With no dedicated procurement team, records stay scattered and decisions go unrecorded.</p>
+      <p class="eyebrow" data-i18n="problem.eyebrow">MASALAHNYA</p>
+      <h2 class="section-title" data-i18n="problem.title">Resto kecil berjalan di atas WhatsApp, kertas, dan ingatan.</h2>
+      <p class="section-lede" data-i18n="problem.lede">Indonesia punya 5,28 juta usaha F&amp;B (BPS, 2024), namun sebagian besar pemilik mengurus pembelian, stok, dan supplier secara manual — lewat nota, chat WhatsApp, spreadsheet, atau turun pasar langsung. Tanpa tim pengadaan khusus, catatan berserakan dan keputusan tidak terrekam.</p>
       <div class="problem-grid">
         <article class="problem-card">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-store"/></svg></span>
-          <h3>Procurement, Inventory &amp; Supplier Management</h3>
-          <p>Owners struggle to track stock levels, detect supplier price changes, compare suppliers, and decide what and when to purchase. The result: overstocking, stockouts, and unnecessary costs — and when a price spikes, nothing proves when it started.</p>
+          <h3 data-i18n="problem.c1t">Pengadaan, Persediaan &amp; Manajemen Supplier</h3>
+          <p data-i18n="problem.c1p">Pemilik kesulitan melacak stok, mendeteksi perubahan harga supplier, membandingkan supplier, dan memutuskan apa serta kapan membeli. Akibatnya: stok menumpuk, stok habis, dan biaya yang tidak perlu — dan saat harga melonjak, tidak ada bukti sejak kapan itu dimulai.</p>
         </article>
         <article class="problem-card">
           <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-ledger"/></svg></span>
-          <h3>Sales &amp; Menu Management</h3>
-          <p>Owners may have sales records but lack the time or technical skills to analyze them in Excel. They need simple answers — which menus sell best, where sales are declining, what ingredients cost, what's actually profitable — not another complex spreadsheet.</p>
+          <h3 data-i18n="problem.c2t">Penjualan &amp; Manajemen Menu</h3>
+          <p data-i18n="problem.c2p">Pemilik mungkin punya catatan penjualan tetapi tidak punya waktu atau kemampuan teknis untuk menganalisisnya di Excel. Mereka butuh jawaban sederhana — menu mana yang laris, penjualan mana yang turun, berapa biaya bahan, mana yang benar-benar untung — bukan spreadsheet rumit lagi.</p>
         </article>
       </div>
       <div class="problem-quote">
         <svg class="quote-mark" viewBox="0 0 48 48" aria-hidden="true"><path d="M10 34c-3-4-4-8-2-13l6 3c-1 3-1 5 1 7 2-1 4-3 4-7V8h12v12c0 8-5 13-11 15-4-1-8-1-10-1Zm24 0c-3-4-4-8-2-13l6 3c-1 3-1 5 1 7 2-1 4-3 4-7V8h12v12c0 8-5 13-11 15-4-1-8-1-10-1Z" fill="currentColor"/></svg>
-        <p>“One owner we interviewed tracks daily totals in Excel — never per item, never per stock count. Not every purchase has a receipt. She prefers texting, and wants alerts when stock runs low and prices jump.”</p>
-        <small>From our field interviews with restaurant owners — the findings RestoPilot is built on.</small>
+        <p data-i18n="problem.quote">“Salah satu pemilik yang kami wawancarai mencatat total harian di Excel — tidak per item, tidak per hitungan stok. Tidak semua pembelian ada notas. Dia lebih suka mengetik, dan ingin diberi tahu saat stok menipis dan harga melonjak.”</p>
+        <small data-i18n="problem.quote_src">Dari wawancara lapangan kami dengan pemilik resto — temuan yang menjadi dasar RestoPilot.</small>
       </div>
     </div>
   </section>
@@ -159,41 +163,41 @@
   <!-- ================= SOLUTION ================= -->
   <section class="section section-green" id="solution">
     <div class="container">
-      <p class="eyebrow eyebrow-light">THE SOLUTION</p>
-      <h2 class="section-title">Keep your POS. RestoPilot owns the money-out.</h2>
-      <p class="section-lede">POS systems and QRIS already own money-in — customer sales. RestoPilot captures the other half: <strong>what was bought, from whom, at what unit price, what stock remains, and who is owed.</strong> A WhatsApp AI agent plus a simple web dashboard, built for messy real-world inputs.</p>
+      <p class="eyebrow eyebrow-light" data-i18n="solution.eyebrow">SOLUSINYA</p>
+      <h2 class="section-title" data-i18n="solution.title">Tetap pakai POS Anda. RestoPilot yang urus uang keluar.</h2>
+      <p class="section-lede" data-i18n-html="solution.lede">POS dan QRIS sudah menguasai uang masuk — penjualan pelanggan. RestoPilot mengambil separuh lainnya: <strong>apa yang dibeli, dari siapa, berapa harga satuannya, sisa stoknya, dan siapa yang masih berhutang.</strong> Agen AI WhatsApp plus dashboard web sederhana, dibuat untuk input nyata yang berantakan.</p>
       <div class="solution-grid">
         <article class="solution-card">
           <span class="card-icon card-icon-dark"><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg></span>
-          <h3>WhatsApp-first intake</h3>
-          <p>Send purchase text, receipt photos, or voice notes — the way owners already communicate. Informal Indonesian is parsed into a structured draft: items, quantities, units, prices, supplier.</p>
+          <h3 data-i18n="solution.c1t">Intake berbasis WhatsApp</h3>
+          <p data-i18n="solution.c1p">Kirim teks pembelian, foto nota, atau catatan suara — cara yang sudah dipakai pemilik. Bahasa Indonesia informal dibaca menjadi draf terstruktur: item, jumlah, satuan, harga, supplier.</p>
         </article>
         <article class="solution-card">
           <span class="card-icon card-icon-dark"><svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg></span>
-          <h3>Approval before anything records</h3>
-          <p>Nothing posts without the owner. Review and correct the draft on WhatsApp or the dashboard, then approve with a correlated <strong>YA</strong>. Missing or ambiguous fields are never silently guessed.</p>
+          <h3 data-i18n="solution.c2t">Persetujuan sebelum apa pun tercatat</h3>
+          <p data-i18n-html="solution.c2p">Tidak ada yang masuk tanpa pemilik. Tinjau dan perbaiki draf di WhatsApp atau dashboard, lalu setujui dengan <strong>YA</strong> yang terkait langsung. Field kurang atau ambigu tidak pernah ditebak diam-diam.</p>
         </article>
         <article class="solution-card">
           <span class="card-icon card-icon-dark"><svg class="ico" aria-hidden="true"><use href="#i-ledger"/></svg></span>
-          <h3>One atomic transaction</h3>
-          <p>Approval records the purchase, the stock movement, and the audit trail in a single transaction. The dashboard, the WhatsApp summary and the activity log always report the same truth.</p>
+          <h3 data-i18n="solution.c3t">Satu transaksi atomik</h3>
+          <p data-i18n="solution.c3p">Persetujuan mencatat pembelian, pergerakan stok, dan jejak audit dalam satu transaksi. Dashboard, ringkasan WhatsApp, dan log aktivitas selalu menunjukkan kebenaran yang sama.</p>
         </article>
         <article class="solution-card">
           <span class="card-icon card-icon-dark"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg></span>
-          <h3>Dashboard truth &amp; price evidence</h3>
-          <p>Purchases, inventory estimates, pending approvals and activity in one view. Same-supplier 30-day price comparisons surface spikes — like the Telur +16.3% case — straight from your own approved history.</p>
+          <h3 data-i18n="solution.c4t">Kebenaran dashboard &amp; bukti harga</h3>
+          <p data-i18n="solution.c4p">Pembelian, estimasi stok, persetujuan menunggu, dan aktivitas dalam satu tampilan. Perbandingan harga 30-hari per supplier menyoroti lonjakan — seperti kasus Telur +16.3% — langsung dari riwayat persetujuan Anda sendiri.</p>
         </article>
       </div>
       <div class="loop-diagram" role="img" aria-label="The RestoPilot loop: messy input, editable draft, owner approval, recorded purchase, dashboard truth and price evidence">
-        <div class="loop-step"><span>1</span>Messy input<br><small>WhatsApp text · nota photo · voice note</small></div>
+        <div class="loop-step"><span>1</span><span data-i18n="loop.s1">Input berantakan</span><br><small data-i18n="loop.s1s">Teks WhatsApp · foto nota · catatan suara</small></div>
         <div class="loop-arrow" aria-hidden="true">→</div>
-        <div class="loop-step"><span>2</span>Editable draft<br><small>structured, correctable, never guessed</small></div>
+        <div class="loop-step"><span>2</span><span data-i18n="loop.s2">Draf yang bisa diedit</span><br><small data-i18n="loop.s2s">terstruktur, bisa dikoreksi, tidak pernah ditebak</small></div>
         <div class="loop-arrow" aria-hidden="true">→</div>
-        <div class="loop-step loop-accent"><span>3</span>Owner approval<br><small>correlated “YA” — human decides</small></div>
+        <div class="loop-step loop-accent"><span>3</span><span data-i18n="loop.s3">Persetujuan pemilik</span><br><small data-i18n="loop.s3s">“YA” yang terkait — manusia yang memutuskan</small></div>
         <div class="loop-arrow" aria-hidden="true">→</div>
-        <div class="loop-step"><span>4</span>Recorded purchase<br><small>purchase + stock + audit, atomically</small></div>
+        <div class="loop-step"><span>4</span><span data-i18n="loop.s4">Pembelian tercatat</span><br><small data-i18n="loop.s4s">pembelian + stok + audit, atomik</small></div>
         <div class="loop-arrow" aria-hidden="true">→</div>
-        <div class="loop-step"><span>5</span>Dashboard truth<br><small>inventory estimate · price evidence</small></div>
+        <div class="loop-step"><span>5</span><span data-i18n="loop.s5">Kebenaran dashboard</span><br><small data-i18n="loop.s5s">estimasi persediaan · bukti harga</small></div>
       </div>
     </div>
   </section>
@@ -201,16 +205,16 @@
   <!-- ================= AGENTS / FEATURES ================= -->
   <section class="section" id="agents">
     <div class="container">
-      <p class="eyebrow">THE AGENTS</p>
-      <h2 class="section-title">Two agents, built for the daily grind.</h2>
-      <p class="section-lede">RestoPilot starts where the pain is greatest. Each agent follows the same discipline: parse the mess, propose a draft, wait for the owner, then record — and the math is always done by validated code, never by the model.</p>
+      <p class="eyebrow" data-i18n="agents.eyebrow">AGENT-AGENTNYA</p>
+      <h2 class="section-title" data-i18n="agents.title">Dua agen, dibuat untuk rutinitas harian.</h2>
+      <p class="section-lede" data-i18n="agents.lede">RestoPilot mulai dari titik yang paling terasa sakitnya. Setiap agen punya disiplin yang sama: baca input berantakan, ajukan draf, tunggu pemilik, baru catat — dan semua hitungan selalu dikerjakan kode tervalidasi, bukan oleh model.</p>
 
       <article class="agent-card">
         <div class="agent-head">
           <div>
-            <p class="agent-flag">FLAGSHIP · LIVE</p>
-            <h3>1 · Procurement, Inventory &amp; Supplier Management Agent</h3>
-            <p class="agent-sub">Manage purchases, invoices, stock and reorder decisions — from conversational quick-log to price evidence.</p>
+            <p class="agent-flag" data-i18n="agents.flag1">UTAMA · AKTIF</p>
+            <h3 data-i18n="agents.a1t">1 · Agen Pengadaan, Persediaan &amp; Manajemen Supplier</h3>
+            <p class="agent-sub" data-i18n="agents.a1s">Kelola pembelian, nota, stok, dan keputusan pesan ulang — dari catatan cepat ala chat sampai bukti harga.</p>
           </div>
           <div class="agent-illustration" aria-hidden="true">
             <svg viewBox="0 0 320 120" class="agent-scene">
@@ -238,25 +242,27 @@
             </svg>
           </div>
         </div>
-        <p class="agent-flow">Invoice / conversational log <span aria-hidden="true">→</span> Purchase <span aria-hidden="true">→</span> Inventory <span aria-hidden="true">→</span> Reorder</p>
+        <p class="agent-flow" data-i18n="agents.a1flow">Nota / catatan percakapan <span aria-hidden="true">→</span> Pembelian <span aria-hidden="true">→</span> Persediaan <span aria-hidden="true">→</span> Pesan ulang</p>
         <ul class="agent-steps">
-          <li>Extract purchases from invoice photos or conversational quick-log</li>
-          <li>Create a purchase record for owner review and approval</li>
-          <li>Update inventory from every approved purchase</li>
-          <li>Detect low stock before it becomes a stockout</li>
-          <li>Calculate reorder quantities from your own consumption history</li>
-          <li>Compare historical prices per supplier</li>
-          <li>Generate purchase recommendations with evidence</li>
-          <li>Ask for owner confirmation before anything records</li>
+          <li data-i18n="agents.a1b1">Baca pembelian dari foto nota atau catatan cepat percakapan</li>
+          <li data-i18n="agents.a1b2">Buat catatan pembelian untuk ditinjau &amp; disetujui pemilik</li>
+          <li data-i18n="agents.a1b3">Perbarui persediaan dari setiap pembelian yang disetujui</li>
+          <li data-i18n="agents.a1b4">Deteksi stok menipis sebelum menjadi kehabisan</li>
+          <li data-i18n="agents.a1b5">Hitung jumlah pesan ulang dari riwayat konsumsi Anda sendiri</li>
+          <li data-i18n="agents.a1b6">Bandingkan harga historis per supplier</li>
+          <li data-i18n="agents.a1b7">Catat kontak supplier dan rekaman harga pasar — tanpa harus membeli</li>
+          <li data-i18n="agents.a1b8">Impor katalog bahan massal dari Excel sekali jalan</li>
+          <li data-i18n="agents.a1b9">Buat rekomendasi pembelian dengan bukti</li>
+          <li data-i18n="agents.a1b10">Minta konfirmasi pemilik sebelum apa pun dicatat</li>
         </ul>
       </article>
 
       <article class="agent-card agent-planned">
         <div class="agent-head">
           <div>
-            <p class="agent-flag agent-flag-plain">PLANNED</p>
-            <h3>2 · Sales &amp; Menu Management Agent</h3>
-            <p class="agent-sub">Analyze sales, menu performance, costs and trends — simple answers, not spreadsheets.</p>
+            <p class="agent-flag agent-flag-plain" data-i18n="agents.flag2">DIRENCANAKAN</p>
+            <h3 data-i18n="agents.a2t">2 · Agen Penjualan &amp; Manajemen Menu</h3>
+            <p class="agent-sub" data-i18n="agents.a2s">Analisis penjualan, performa menu, biaya, dan tren — jawaban sederhana, bukan spreadsheet.</p>
           </div>
           <div class="agent-illustration" aria-hidden="true">
             <svg viewBox="0 0 320 120" class="agent-scene agent-scene-muted">
@@ -270,16 +276,16 @@
             </svg>
           </div>
         </div>
-        <p class="agent-flow">Sales data <span aria-hidden="true">→</span> Trend analysis <span aria-hidden="true">→</span> Menu performance <span aria-hidden="true">→</span> Business insights</p>
+        <p class="agent-flow" data-i18n="agents.a2flow">Data penjualan <span aria-hidden="true">→</span> Analisis tren <span aria-hidden="true">→</span> Performa menu <span aria-hidden="true">→</span> Wawasan bisnis</p>
         <ul class="agent-steps">
-          <li>Import sales data from existing records</li>
-          <li>Analyze sales trends over time</li>
-          <li>Rank menu items by performance</li>
-          <li>Analyze menu profitability against ingredient costs</li>
-          <li>Detect unusual sales changes and flag them early</li>
-          <li>Extract keywords and sentiment, mapped to menu items or staff changes</li>
-          <li>Identify popular menu combinations</li>
-          <li>Recommend menu actions owners can actually take</li>
+          <li data-i18n="agents.a2b1">Impor data penjualan dari catatan yang sudah ada</li>
+          <li data-i18n="agents.a2b2">Analisis tren penjualan dari waktu ke waktu</li>
+          <li data-i18n="agents.a2b3">Urutkan item menu berdasarkan performa</li>
+          <li data-i18n="agents.a2b4">Analisis profitabilitas menu terhadap biaya bahan</li>
+          <li data-i18n="agents.a2b5">Deteksi perubahan penjualan tak biasa dan beri peringatan dini</li>
+          <li data-i18n="agents.a2b6">Ekstraksi kata kunci dan sentimen, dipetakan ke menu atau perubahan staf</li>
+          <li data-i18n="agents.a2b7">Identifikasi kombinasi menu populer</li>
+          <li data-i18n="agents.a2b8">Rekomendasikan aksi menu yang benar-benar bisa dijalankan pemilik</li>
         </ul>
       </article>
     </div>
@@ -288,9 +294,9 @@
   <!-- ================= DASHBOARD PREVIEW ================= -->
   <section class="section section-tint" id="dashboard">
     <div class="container">
-      <p class="eyebrow">THE DASHBOARD</p>
-      <h2 class="section-title">The same truth, in one calm view.</h2>
-      <p class="section-lede">Everything the agent records is yours to inspect: pending approvals, purchase history, inventory estimates, spending trends and price evidence — in Indonesian or English.</p>
+      <p class="eyebrow" data-i18n="dash.eyebrow">DASBOR</p>
+      <h2 class="section-title" data-i18n="dash.title">Kebenaran yang sama, dalam satu tampilan tenang.</h2>
+      <p class="section-lede" data-i18n="dash.lede">Semua yang dicatat agen bisa Anda periksa: persetujuan menunggu, riwayat pembelian, estimasi persediaan, tren pengeluaran, dan bukti harga — dalam Bahasa Indonesia atau Inggris.</p>
       <div class="browser" role="img" aria-label="The RestoPilot dashboard: sidebar with Overview and Inventory pages, stat tiles, a 14-day spending chart, top ingredients, and an approval card">
         <div class="browser-bar"><span></span><span></span><span></span><em>restopilot-dashboard.pub.atoms.world/app.html</em></div>
         <div class="browser-body">
@@ -328,9 +334,10 @@
         </div>
       </div>
       <ul class="dash-points">
-        <li><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg><div><strong>Charts with provenance.</strong><span>14-day spending trend and top ingredients — computed only from approved purchases.</span></div></li>
-        <li><svg class="ico" aria-hidden="true"><use href="#i-ledger"/></svg><div><strong>Stok opname.</strong><span>Physical counts reconcile the estimate; every stock write is confirmed, audited and retry-safe.</span></div></li>
-        <li><svg class="ico" aria-hidden="true"><use href="#i-globe"/></svg><div><strong>ID / EN, one toggle.</strong><span>The whole dashboard switches language and remembers your choice.</span></div></li>
+        <li><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg><div><strong data-i18n="dash.p1t">Grafik dengan bukti asal.</strong><span data-i18n="dash.p1s">Tren pengeluaran 14 hari dan bahan teratas — dihitung hanya dari pembelian yang disetujui.</span></div></li>
+        <li><svg class="ico" aria-hidden="true"><use href="#i-ledger"/></svg><div><strong data-i18n="dash.p2t">Stok opname.</strong><span data-i18n="dash.p2s">Hitung fisik menyelaraskan estimasi; setiap penulisan stok dikonfirmasi, diaudit, dan aman diulang.</span></div></li>
+        <li><svg class="ico" aria-hidden="true"><use href="#i-globe"/></svg><div><strong data-i18n="dash.p3t">ID / EN, satu tombol.</strong><span data-i18n="dash.p3s">Seluruh dashboard berganti bahasa dan mengingat pilihan Anda.</span></div></li>
+        <li><svg class="ico" aria-hidden="true"><use href="#i-phone"/></svg><div><strong data-i18n="dash.p4t">Login fleksibel.</strong><span data-i18n="dash.p4s">Masuk dengan nomor ponsel atau username — daftar akun resto baru langsung dari halaman login.</span></div></li>
       </ul>
     </div>
   </section>
@@ -338,14 +345,14 @@
   <!-- ================= PRINCIPLES ================= -->
   <section class="section" id="principles">
     <div class="container">
-      <p class="eyebrow">WHY IT'S SAFE</p>
-      <h2 class="section-title">Honest by design.</h2>
-      <p class="section-lede">RestoPilot handles financial records, so it is deliberately narrow and deliberately human-in-the-loop:</p>
+      <p class="eyebrow" data-i18n="safe.eyebrow">KENAPA INI AMAN</p>
+      <h2 class="section-title" data-i18n="safe.title">Jujur sejak desain.</h2>
+      <p class="section-lede" data-i18n="safe.lede">RestoPilot menangani catatan keuangan, jadi sengaja dibuat sempit dan sengaja manusia selalu di lingkaran:</p>
       <div class="principle-grid">
-        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-calc"/></svg></span><strong>AI proposes; code calculates; a human decides.</strong>Unit-price math, unit conversion, price comparison, stock ledger and approval workflow are deterministic code — never LLM-decided.</div>
-        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-fingerprint"/></svg></span><strong>Approval is correlated, never generic.</strong>A “YA” approves only the action explicitly tied to that conversation — never an unrelated pending draft. Stale versions, duplicates and cross-tenant decisions are rejected.</div>
-        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-lock"/></svg></span><strong>Every restaurant is an isolated tenant.</strong>A WhatsApp number is linked to exactly one restaurant. A registered number's conversation is scoped to its own restaurant, always.</div>
-        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-scale"/></svg></span><strong>Honesty over impressive numbers.</strong>Stock is an estimate (no POS consumption data yet). A recorded purchase is not a recorded payment. Comparisons come only from your own approved history.</div>
+        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-calc"/></svg></span><strong data-i18n="safe.p1t">AI mengusulkan; kode menghitung; manusia memutuskan.</strong><span data-i18n="safe.p1s">Matematika harga satuan, konversi satuan, perbandingan harga, buku stok, dan alur persetujuan adalah kode deterministik — tidak pernah diputuskan LLM.</span></div>
+        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-fingerprint"/></svg></span><strong data-i18n="safe.p2t">Persetujuan selalu terkait, tidak pernah generik.</strong><span data-i18n="safe.p2s">Sebuah “YA” hanya menyetujui aksi yang terikat pada percakapan itu — tidak pernah draf lain yang tak bersangkutan. Versi basi, duplikat, dan keputusan lintas-resto ditolak.</span></div>
+        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-lock"/></svg></span><strong data-i18n="safe.p3t">Setiap resto adalah tenant terisolasi.</strong><span data-i18n="safe.p3s">Satu nomor WhatsApp tertaut ke tepat satu resto. Percakapan nomor terdaftar selalu ter-scoped ke restonya sendiri.</span></div>
+        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-scale"/></svg></span><strong data-i18n="safe.p4t">Jujur lebih penting dari angka mengesankan.</strong><span data-i18n="safe.p4s">Stok adalah estimasi (belum ada data konsumsi POS). Pembelian tercatat bukan pembayaran tercatat. Perbandingan hanya dari riwayat persetujuan Anda sendiri.</span></div>
       </div>
     </div>
   </section>
@@ -353,32 +360,32 @@
   <!-- ================= FAQ ================= -->
   <section class="section section-tint" id="faq">
     <div class="container faq-inner">
-      <p class="eyebrow">QUESTIONS</p>
-      <h2 class="section-title">Asked by owners, answered honestly.</h2>
+      <p class="eyebrow" data-i18n="faq.eyebrow">PERTANYAAN</p>
+      <h2 class="section-title" data-i18n="faq.title">Ditanyakan pemilik, dijawab jujur.</h2>
       <div class="faq-list">
         <details open>
-          <summary>Do I have to replace my POS or QRIS?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
-          <p>No. POS and QRIS keep owning money-in. RestoPilot only handles the money-out side: purchases, stock estimates and supplier prices. You keep every tool you already use.</p>
+          <summary><span data-i18n="faq.q1">Apakah saya harus mengganti POS atau QRIS?</span><svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p data-i18n="faq.a1">Tidak. POS dan QRIS tetap menguasai uang masuk. RestoPilot hanya menangani sisi uang keluar: pembelian, estimasi stok, dan harga supplier. Semua alat yang sudah Anda pakai tetap dipakai.</p>
         </details>
         <details>
-          <summary>What exactly can I send?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
-          <p>A WhatsApp or Telegram text like <em>“beli cabai 3 kg 150rb”</em>, a photo of a market nota, a PDF invoice, or a voice note. Photos and voice are transcribed into the same editable draft — you approve before anything records.</p>
+          <summary><span data-i18n="faq.q2">Apa saja yang bisa saya kirim?</span><svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p data-i18n-html="faq.a2">Teks WhatsApp atau Telegram seperti <em>“beli cabai 3 kg 150rb”</em>, foto nota pasar, invoice PDF, atau catatan suara. Foto dan suara dibaca menjadi draf yang bisa diedit yang sama — Anda setujui sebelum ada yang tercatat.</p>
         </details>
         <details>
-          <summary>Can the AI spend or record money by itself?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
-          <p>Never. The model only reads and phrases; all math is deterministic code, and every write needs your explicit, correlated approval. A stale or duplicated “YA” is rejected.</p>
+          <summary><span data-i18n="faq.q3">Bisakah AI membelanjakan atau mencatat uang sendiri?</span><svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p data-i18n="faq.a3">Tidak pernah. Model hanya membaca dan merangkai; semua hitungan adalah kode deterministik, dan setiap penulisan butuh persetujuan Anda yang eksplisit dan terkait. “YA” yang basi atau duplikat ditolak.</p>
         </details>
         <details>
-          <summary>Is my restaurant's data visible to others?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
-          <p>No. Each restaurant is an isolated tenant. A linked number's drafts, approvals and summaries are scoped to that restaurant only — the assistant cannot read or mention another restaurant's data.</p>
+          <summary><span data-i18n="faq.q4">Apakah data resto saya terlihat oleh resto lain?</span><svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p data-i18n="faq.a4">Tidak. Setiap resto adalah tenant terisolasi. Draf, persetujuan, dan ringkasan nomor yang tertaut hanya ter-scoped ke resto itu — asisten tidak bisa membaca atau menyebut data resto lain.</p>
         </details>
         <details>
-          <summary>How accurate is the stock estimate?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
-          <p>Stock starts from your approved purchases and improves with usage, waste and sales records — and a physical count (stok opname) resets it to ground truth whenever you take one. We say plainly: it is an estimate, and every correction is audited.</p>
+          <summary><span data-i18n="faq.q5">Seberapa akurat estimasi stoknya?</span><svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p data-i18n="faq.a5">Stok mulai dari pembelian yang Anda setujui dan makin akurat dengan catatan pemakaian, limbah, dan penjualan — dan stok opname mengembalikannya ke kondisi nyata kapan pun Anda melakukannya. Kami katakan terus terang: itu estimasi, dan setiap koreksi diaudit.</p>
         </details>
         <details>
-          <summary>What does the demo include?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
-          <p>A seeded restaurant with purchase history, a WhatsApp simulator, the full dashboard, and both languages. Nothing you approve in the demo touches a real supplier — demo-grade authentication applies.</p>
+          <summary><span data-i18n="faq.q6">Apa saja yang ada di demo?</span><svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p data-i18n="faq.a6">Satu resto berisi riwayat pembelian, simulator WhatsApp, dashboard penuh, dan dua bahasa. Apa pun yang Anda setujui di demo tidak menyentuh supplier sungguhan — autentikasi kelas demo berlaku.</p>
         </details>
       </div>
     </div>
@@ -388,9 +395,9 @@
   <section class="section cta">
     <div class="container cta-inner">
       <span class="cta-mark" aria-hidden="true">r<span>·</span></span>
-      <h2>From purchase to peace of mind.</h2>
-      <p>Run the demo: send a purchase over WhatsApp, review the draft, approve it, and watch the dashboard record the truth.</p>
-      <a class="button button-lg primary" href="/app.html">Sign in to the demo <svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      <h2 data-i18n="cta.title">Dari pembelian ke ketenangan.</h2>
+      <p data-i18n="cta.p">Coba demonya: kirim pembelian lewat WhatsApp, tinjau drafnya, setujui, dan lihat dashboard mencatat kebenarannya.</p>
+      <a class="button button-lg primary" href="/app.html"><span data-i18n="cta.btn">Masuk ke demo</span> <svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></a>
     </div>
   </section>
 </main>
@@ -399,28 +406,187 @@
   <div class="container footer-grid">
     <div class="footer-brand">
       <span class="brand"><span class="brand-mark" aria-hidden="true">r<span>·</span></span>RestoPilot</span>
-      <p>The money-out half of your restaurant — purchasing, stock and supplier prices, recorded through the chat you already use.</p>
+      <p data-i18n="foot.brand">Separuh uang-keluar resto Anda — pembelian, stok, dan harga supplier, tercatat lewat chat yang sudah Anda pakai.</p>
     </div>
     <nav class="footer-col" aria-label="Landing sections">
-      <h4>Explore</h4>
-      <a href="#problem">The problem</a>
-      <a href="#solution">The solution</a>
-      <a href="#agents">The agents</a>
-      <a href="#dashboard">The dashboard</a>
-      <a href="#principles">Why it's safe</a>
-      <a href="#faq">FAQ</a>
+      <h4 data-i18n="foot.explore_t">JELAJAHI</h4>
+      <a href="#problem" data-i18n="nav.problem">Masalahnya</a>
+      <a href="#solution" data-i18n="nav.solution">Solusinya</a>
+      <a href="#agents" data-i18n="nav.agents">Agen</a>
+      <a href="#dashboard" data-i18n="nav.dashboard">Dashboard</a>
+      <a href="#principles" data-i18n="nav.principles">Kenapa aman</a>
+      <a href="#faq" data-i18n="nav.faq">FAQ</a>
     </nav>
     <nav class="footer-col" aria-label="Project links">
-      <h4>Project</h4>
-      <a href="/app.html">Open the dashboard</a>
-      <a href="https://github.com/fredericsetievi/AI-Agent-Resto-Pilot" rel="noopener">GitHub repository</a>
-      <a href="#top">Back to top</a>
+      <h4 data-i18n="foot.project_t">PROYEK</h4>
+      <a href="/app.html" data-i18n="nav.cta">Buka dashboard</a>
+      <a href="https://github.com/fredericsetievi/AI-Agent-Resto-Pilot" rel="noopener">GitHub</a>
+      <a href="#top" data-i18n="foot.top">Kembali ke atas</a>
     </nav>
   </div>
   <div class="container footer-fine-print">
     <p>AIID Capstone · DeepWisdom Atoms (agent-first track) + StepFun models track · Frederic Setievi, Muneeb Alvi, Annabel Leonardi</p>
-    <p class="footer-fine">Demo-grade authentication · Stock is an estimate · Nothing posts without your approval.</p>
+    <p class="footer-fine" data-i18n="foot.fine">Login nomor HP atau username · Stok adalah estimasi · Tidak ada yang tercatat tanpa persetujuan Anda.</p>
   </div>
 </footer>
+
+<script>
+/* Landing ID/EN toggle — same localStorage key as the dashboard, Indonesian default. */
+(function () {
+  'use strict';
+  var KEY = 'restopilot_lang';
+  var EN = {
+    'lang.aria': 'Language',
+    'nav.problem': 'The problem', 'nav.solution': 'The solution', 'nav.agents': 'Agents',
+    'nav.dashboard': 'Dashboard', 'nav.principles': "Why it's safe", 'nav.faq': 'FAQ',
+    'nav.signin': 'Sign in', 'nav.cta': 'Open the dashboard',
+    'hero.eyebrow': 'FOR INDONESIAN SMALL & MEDIUM RESTAURANTS',
+    'hero.title': 'Your kitchen, in\u00a0view. Your money-out, on\u00a0record.',
+    'hero.lede': 'RestoPilot is a WhatsApp-first AI operations assistant. Text what you bought — <em>\u201cbeli cabai 3 kg 150rb\u201d</em> — review the draft, approve it, and every purchase, stock movement and price is recorded. No spreadsheets, no new POS.',
+    'hero.cta': 'Open the dashboard', 'hero.why': 'Why we built it',
+    'hero.ch1': 'WhatsApp text', 'hero.ch2': 'Receipt photos', 'hero.ch3': 'Voice notes',
+    'demo.status': 'business account · online',
+    'demo.price_label': 'PRICE EVIDENCE',
+    'demo.price_sub': 'vs. your 30-day average, from your own approved purchases',
+    'demo.alert_label': 'PROACTIVE ALERT',
+    'demo.alert_sub': 'below your reorder threshold — proposed before a stockout',
+    'trust.t1n': '5.28M',
+    'trust.t1': 'F&B businesses in Indonesia (BPS, 2024)',
+    'trust.t2n': '4 ways', 'trust.t2': 'to log a purchase — text, photo, voice, Telegram',
+    'trust.t3n': '1 rule', 'trust.t3': 'nothing records without the owner\u2019s <em>YA</em>',
+    'trust.t4': 'dashboard and replies, in both languages',
+    'problem.eyebrow': 'THE PROBLEM',
+    'problem.title': 'Small restaurants run on WhatsApp, paper and memory.',
+    'problem.lede': 'Indonesia counts 5.28 million F&B service businesses (BPS, 2024), yet most owners manage purchasing, stock and suppliers by hand — through invoices, WhatsApp chats, spreadsheets, or physical market visits. With no dedicated procurement team, records stay scattered and decisions go unrecorded.',
+    'problem.c1t': 'Procurement, Inventory & Supplier Management',
+    'problem.c1p': 'Owners struggle to track stock levels, detect supplier price changes, compare suppliers, and decide what and when to purchase. The result: overstocking, stockouts, and unnecessary costs — and when a price spikes, nothing proves when it started.',
+    'problem.c2t': 'Sales & Menu Management',
+    'problem.c2p': 'Owners may have sales records but lack the time or technical skills to analyze them in Excel. They need simple answers — which menus sell best, where sales are declining, what ingredients cost, what\u2019s actually profitable — not another complex spreadsheet.',
+    'problem.quote': '\u201cOne owner we interviewed tracks daily totals in Excel — never per item, never per stock count. Not every purchase has a receipt. She prefers texting, and wants alerts when stock runs low and prices jump.\u201d',
+    'problem.quote_src': 'From our field interviews with restaurant owners — the findings RestoPilot is built on.',
+    'solution.eyebrow': 'THE SOLUTION',
+    'solution.title': 'Keep your POS. RestoPilot owns the money-out.',
+    'solution.lede': 'POS systems and QRIS already own money-in — customer sales. RestoPilot captures the other half: <strong>what was bought, from whom, at what unit price, what stock remains, and who is owed.</strong> A WhatsApp AI agent plus a simple web dashboard, built for messy real-world inputs.',
+    'solution.c1t': 'WhatsApp-first intake',
+    'solution.c1p': 'Send purchase text, receipt photos, or voice notes — the way owners already communicate. Informal Indonesian is parsed into a structured draft: items, quantities, units, prices, supplier.',
+    'solution.c2t': 'Approval before anything records',
+    'solution.c2p': 'Nothing posts without the owner. Review and correct the draft on WhatsApp or the dashboard, then approve with a correlated <strong>YA</strong>. Missing or ambiguous fields are never silently guessed.',
+    'solution.c3t': 'One atomic transaction',
+    'solution.c3p': 'Approval records the purchase, the stock movement, and the audit trail in a single transaction. The dashboard, the WhatsApp summary and the activity log always report the same truth.',
+    'solution.c4t': 'Dashboard truth & price evidence',
+    'solution.c4p': 'Purchases, inventory estimates, pending approvals and activity in one view. Same-supplier 30-day price comparisons surface spikes — like the Telur +16.3% case — straight from your own approved history.',
+    'loop.s1': 'Messy input', 'loop.s1s': 'WhatsApp text · nota photo · voice note',
+    'loop.s2': 'Editable draft', 'loop.s2s': 'structured, correctable, never guessed',
+    'loop.s3': 'Owner approval', 'loop.s3s': 'correlated \u201cYA\u201d — human decides',
+    'loop.s4': 'Recorded purchase', 'loop.s4s': 'purchase + stock + audit, atomically',
+    'loop.s5': 'Dashboard truth', 'loop.s5s': 'inventory estimate · price evidence',
+    'agents.eyebrow': 'THE AGENTS',
+    'agents.title': 'Two agents, built for the daily grind.',
+    'agents.lede': 'RestoPilot starts where the pain is greatest. Each agent follows the same discipline: parse the mess, propose a draft, wait for the owner, then record — and the math is always done by validated code, never by the model.',
+    'agents.flag1': 'FLAGSHIP · LIVE',
+    'agents.a1t': '1 · Procurement, Inventory & Supplier Management Agent',
+    'agents.a1s': 'Manage purchases, invoices, stock and reorder decisions — from conversational quick-log to price evidence.',
+    'agents.a1flow': 'Invoice / conversational log <span aria-hidden="true">\u2192</span> Purchase <span aria-hidden="true">\u2192</span> Inventory <span aria-hidden="true">\u2192</span> Reorder',
+    'agents.a1b1': 'Extract purchases from invoice photos or conversational quick-log',
+    'agents.a1b2': 'Create a purchase record for owner review and approval',
+    'agents.a1b3': 'Update inventory from every approved purchase',
+    'agents.a1b4': 'Detect low stock before it becomes a stockout',
+    'agents.a1b5': 'Calculate reorder quantities from your own consumption history',
+    'agents.a1b6': 'Compare historical prices per supplier',
+    'agents.a1b7': 'Record supplier contacts and market price quotes — without buying',
+    'agents.a1b8': 'Bulk-import your ingredient catalog from Excel in one pass',
+    'agents.a1b9': 'Generate purchase recommendations with evidence',
+    'agents.a1b10': 'Ask for owner confirmation before anything records',
+    'agents.flag2': 'PLANNED',
+    'agents.a2t': '2 · Sales & Menu Management Agent',
+    'agents.a2s': 'Analyze sales, menu performance, costs and trends — simple answers, not spreadsheets.',
+    'agents.a2flow': 'Sales data <span aria-hidden="true">\u2192</span> Trend analysis <span aria-hidden="true">\u2192</span> Menu performance <span aria-hidden="true">\u2192</span> Business insights',
+    'agents.a2b1': 'Import sales data from existing records',
+    'agents.a2b2': 'Analyze sales trends over time',
+    'agents.a2b3': 'Rank menu items by performance',
+    'agents.a2b4': 'Analyze menu profitability against ingredient costs',
+    'agents.a2b5': 'Detect unusual sales changes and flag them early',
+    'agents.a2b6': 'Extract keywords and sentiment, mapped to menu items or staff changes',
+    'agents.a2b7': 'Identify popular menu combinations',
+    'agents.a2b8': 'Recommend menu actions owners can actually take',
+    'dash.eyebrow': 'THE DASHBOARD',
+    'dash.title': 'The same truth, in one calm view.',
+    'dash.lede': 'Everything the agent records is yours to inspect: pending approvals, purchase history, inventory estimates, spending trends and price evidence — in Indonesian or English.',
+    'dash.p1t': 'Charts with provenance.', 'dash.p1s': '14-day spending trend and top ingredients — computed only from approved purchases.',
+    'dash.p2t': 'Stock opname.', 'dash.p2s': 'Physical counts reconcile the estimate; every stock write is confirmed, audited and retry-safe.',
+    'dash.p3t': 'ID / EN, one toggle.', 'dash.p3s': 'The whole dashboard switches language and remembers your choice.',
+    'dash.p4t': 'Flexible login.', 'dash.p4s': 'Sign in with a phone number or a username — new restaurant accounts register right from the login page.',
+    'safe.eyebrow': "WHY IT'S SAFE",
+    'safe.title': 'Honest by design.',
+    'safe.lede': 'RestoPilot handles financial records, so it is deliberately narrow and deliberately human-in-the-loop:',
+    'safe.p1t': 'AI proposes; code calculates; a human decides.',
+    'safe.p1s': 'Unit-price math, unit conversion, price comparison, stock ledger and approval workflow are deterministic code — never LLM-decided.',
+    'safe.p2t': 'Approval is correlated, never generic.',
+    'safe.p2s': 'A \u201cYA\u201d approves only the action explicitly tied to that conversation — never an unrelated pending draft. Stale versions, duplicates and cross-tenant decisions are rejected.',
+    'safe.p3t': 'Every restaurant is an isolated tenant.',
+    'safe.p3s': 'A WhatsApp number is linked to exactly one restaurant. A registered number\u2019s conversation is scoped to its own restaurant, always.',
+    'safe.p4t': 'Honesty over impressive numbers.',
+    'safe.p4s': 'Stock is an estimate (no POS consumption data yet). A recorded purchase is not a recorded payment. Comparisons come only from your own approved history.',
+    'faq.eyebrow': 'QUESTIONS',
+    'faq.title': 'Asked by owners, answered honestly.',
+    'faq.q1': 'Do I have to replace my POS or QRIS?',
+    'faq.a1': 'No. POS and QRIS keep owning money-in. RestoPilot only handles the money-out side: purchases, stock estimates and supplier prices. You keep every tool you already use.',
+    'faq.q2': 'What exactly can I send?',
+    'faq.a2': 'A WhatsApp or Telegram text like <em>\u201cbeli cabai 3 kg 150rb\u201d</em>, a photo of a market nota, a PDF invoice, or a voice note. Photos and voice are transcribed into the same editable draft — you approve before anything records.',
+    'faq.q3': 'Can the AI spend or record money by itself?',
+    'faq.a3': 'Never. The model only reads and phrases; all math is deterministic code, and every write needs your explicit, correlated approval. A stale or duplicated \u201cYA\u201d is rejected.',
+    'faq.q4': "Is my restaurant's data visible to others?",
+    'faq.a4': 'No. Each restaurant is an isolated tenant. A linked number\u2019s drafts, approvals and summaries are scoped to that restaurant only — the assistant cannot read or mention another restaurant\u2019s data.',
+    'faq.q5': 'How accurate is the stock estimate?',
+    'faq.a5': 'Stock starts from your approved purchases and improves with usage, waste and sales records — and a physical count (stok opname) resets it to ground truth whenever you take one. We say plainly: it is an estimate, and every correction is audited.',
+    'faq.q6': 'What does the demo include?',
+    'faq.a6': 'A seeded restaurant with purchase history, a WhatsApp simulator, the full dashboard, and both languages. Nothing you approve in the demo touches a real supplier — demo-grade authentication applies.',
+    'cta.title': 'From purchase to peace of mind.',
+    'cta.p': 'Run the demo: send a purchase over WhatsApp, review the draft, approve it, and watch the dashboard record the truth.',
+    'cta.btn': 'Sign in to the demo',
+    'foot.brand': 'The money-out half of your restaurant — purchasing, stock and supplier prices, recorded through the chat you already use.',
+    'foot.explore_t': 'EXPLORE', 'foot.project_t': 'PROJECT', 'foot.top': 'Back to top',
+    'foot.fine': 'Phone or username login · Stock is an estimate · Nothing posts without your approval.',
+    'doc.title': 'RestoPilot · From purchase to peace of mind',
+    'doc.desc': 'RestoPilot — a WhatsApp-first AI operations assistant for Indonesian small and medium restaurants. Keep your POS; RestoPilot handles the money-out.'
+  };
+  var lang, idCache = {};
+  function $(sel) { return document.querySelectorAll(sel); }
+  function capture() {
+    $('[data-i18n],[data-i18n-html]').forEach(function (el) {
+      var key = el.dataset.i18n || el.dataset.i18nHtml;
+      if (!(key in idCache)) idCache[key] = el.innerHTML;
+    });
+  }
+  function apply() {
+    document.documentElement.lang = lang;
+    document.title = lang === 'en' ? EN['doc.title'] : 'RestoPilot · Dapur Anda, terpantau';
+    var desc = document.querySelector('meta[name="description"]');
+    if (desc) desc.setAttribute('content', lang === 'en' ? EN['doc.desc'] : desc.getAttribute('data-id') || desc.getAttribute('content'));
+    $('[data-i18n],[data-i18n-html]').forEach(function (el) {
+      var key = el.dataset.i18n || el.dataset.i18nHtml;
+      var value = lang === 'en' ? EN[key] : idCache[key];
+      if (value != null) el.innerHTML = value;
+    });
+    document.querySelectorAll('.lang-toggle [data-lang]').forEach(function (b) {
+      var active = b.dataset.lang === lang;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-pressed', String(active));
+    });
+  }
+  try { lang = localStorage.getItem(KEY) === 'en' ? 'en' : 'id'; } catch (e) { lang = 'id'; }
+  var descMeta = document.querySelector('meta[name="description"]');
+  if (descMeta) descMeta.setAttribute('data-id', descMeta.getAttribute('content'));
+  capture();
+  apply();
+  document.querySelectorAll('.lang-toggle [data-lang]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      lang = b.dataset.lang;
+      try { localStorage.setItem(KEY, lang); } catch (e) { /* storage unavailable */ }
+      apply();
+    });
+  });
+})();
+</script>
 </body>
 </html>
