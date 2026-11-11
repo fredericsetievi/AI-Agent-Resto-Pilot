@@ -291,6 +291,63 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
     def slugify_name(raw_name):
         return Store._slugify(raw_name)
 
+    def import_catalog(self, restaurant_id, items):
+        """Upsert parsed spreadsheet rows into this restaurant's catalog.
+
+        Items match by case-insensitive name against the tenant's catalog
+        (base and custom). Existing names gain the provided unit, threshold,
+        and inventory quantity; new names become custom ingredients. The
+        schema has no code column, so item codes are ignored. The cached
+        catalog is rebuilt afterwards because _load_custom_ingredients
+        appends to whatever is cached, so a stale cache would duplicate rows.
+        """
+        stored = []
+        with self.transaction() as conn:
+            catalog = self._catalog_for(restaurant_id)
+            by_name = {str(entry["name"]).strip().casefold(): entry for entry in catalog["list"]}
+            used_ids = set(catalog["by_id"])
+            for item in items:
+                name = str(item.get("name") or "").strip()
+                if not name:
+                    continue
+                unit = str(item.get("unit") or "").strip() or None
+                threshold = item.get("threshold")
+                quantity = item.get("quantity")
+                entry = by_name.get(name.casefold())
+                if entry is None:
+                    slug = self._slugify(name) or "bahan"
+                    unique, suffix = slug, 2
+                    while unique in used_ids:
+                        unique, suffix = f"{slug}_{suffix}", suffix + 1
+                    used_ids.add(unique)
+                    stored_threshold = decimal_string(threshold) if threshold is not None else "0"
+                    stored_unit = unit or "kg"
+                    conn.execute("INSERT INTO custom_ingredients (id, name, unit, reorder_threshold, created_at, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)", (unique, name, stored_unit, stored_threshold, now(), restaurant_id))
+                    conn.execute("INSERT INTO inventory (restaurant_id, ingredient_id, quantity) VALUES (?, ?, '0')", (restaurant_id, unique))
+                    entry = {"id": unique, "name": name, "unit": stored_unit, "reorder_threshold": stored_threshold}
+                else:
+                    entry = dict(entry)
+                    if unit and unit != entry["unit"]:
+                        cursor = conn.execute("UPDATE custom_ingredients SET unit=? WHERE restaurant_id=? AND id=?", (unit, restaurant_id, entry["id"]))
+                        if cursor.rowcount:
+                            entry["unit"] = unit
+                    if threshold is not None:
+                        cursor = conn.execute("UPDATE custom_ingredients SET reorder_threshold=? WHERE restaurant_id=? AND id=?", (decimal_string(threshold), restaurant_id, entry["id"]))
+                        if cursor.rowcount:
+                            entry["reorder_threshold"] = decimal_string(threshold)
+                stored_quantity = decimal_string(quantity) if quantity is not None else None
+                if stored_quantity is not None:
+                    conn.execute(
+                        "INSERT INTO inventory (restaurant_id, ingredient_id, quantity) VALUES (?, ?, ?) ON CONFLICT(restaurant_id, ingredient_id) DO UPDATE SET quantity=excluded.quantity",
+                        (restaurant_id, entry["id"], stored_quantity),
+                    )
+                stored.append({"id": entry["id"], "name": entry["name"], "unit": entry["unit"], "quantity": stored_quantity, "threshold": entry["reorder_threshold"]})
+            if stored:
+                self._audit(conn, "catalog_imported", f"{len(stored)} bahan diimpor ke katalog.", restaurant_id)
+        self._catalogs = {}
+        self._load_custom_ingredients()
+        return stored
+
     def initialize(self, seed):
         with self.transaction() as conn:
             for statement in (

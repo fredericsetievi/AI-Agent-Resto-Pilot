@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import contextlib
 import csv
 import hashlib
@@ -43,6 +44,7 @@ from .audio import (
     validate_tts_model,
 )
 from .db import APPROVE_COMMANDS, DEMO_USERS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
+from .catalog_import import CatalogImportError, parse_catalog_file
 from .pg_store import PostgresStore
 from .data_qa import build_answer as build_data_answer
 from .data_qa import phrase_data_answer, phrase_opname_answer
@@ -81,6 +83,8 @@ from .vision import (
     StepFunVisionError,
     decode_image as decode_vision_image,
     extract_invoice,
+    extract_leftover_counts,
+    caption_requests_leftover_counts,
     validate_base_url as validate_vision_base_url,
     validate_model as validate_vision_model,
 )
@@ -323,6 +327,11 @@ class StockCountCreate(Model):
     ingredient_id: ShortText
     counted_quantity: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
     note: ShortText | None = None
+
+
+class CatalogImportRequest(Model):
+    filename: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    content_base64: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8_000_000)]
 
 
 class RuleCreate(Model):
@@ -1143,6 +1152,20 @@ def create_app(
         return {"data": store.record_stock_count(actor["restaurant_id"], body.ingredient_id,
                                                  body.counted_quantity, body.note)}
 
+    @app.post("/v1/catalog/import")
+    def catalog_import(body: CatalogImportRequest, actor=Depends(owner_actor)):
+        """Bulk import the ingredient catalog from an owner-uploaded spreadsheet."""
+        try:
+            content = base64.b64decode(body.content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise DomainError("catalog_import_failed", "Konten file bukan base64 yang valid.", 400) from exc
+        try:
+            parsed = parse_catalog_file(body.filename, content)
+        except CatalogImportError as exc:
+            raise DomainError("catalog_import_failed", str(exc), 400) from exc
+        stored = store.import_catalog(actor["restaurant_id"], parsed["items"])
+        return {"data": {"imported": len(stored), "skipped": parsed["skipped"], "items": stored}}
+
     @app.get("/v1/rules")
     def rules_list(actor=Depends(owner_actor)):
         return {"data": {"rules": store.list_rules(actor["restaurant_id"])}}
@@ -1652,20 +1675,51 @@ def create_app(
                     )
                     digest = hashlib.sha256(photo).hexdigest()
                     payload["operation_source"] = {"digest": digest, "caption": payload["text"]}
-                    payload["extracted"] = await filter_kitchen_items(
-                        await extract_invoice(
+                    if caption_requests_leftover_counts(payload["text"]) and not caption_requests_purchase(payload["text"]):
+                        # Evening leftover count: the caption's intent picks the
+                        # reader, the counts come from the photo — never from the
+                        # caption words. The result re-enters the operations draft
+                        # flow as count text, so the reply is the usual preview
+                        # and recording still needs an explicit YA approval.
+                        catalog = await run_in_threadpool(store.catalog_list, restaurant_id)
+                        counts = await extract_leftover_counts(
                             photo,
-                            media_type="image/jpeg",
-                            restaurant=sender_restaurant["name"],
+                            "image/jpeg",
+                            [entry["name"] for entry in catalog],
                             api_key=vision_api_key,
                             model=vision_model,
                             base_url=vision_base_url,
-                            client=vision_http_client,
-                            caption=payload["text"],
-                        ),
-                        restaurant_id,
-                    )
-                    payload["source_label"] = "Foto nota Telegram"
+                            http_client=vision_http_client,
+                        )
+                        if counts["items"]:
+                            units = {entry["name"]: entry["unit"] for entry in catalog}
+                            text = "stok malam: " + ", ".join(
+                                f"{item['name']} {item['count']} {units.get(item['name']) or 'pcs'}"
+                                for item in counts["items"])
+                            payload["operation_candidate"] = parse_operations_text(text) or uncertain_document(
+                                "Foto hitungan stok belum terbaca. Kirim foto yang lebih jelas atau tulis hitungannya sebagai teks; stok belum berubah.")
+                        else:
+                            # No usable counts: an ambiguous candidate whose first
+                            # (sorted) question asks for a clearer photo or a typed
+                            # count. The owner's 'ini hitungan stok' answer converts
+                            # it into a count report via the existing clarify flow.
+                            payload["operation_candidate"] = uncertain_document(
+                                "Foto hitungan stok tidak terbaca. Kirim foto yang lebih jelas atau tulis hitungannya sebagai teks, misalnya: stok malam pandan 8 pcs. Stok belum berubah.")
+                    else:
+                        payload["extracted"] = await filter_kitchen_items(
+                            await extract_invoice(
+                                photo,
+                                media_type="image/jpeg",
+                                restaurant=sender_restaurant["name"],
+                                api_key=vision_api_key,
+                                model=vision_model,
+                                base_url=vision_base_url,
+                                client=vision_http_client,
+                                caption=payload["text"],
+                            ),
+                            restaurant_id,
+                        )
+                        payload["source_label"] = "Foto nota Telegram"
                 except (TelegramError, StepFunVisionError) as exc:
                     logger.warning("Telegram photo intake failed: %s", exc)
             elif message.get("media_kind") == "audio" and asr_api_key and sender_restaurant and message.get("media_id"):
