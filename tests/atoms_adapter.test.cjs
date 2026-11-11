@@ -11,7 +11,9 @@ test('Atoms registers every dashboard script and stylesheet for preview and publ
   const html = fs.readFileSync(path.join(frontendDir, 'index.html'), 'utf8');
   const plugin = fs.readFileSync(path.join(__dirname, '../deploy/atoms/frontend/plugins/restopilot-dashboard.ts'), 'utf8');
   const registry = plugin.slice(plugin.indexOf('const ASSETS:'), plugin.indexOf('function dashboardHtml'));
-  const required = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+\.(?:js|css))"/g)].map(match => match[1]);
+  // Asset URLs may carry a cache-busting query ("?v=20261112a"); the
+  // declared path itself must stay stable so Atoms can serve and copy it.
+  const required = [...html.matchAll(/(?:src|href)="(\/assets\/[^"?#]+\.(?:js|css))(?:\?[^"#]*)?"/g)].map(match => match[1]);
   assert.ok(required.length, 'dashboard must declare its local assets');
   for (const asset of required) {
     const filename = asset.slice('/assets/'.length);
