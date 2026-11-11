@@ -172,12 +172,14 @@ h2{font-family:Georgia,"Times New Roman",serif;font-weight:400;letter-spacing:-.
 .solution-card h3{font-size:16px;font-weight:650;margin:0 0 8px;color:#f4f7ec}
 .solution-card p{font-size:13.5px;color:#b5c7ba;line-height:1.75;margin:0}
 .loop-diagram{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap}
-.loop-step{flex:1 1 150px;background:#ffffff0d;border:1px solid #ffffff1c;border-radius:10px;padding:16px;font-size:13px;font-weight:600;line-height:1.5;color:#e9eee8}
-.loop-step small{display:block;font-weight:400;font-size:11px;color:#9eb2a7;margin-top:6px;line-height:1.5}
-.loop-step span{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#d8e6ba;color:var(--green-dark);font-size:11px;font-weight:700;margin-bottom:8px}
-.loop-step.loop-accent{background:#d8e6ba;border-color:#d8e6ba;color:var(--green-dark)}
-.loop-step.loop-accent small{color:#5d7151}
-.loop-step.loop-accent span{background:var(--green-dark);color:#d8e6ba}
+.loop-step{flex:1 1 150px;background:#d8e6ba14;border:1px solid #d8e6ba2e;border-radius:10px;padding:16px;font-size:13px;font-weight:600;line-height:1.5;color:#e9eee8;transition:background .18s,color .18s,transform .18s,border-color .18s}
+.loop-step:hover{background:#d8e6ba;border-color:#d8e6ba;color:var(--green-dark);transform:translateY(-3px)}
+.loop-step:hover .loop-num{background:var(--green-dark);color:#d8e6ba}
+.loop-step:hover .loop-title{color:var(--green-dark)}
+.loop-step:hover small{color:#5d7151}
+.loop-num{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#d8e6ba;color:var(--green-dark);font-size:11px;font-weight:700;margin-bottom:10px}
+.loop-title{display:block;margin-bottom:8px}
+.loop-step small{display:block;font-weight:400;font-size:11px;color:#9eb2a7;margin-top:0;line-height:1.5}
 .loop-arrow{align-self:center;color:#8fa795;font-size:18px;flex:0 0 auto}
 
 /* ---------- agents ---------- */
