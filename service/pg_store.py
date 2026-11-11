@@ -1219,8 +1219,12 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                         self._execute(conn, "UPDATE stock_counts SET status='applied', applied_at=%s WHERE group_id=%s AND slug=%s AND status='pending'",
                                       (now(), group_id, tenant))
                         thread.update(pending_opname_id=None)
+                        # A lower physical count than the estimate means the
+                        # difference left the kitchen — say so as derived usage.
                         reply = "Stok opname diterapkan: " + "; ".join(
-                            f"{item['name']} {item['estimated_quantity']} → {item['counted_quantity']} {item['unit']}" for item in applied) + "."
+                            f"{item['name']} {item['estimated_quantity']} → {item['counted_quantity']} {item['unit']}"
+                            + (f" (terpakai ±{abs(Decimal(str(item['delta'])))} {item['unit']})" if Decimal(str(item["delta"])) < 0 else "")
+                            for item in applied) + "."
                         result["action"] = "opname_applied"
                 elif not draft:
                     reply = "Tidak ada draf aktif untuk nomor ini. Kirim rincian pembelian terlebih dahulu; YA tidak mencatat pembelian lain."
@@ -1569,11 +1573,14 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                 " WHERE w.direction='inbound' AND w.draft_id IS NOT NULL AND t.slug=%s), "
                 "(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', a.id, 'restaurant_id', a.slug, 'event', a.event, "
                 "'message', a.message, 'created_at', a.created_at) ORDER BY a.created_at DESC, a.id), '[]'::jsonb) "
-                " FROM (SELECT * FROM activity WHERE slug=%s ORDER BY created_at DESC, id DESC LIMIT 100) a)"
-            ), (restaurant_id,) * 7)
+                " FROM (SELECT * FROM activity WHERE slug=%s ORDER BY created_at DESC, id DESC LIMIT 100) a), "
+                "(SELECT COALESCE(jsonb_agg(jsonb_build_object('ingredient_id', m.ingredient_id, 'quantity', m.quantity, "
+                "'created_at', m.created_at) ORDER BY m.created_at), '[]'::jsonb) "
+                " FROM movements m WHERE m.slug=%s AND m.created_at >= now() - interval '30 days')"
+            ), (restaurant_id,) * 8)
             row = cur.fetchone()
 
-        restaurant, drafts_bodies, purchase_rows, stock_map, numbers, sources, activity = row
+        restaurant, drafts_bodies, purchase_rows, stock_map, numbers, sources, activity, movement_rows = row
         if restaurant is None:
             raise DomainError("not_found", "Restaurant not found.", 404)
 
@@ -1623,7 +1630,39 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                        for back in range(13, -1, -1)]
         ingredient_spend = [{"name": (catalog["by_id"].get(key) or {}).get("name") or str(key), "total_idr": total}
                             for key, total in sorted(ingredient_totals.items(), key=lambda pair: pair[1], reverse=True)[:7]]
-        charts = {"daily_spend": daily_spend, "ingredient_spend": ingredient_spend}
+
+        # Usage trend: negative stock movements are consumption (opname deltas
+        # and sales deductions), so per-ingredient daily usage falls straight
+        # out of the ledger — the "sisa berapa" count becomes a sales trend.
+        usage_by_ingredient = {}
+        for movement in movement_rows or []:
+            key = movement.get("ingredient_id")
+            if not key:
+                continue
+            try:
+                quantity = Decimal(str(movement.get("quantity", "0")))
+            except Exception:
+                continue
+            if quantity >= 0:
+                continue
+            created = self._as_datetime(movement["created_at"]).astimezone(RESTAURANT_TIMEZONE).date()
+            if created < today_wib - timedelta(days=13):
+                continue
+            bucket = usage_by_ingredient.setdefault(key, {})
+            bucket[created] = bucket.get(created, Decimal(0)) + abs(quantity)
+        usage_trend = []
+        for key, bucket in sorted(usage_by_ingredient.items(), key=lambda pair: sum(pair[1].values()), reverse=True)[:6]:
+            ingredient = catalog["by_id"].get(key) or {}
+            usage_trend.append({
+                "ingredient_id": str(key),
+                "name": ingredient.get("name") or str(key),
+                "unit": ingredient.get("unit") or "",
+                "total_used": float(sum(bucket.values())),
+                "daily": [{"date": (today_wib - timedelta(days=back)).isoformat(),
+                           "used": float(bucket.get(today_wib - timedelta(days=back), 0))}
+                          for back in range(13, -1, -1)],
+            })
+        charts = {"daily_spend": daily_spend, "ingredient_spend": ingredient_spend, "usage_trend": usage_trend}
 
         activity = list(activity)
         for entry in activity:
