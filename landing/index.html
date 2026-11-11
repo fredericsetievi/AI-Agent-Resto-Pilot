@@ -5,206 +5,422 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#183f35">
   <meta name="description" content="RestoPilot — a WhatsApp-first AI operations assistant for Indonesian small and medium restaurants. Keep your POS; RestoPilot handles the money-out.">
+  <meta property="og:title" content="RestoPilot · From purchase to peace of mind">
+  <meta property="og:description" content="Text what you bought. Approve the draft. Every purchase, stock movement and price is recorded — over WhatsApp, Telegram, photos or voice.">
+  <meta property="og:type" content="website">
   <title>RestoPilot · From purchase to peace of mind</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23183f35'/%3E%3Ctext x='32' y='44' font-family='Georgia,serif' font-size='38' fill='%23d8e6ba' text-anchor='middle'%3Er%C2%B7%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/landing-assets/styles.css">
 </head>
 <body>
-  <header class="site-header">
-    <div class="container nav-bar">
-      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">r<span>·</span></span>RestoPilot</a>
-      <nav aria-label="Site navigation">
-        <a href="#problem">The problem</a>
-        <a href="#solution">The solution</a>
-        <a href="#agents">Agents</a>
-        <a href="#principles">Why it's safe</a>
-        <a href="/app.html">Sign in</a>
-      </nav>
-      <a class="button primary nav-cta" href="/app.html">Open the dashboard</a>
-    </div>
-  </header>
 
-  <main id="top">
-    <!-- ================= HERO ================= -->
-    <section class="hero">
-      <div class="container hero-grid">
-        <div class="hero-copy">
-          <p class="eyebrow">FOR INDONESIAN SMALL &amp; MEDIUM RESTAURANTS</p>
-          <h1>Your kitchen, in&nbsp;view. Your money-out, on&nbsp;record.</h1>
-          <p class="lede">RestoPilot is a WhatsApp-first AI operations assistant. Text what you bought — <em>“beli cabai 3 kg 150rb”</em> — review the draft, approve it, and every purchase, stock movement and price is recorded. No spreadsheets, no new POS.</p>
-          <div class="hero-actions">
-            <a class="button primary" href="/app.html">Open the dashboard</a>
-            <a class="button" href="#problem">Why we built it</a>
-          </div>
-          <p class="hero-note">AI proposes · A human decides · One transaction records.</p>
+<!-- Reusable inline icon set (stroke style, 24x24) — no external assets, no scripts -->
+<svg class="icon-defs" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 11.5c0 4.14-4.03 7.5-9 7.5-1.02 0-2-.14-2.9-.4L4 20l1.3-3.2C3.86 15.5 3 13.6 3 11.5 3 7.36 7.03 4 12 4s9 3.36 9 7.5Z"/><path d="M8.5 10.5h7M8.5 13.5h4"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M21 4 3.4 10.6c-.8.3-.77 1.47.05 1.72l6.05 1.86 1.86 6.05c.25.82 1.42.85 1.72.05L21 4Z"/><path d="M21 4 9.5 14.2"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5C4 7.12 5.12 6 6.5 6h1.6c.6 0 1.16-.3 1.5-.8l.55-.9c.34-.5.9-.8 1.5-.8h2.7c.6 0 1.16.3 1.5.8l.55.9c.34.5.9.8 1.5.8h1.6C19.88 6 21 7.12 21 8.5v9c0 1.38-1.12 2.5-2.5 2.5h-12C5.12 20 4 18.88 4 17.5v-9Z"/><circle cx="12.5" cy="13" r="3.4"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 5.5v5.2c0 4.6 3 8.1 7 9.3 4-1.2 7-4.7 7-9.3V5.5L12 3Z"/><path d="m9 11.6 2.1 2.1 4-4.2"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.4"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5M12 14.8v2"/></symbol>
+    <symbol id="i-calc" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2.4"/><path d="M8.5 7h7M8.5 11.5h.02M12 11.5h.02M15.5 11.5h.02M8.5 15h.02M12 15h.02M15.5 15h.02M8.5 18.5h.02M12 18.5h.02M15.5 18.5h.02"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 4v16h16"/><path d="m7.5 14.5 3.5-4 3 2.5 4.5-6"/><path d="M15.5 7h3v3"/></symbol>
+    <symbol id="i-ledger" viewBox="0 0 24 24"><path d="M6 3.5h12a1.5 1.5 0 0 1 1.5 1.5v14A1.5 1.5 0 0 1 18 20.5H6A1.5 1.5 0 0 1 4.5 19V5A1.5 1.5 0 0 1 6 3.5Z"/><path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 9.5a6 6 0 0 1 12 0c0 5 2 6.5 2 6.5H4s2-1.5 2-6.5Z"/><path d="M10 19a2.2 2.2 0 0 0 4 0"/></symbol>
+    <symbol id="i-store" viewBox="0 0 24 24"><path d="M4 9.5 5.6 4h12.8L20 9.5M4 9.5c0 1.5 1.3 2.7 3 2.7 1.5 0 2.7-.9 3-2.2.3 1.3 1.5 2.2 3 2.2 1.5 0 2.7-.9 3-2.2.3 1.3 1.5 2.2 3 2.2 1.7 0 3-1.2 3-2.7M5.5 12v8h13v-8M9.5 20v-5.5h5V20"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.3l-1.8-5.7L4.5 10.8 10.2 9 12 3.5Z"/><path d="M19 15.5l.8 2.4 2.4.8-2.4.8-.8 2.4-.8-2.4-2.4-.8 2.4-.8.8-2.4Z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="m8.3 12.2 2.5 2.5 4.9-5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-fingerprint" viewBox="0 0 24 24"><path d="M12 4.5c-3 0-5.6 1.5-7 3.8M18.5 7.5A8.9 8.9 0 0 0 12 4.5m8.7 5.3A8.9 8.9 0 0 0 19 6.9M4.2 10.6A8.9 8.9 0 0 1 6.3 7.4"/><path d="M8 11.3A5.2 5.2 0 0 1 12 9.2c1.7 0 3.2.8 4.2 2M6 14.6a9 9 0 0 1 .7-2.3m10.9.8c.4 1 .6 2 .6 3.1M8.5 19.4a7.7 7.7 0 0 1-1.4-2.6m8.8 2.6a7.6 7.6 0 0 0 1.8-3.6M12 12.3c-1.1 0-2 .6-2.6 1.5m5-0.6a3.2 3.2 0 0 0-1.5-1M12 15.3c-.7 0-1.3.4-1.6 1m3.1-.2c-.2-.3-.5-.6-.9-.7m-.6 3.9c.6-.2 1-.8 1-1.4"/></symbol>
+    <symbol id="i-scale" viewBox="0 0 24 24"><path d="M12 3.5v17M5.5 6.5h13M5.5 6.5 3 13a3 3 0 0 0 5.9 0L6.4 6.5M18.5 6.5 16 13a3 3 0 0 0 5.9 0l-2.5-6.5M8 20.5h8M6.4 13h-1M19.9 13h-1"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2.8" width="10" height="18.4" rx="2.6"/><path d="M10.6 5.4h2.8M11 18.4h2"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.6"/><path d="M3.6 9.5h16.8M3.6 14.5h16.8M12 3.5c-2.6 2.2-4 5.2-4 8.5s1.4 6.3 4 8.5c2.6-2.2 4-5.2 4-8.5s-1.4-6.3-4-8.5Z"/></symbol>
+  </defs>
+</svg>
+
+<header class="site-header">
+  <div class="container nav-bar">
+    <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">r<span>·</span></span>RestoPilot</a>
+    <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Open menu">
+    <label for="nav-toggle" class="nav-burger" aria-hidden="true"><span></span><span></span><span></span></label>
+    <nav aria-label="Site navigation">
+      <a href="#problem">The problem</a>
+      <a href="#solution">The solution</a>
+      <a href="#agents">Agents</a>
+      <a href="#dashboard">Dashboard</a>
+      <a href="#principles">Why it's safe</a>
+      <a href="#faq">FAQ</a>
+      <a class="nav-signin" href="/app.html">Sign in</a>
+    </nav>
+    <a class="button primary nav-cta" href="/app.html">Open the dashboard</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ================= HERO ================= -->
+  <section class="hero">
+    <div class="hero-deco" aria-hidden="true">
+      <svg class="deco-leaf deco-a" viewBox="0 0 200 200"><path d="M100 8C56 40 30 90 44 150c38 24 96 18 126-20C166 74 146 32 100 8Z" fill="currentColor" opacity=".55"/><path d="M100 8C80 60 76 110 96 168" stroke="#f6f7f2" stroke-width="2" fill="none" opacity=".5"/></svg>
+      <svg class="deco-leaf deco-b" viewBox="0 0 160 160"><path d="M80 6C44 32 24 74 36 122c30 20 78 14 102-16C132 62 116 26 80 6Z" fill="currentColor" opacity=".4"/></svg>
+    </div>
+    <div class="container hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow"><svg class="ico" aria-hidden="true"><use href="#i-store"/></svg>FOR INDONESIAN SMALL &amp; MEDIUM RESTAURANTS</p>
+        <h1>Your kitchen, in&nbsp;view. Your money-out, on&nbsp;record.</h1>
+        <p class="lede">RestoPilot is a WhatsApp-first AI operations assistant. Text what you bought — <em>“beli cabai 3 kg 150rb”</em> — review the draft, approve it, and every purchase, stock movement and price is recorded. No spreadsheets, no new POS.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="/app.html">Open the dashboard <svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          <a class="button" href="#problem">Why we built it</a>
         </div>
-        <div class="hero-demo" aria-hidden="true">
-          <div class="chat-shell">
-            <p class="chat-date">HARI INI · WHATSAPP</p>
+        <ul class="hero-channels" aria-label="Ways to log a purchase">
+          <li><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg>WhatsApp text</li>
+          <li><svg class="ico" aria-hidden="true"><use href="#i-camera"/></svg>Receipt photos</li>
+          <li><svg class="ico" aria-hidden="true"><use href="#i-mic"/></svg>Voice notes</li>
+          <li><svg class="ico" aria-hidden="true"><use href="#i-send"/></svg>Telegram</li>
+        </ul>
+      </div>
+
+      <div class="hero-demo" aria-hidden="true">
+        <div class="phone">
+          <div class="phone-notch"></div>
+          <div class="phone-screen">
+            <div class="phone-status"><span>08.12</span><span>5G&nbsp;&nbsp;▮▮▮</span></div>
+            <div class="phone-header">
+              <span class="phone-avatar">BS</span>
+              <div><strong>RestoPilot</strong><small>business account · online</small></div>
+              <svg class="ico"><use href="#i-chat"/></svg>
+            </div>
             <div class="chat-messages">
+              <p class="chat-date">HARI INI</p>
               <div class="chat-message outbound"><div class="chat-bubble"><p>beli cabai 3 kg 150rb dari pasar pagi</p><small>08.12</small></div></div>
               <div class="chat-message inbound"><div class="chat-bubble"><p>Draft pembelian siap:</p><p>Cabai · 3 kg · Rp150.000<br>Pemasok: Pasar Pagi</p><p>Balas <strong>YA</strong> untuk setujui, atau koreksi dulu.</p><small>08.12</small></div></div>
               <div class="chat-message outbound"><div class="chat-bubble"><p>YA</p><small>08.14</small></div></div>
-              <div class="chat-message inbound"><div class="chat-bubble chat-recorded"><p>✔ Tercatat. Pembelian Rp150.000, stok cabai diperbarui.</p><small>08.14</small></div></div>
+              <div class="chat-message inbound"><div class="chat-bubble chat-recorded"><p><svg class="ico ico-check"><use href="#i-check"/></svg>Tercatat. Pembelian Rp150.000, stok cabai diperbarui.</p><small>08.14</small></div></div>
             </div>
           </div>
-          <div class="hero-price">
+        </div>
+        <div class="hero-card hero-price">
+          <svg class="hero-card-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-chart"/></svg>
+          <div>
             <p class="hero-price-label">PRICE EVIDENCE</p>
             <p class="hero-price-value">Telur +16.3%</p>
-            <p class="hero-price-sub">vs. your 30-day average from your own approved purchases</p>
+            <p class="hero-price-sub">vs. your 30-day average, from your own approved purchases</p>
+          </div>
+        </div>
+        <div class="hero-card hero-alert">
+          <svg class="hero-card-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-bell"/></svg>
+          <div>
+            <p class="hero-price-label">PROACTIVE ALERT</p>
+            <p class="hero-price-value hero-alert-value">Beras 8 kg</p>
+            <p class="hero-price-sub">below your reorder threshold — proposed before a stockout</p>
           </div>
         </div>
       </div>
-    </section>
-
-    <!-- ================= PROBLEM ================= -->
-    <section class="section" id="problem">
-      <div class="container">
-        <p class="eyebrow">THE PROBLEM</p>
-        <h2 class="section-title">Small restaurants run on WhatsApp, paper and memory.</h2>
-        <p class="section-lede">Indonesia counts 5.28 million F&amp;B service businesses (BPS, 2024), yet most owners manage purchasing, stock and suppliers by hand — through invoices, WhatsApp chats, spreadsheets, or physical market visits. With no dedicated procurement team, records stay scattered and decisions go unrecorded.</p>
-        <div class="problem-grid">
-          <article class="problem-card">
-            <p class="problem-num">01</p>
-            <h3>Procurement, Inventory &amp; Supplier Management</h3>
-            <p>Owners struggle to track stock levels, detect supplier price changes, compare suppliers, and decide what and when to purchase. The result: overstocking, stockouts, and unnecessary costs — and when a price spikes, nothing proves when it started.</p>
-          </article>
-          <article class="problem-card">
-            <p class="problem-num">02</p>
-            <h3>Sales &amp; Menu Management</h3>
-            <p>Owners may have sales records but lack the time or technical skills to analyze them in Excel. They need simple answers — which menus sell best, where sales are declining, what ingredients cost, what's actually profitable — not another complex spreadsheet.</p>
-          </article>
-        </div>
-        <div class="problem-quote">
-          <p>“One owner we interviewed tracks daily totals in Excel — never per item, never per stock count. Not every purchase has a receipt. She prefers texting, and wants alerts when stock runs low and prices jump.”</p>
-          <small>From our field interviews with restaurant owners — the findings RestoPilot is built on.</small>
-        </div>
-      </div>
-    </section>
-
-    <!-- ================= SOLUTION ================= -->
-    <section class="section section-green" id="solution">
-      <div class="container">
-        <p class="eyebrow eyebrow-light">THE SOLUTION</p>
-        <h2 class="section-title">Keep your POS. RestoPilot owns the money-out.</h2>
-        <p class="section-lede">POS systems and QRIS already own money-in — customer sales. RestoPilot captures the other half: <strong>what was bought, from whom, at what unit price, what stock remains, and who is owed.</strong> A WhatsApp AI agent plus a simple web dashboard, built for messy real-world inputs.</p>
-        <div class="solution-grid">
-          <article class="solution-card">
-            <span class="solution-icon" aria-hidden="true">◌</span>
-            <h3>WhatsApp-first intake</h3>
-            <p>Send purchase text, receipt photos, or voice notes — the way owners already communicate. Informal Indonesian is parsed into a structured draft: items, quantities, units, prices, supplier.</p>
-          </article>
-          <article class="solution-card">
-            <span class="solution-icon" aria-hidden="true">☑</span>
-            <h3>Approval before anything records</h3>
-            <p>Nothing posts without the owner. Review and correct the draft on WhatsApp or the dashboard, then approve with a correlated <strong>YA</strong>. Missing or ambiguous fields are never silently guessed.</p>
-          </article>
-          <article class="solution-card">
-            <span class="solution-icon" aria-hidden="true">▤</span>
-            <h3>One atomic transaction</h3>
-            <p>Approval records the purchase, the stock movement, and the audit trail in a single transaction. The dashboard, the WhatsApp summary and the activity log always report the same truth.</p>
-          </article>
-          <article class="solution-card">
-            <span class="solution-icon" aria-hidden="true">▦</span>
-            <h3>Dashboard truth &amp; price evidence</h3>
-            <p>Purchases, inventory estimates, pending approvals and activity in one view. Same-supplier 30-day price comparisons surface spikes — like the Telur +16.3% case — straight from your own approved history.</p>
-          </article>
-        </div>
-        <div class="loop-diagram" role="img" aria-label="The RestoPilot loop: messy input, editable draft, owner approval, recorded purchase, dashboard truth and price evidence">
-          <div class="loop-step"><span>1</span>Messy input<br><small>WhatsApp text · nota photo · voice note</small></div>
-          <div class="loop-arrow" aria-hidden="true">→</div>
-          <div class="loop-step"><span>2</span>Editable draft<br><small>structured, correctable, never guessed</small></div>
-          <div class="loop-arrow" aria-hidden="true">→</div>
-          <div class="loop-step loop-accent"><span>3</span>Owner approval<br><small>correlated “YA” — human decides</small></div>
-          <div class="loop-arrow" aria-hidden="true">→</div>
-          <div class="loop-step"><span>4</span>Recorded purchase<br><small>purchase + stock + audit, atomically</small></div>
-          <div class="loop-arrow" aria-hidden="true">→</div>
-          <div class="loop-step"><span>5</span>Dashboard truth<br><small>inventory estimate · price evidence</small></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ================= AGENTS / FEATURES ================= -->
-    <section class="section" id="agents">
-      <div class="container">
-        <p class="eyebrow">THE AGENTS</p>
-        <h2 class="section-title">Two agents, built for the daily grind.</h2>
-        <p class="section-lede">RestoPilot starts where the pain is greatest. Each agent follows the same discipline: parse the mess, propose a draft, wait for the owner, then record — and the math is always done by validated code, never by the model.</p>
-
-        <article class="agent-card">
-          <div class="agent-head">
-            <div>
-              <p class="agent-flag">FLAGSHIP</p>
-              <h3>1 · Procurement, Inventory &amp; Supplier Management Agent</h3>
-              <p class="agent-sub">Manage purchases, invoices, stock and reorder decisions — from conversational quick-log to price evidence.</p>
-            </div>
-          </div>
-          <p class="agent-flow">Invoice / conversational log <span aria-hidden="true">→</span> Purchase <span aria-hidden="true">→</span> Inventory <span aria-hidden="true">→</span> Reorder</p>
-          <ul class="agent-steps">
-            <li>Extract purchases from invoice photos or conversational quick-log</li>
-            <li>Create a purchase record for owner review and approval</li>
-            <li>Update inventory from every approved purchase</li>
-            <li>Detect low stock before it becomes a stockout</li>
-            <li>Calculate reorder quantities from your own consumption history</li>
-            <li>Compare historical prices per supplier</li>
-            <li>Generate purchase recommendations with evidence</li>
-            <li>Ask for owner confirmation before anything records</li>
-          </ul>
-        </article>
-
-        <article class="agent-card">
-          <div class="agent-head">
-            <div>
-              <p class="agent-flag agent-flag-plain">PLANNED</p>
-              <h3>2 · Sales &amp; Menu Management Agent</h3>
-              <p class="agent-sub">Analyze sales, menu performance, costs and trends — simple answers, not spreadsheets.</p>
-            </div>
-          </div>
-          <p class="agent-flow">Sales data <span aria-hidden="true">→</span> Trend analysis <span aria-hidden="true">→</span> Menu performance <span aria-hidden="true">→</span> Business insights</p>
-          <ul class="agent-steps">
-            <li>Import sales data from existing records</li>
-            <li>Analyze sales trends over time</li>
-            <li>Rank menu items by performance</li>
-            <li>Analyze menu profitability against ingredient costs</li>
-            <li>Detect unusual sales changes and flag them early</li>
-            <li>Extract keywords and sentiment, mapped to menu items or staff changes</li>
-            <li>Identify popular menu combinations</li>
-            <li>Recommend menu actions owners can actually take</li>
-          </ul>
-        </article>
-      </div>
-    </section>
-
-    <!-- ================= PRINCIPLES ================= -->
-    <section class="section section-tint" id="principles">
-      <div class="container">
-        <p class="eyebrow">WHY IT'S SAFE</p>
-        <h2 class="section-title">Honest by design.</h2>
-        <p class="section-lede">RestoPilot handles financial records, so it is deliberately narrow and deliberately human-in-the-loop:</p>
-        <div class="principle-grid">
-          <div class="principle"><strong>AI proposes; code calculates; a human decides.</strong>Unit-price math, unit conversion, price comparison, stock ledger and approval workflow are deterministic code — never LLM-decided.</div>
-          <div class="principle"><strong>Approval is correlated, never generic.</strong>A “YA” approves only the action explicitly tied to that conversation — never an unrelated pending draft. Stale versions, duplicates and cross-tenant decisions are rejected.</div>
-          <div class="principle"><strong>Every restaurant is an isolated tenant.</strong>A WhatsApp number is linked to exactly one restaurant. A registered number's conversation is scoped to its own restaurant, always.</div>
-          <div class="principle"><strong>Honesty over impressive numbers.</strong>Stock is an estimate (no POS consumption data yet). A recorded purchase is not a recorded payment. Comparisons come only from your own approved history.</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ================= CTA ================= -->
-    <section class="section cta">
-      <div class="container cta-inner">
-        <h2>From purchase to peace of mind.</h2>
-        <p>Run the demo: send a purchase over WhatsApp, review the draft, approve it, and watch the dashboard record the truth.</p>
-        <a class="button primary" href="/app.html">Sign in to the demo <span aria-hidden="true">→</span></a>
-      </div>
-    </section>
-  </main>
-
-  <footer class="site-footer">
-    <div class="container footer-inner">
-      <span class="brand"><span class="brand-mark" aria-hidden="true">r<span>·</span></span>RestoPilot</span>
-      <p>AIID Capstone · DeepWisdom Atoms (agent-first track) + StepFun models track · Frederic Setievi, Muneeb Alvi, Annabel Leonardi</p>
-      <p class="footer-fine">Demo-grade authentication · Stock is an estimate · Nothing posts without your approval.</p>
     </div>
-  </footer>
+
+    <!-- trust strip -->
+    <div class="container">
+      <ul class="trust-strip">
+        <li><strong>5.28M</strong><span>F&amp;B businesses in Indonesia (BPS, 2024)</span></li>
+        <li><strong>4 ways</strong><span>to log a purchase — text, photo, voice, Telegram</span></li>
+        <li><strong>1 rule</strong><span>nothing records without the owner's <em>YA</em></span></li>
+        <li><strong>ID / EN</strong><span>dashboard and replies, in both languages</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= PROBLEM ================= -->
+  <section class="section" id="problem">
+    <div class="container">
+      <p class="eyebrow">THE PROBLEM</p>
+      <h2 class="section-title">Small restaurants run on WhatsApp, paper and memory.</h2>
+      <p class="section-lede">Indonesia counts 5.28 million F&amp;B service businesses (BPS, 2024), yet most owners manage purchasing, stock and suppliers by hand — through invoices, WhatsApp chats, spreadsheets, or physical market visits. With no dedicated procurement team, records stay scattered and decisions go unrecorded.</p>
+      <div class="problem-grid">
+        <article class="problem-card">
+          <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-store"/></svg></span>
+          <h3>Procurement, Inventory &amp; Supplier Management</h3>
+          <p>Owners struggle to track stock levels, detect supplier price changes, compare suppliers, and decide what and when to purchase. The result: overstocking, stockouts, and unnecessary costs — and when a price spikes, nothing proves when it started.</p>
+        </article>
+        <article class="problem-card">
+          <span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-ledger"/></svg></span>
+          <h3>Sales &amp; Menu Management</h3>
+          <p>Owners may have sales records but lack the time or technical skills to analyze them in Excel. They need simple answers — which menus sell best, where sales are declining, what ingredients cost, what's actually profitable — not another complex spreadsheet.</p>
+        </article>
+      </div>
+      <div class="problem-quote">
+        <svg class="quote-mark" viewBox="0 0 48 48" aria-hidden="true"><path d="M10 34c-3-4-4-8-2-13l6 3c-1 3-1 5 1 7 2-1 4-3 4-7V8h12v12c0 8-5 13-11 15-4-1-8-1-10-1Zm24 0c-3-4-4-8-2-13l6 3c-1 3-1 5 1 7 2-1 4-3 4-7V8h12v12c0 8-5 13-11 15-4-1-8-1-10-1Z" fill="currentColor"/></svg>
+        <p>“One owner we interviewed tracks daily totals in Excel — never per item, never per stock count. Not every purchase has a receipt. She prefers texting, and wants alerts when stock runs low and prices jump.”</p>
+        <small>From our field interviews with restaurant owners — the findings RestoPilot is built on.</small>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= SOLUTION ================= -->
+  <section class="section section-green" id="solution">
+    <div class="container">
+      <p class="eyebrow eyebrow-light">THE SOLUTION</p>
+      <h2 class="section-title">Keep your POS. RestoPilot owns the money-out.</h2>
+      <p class="section-lede">POS systems and QRIS already own money-in — customer sales. RestoPilot captures the other half: <strong>what was bought, from whom, at what unit price, what stock remains, and who is owed.</strong> A WhatsApp AI agent plus a simple web dashboard, built for messy real-world inputs.</p>
+      <div class="solution-grid">
+        <article class="solution-card">
+          <span class="card-icon card-icon-dark"><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg></span>
+          <h3>WhatsApp-first intake</h3>
+          <p>Send purchase text, receipt photos, or voice notes — the way owners already communicate. Informal Indonesian is parsed into a structured draft: items, quantities, units, prices, supplier.</p>
+        </article>
+        <article class="solution-card">
+          <span class="card-icon card-icon-dark"><svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg></span>
+          <h3>Approval before anything records</h3>
+          <p>Nothing posts without the owner. Review and correct the draft on WhatsApp or the dashboard, then approve with a correlated <strong>YA</strong>. Missing or ambiguous fields are never silently guessed.</p>
+        </article>
+        <article class="solution-card">
+          <span class="card-icon card-icon-dark"><svg class="ico" aria-hidden="true"><use href="#i-ledger"/></svg></span>
+          <h3>One atomic transaction</h3>
+          <p>Approval records the purchase, the stock movement, and the audit trail in a single transaction. The dashboard, the WhatsApp summary and the activity log always report the same truth.</p>
+        </article>
+        <article class="solution-card">
+          <span class="card-icon card-icon-dark"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg></span>
+          <h3>Dashboard truth &amp; price evidence</h3>
+          <p>Purchases, inventory estimates, pending approvals and activity in one view. Same-supplier 30-day price comparisons surface spikes — like the Telur +16.3% case — straight from your own approved history.</p>
+        </article>
+      </div>
+      <div class="loop-diagram" role="img" aria-label="The RestoPilot loop: messy input, editable draft, owner approval, recorded purchase, dashboard truth and price evidence">
+        <div class="loop-step"><span>1</span>Messy input<br><small>WhatsApp text · nota photo · voice note</small></div>
+        <div class="loop-arrow" aria-hidden="true">→</div>
+        <div class="loop-step"><span>2</span>Editable draft<br><small>structured, correctable, never guessed</small></div>
+        <div class="loop-arrow" aria-hidden="true">→</div>
+        <div class="loop-step loop-accent"><span>3</span>Owner approval<br><small>correlated “YA” — human decides</small></div>
+        <div class="loop-arrow" aria-hidden="true">→</div>
+        <div class="loop-step"><span>4</span>Recorded purchase<br><small>purchase + stock + audit, atomically</small></div>
+        <div class="loop-arrow" aria-hidden="true">→</div>
+        <div class="loop-step"><span>5</span>Dashboard truth<br><small>inventory estimate · price evidence</small></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= AGENTS / FEATURES ================= -->
+  <section class="section" id="agents">
+    <div class="container">
+      <p class="eyebrow">THE AGENTS</p>
+      <h2 class="section-title">Two agents, built for the daily grind.</h2>
+      <p class="section-lede">RestoPilot starts where the pain is greatest. Each agent follows the same discipline: parse the mess, propose a draft, wait for the owner, then record — and the math is always done by validated code, never by the model.</p>
+
+      <article class="agent-card">
+        <div class="agent-head">
+          <div>
+            <p class="agent-flag">FLAGSHIP · LIVE</p>
+            <h3>1 · Procurement, Inventory &amp; Supplier Management Agent</h3>
+            <p class="agent-sub">Manage purchases, invoices, stock and reorder decisions — from conversational quick-log to price evidence.</p>
+          </div>
+          <div class="agent-illustration" aria-hidden="true">
+            <svg viewBox="0 0 320 120" class="agent-scene">
+              <rect x="8" y="18" width="86" height="96" rx="10" fill="#eef1e6" stroke="#dce3d6"/>
+              <rect x="20" y="30" width="46" height="34" rx="4" fill="#fff" stroke="#dce3d6"/>
+              <path d="M24 58l10-12 8 8 6-7 10 11" stroke="#6d8951" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <circle cx="32" cy="38" r="3" fill="#a86b24"/>
+              <rect x="20" y="72" width="62" height="4" rx="2" fill="#d8e6ba"/>
+              <rect x="20" y="82" width="48" height="4" rx="2" fill="#e6e8e0"/>
+              <rect x="20" y="92" width="56" height="4" rx="2" fill="#e6e8e0"/>
+              <path d="M100 66h18m0 0-6-6m6 6-6 6" stroke="#6d8951" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <rect x="126" y="18" width="86" height="96" rx="10" fill="#fff" stroke="#dce3d6"/>
+              <rect x="138" y="32" width="38" height="8" rx="4" fill="#d8e6ba"/>
+              <rect x="138" y="48" width="62" height="4" rx="2" fill="#e6e8e0"/>
+              <rect x="138" y="58" width="54" height="4" rx="2" fill="#e6e8e0"/>
+              <rect x="138" y="74" width="62" height="14" rx="7" fill="#214f40"/>
+              <text x="169" y="84.5" font-family="Inter,sans-serif" font-size="8" font-weight="700" fill="#d8e6ba" text-anchor="middle">YA · approve</text>
+              <path d="M218 66h18m0 0-6-6m6 6-6 6" stroke="#6d8951" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <rect x="244" y="18" width="68" height="96" rx="10" fill="#183f35"/>
+              <rect x="256" y="32" width="30" height="6" rx="3" fill="#d8e6ba" opacity=".9"/>
+              <rect x="256" y="46" width="44" height="3" rx="1.5" fill="#9eb2a7"/>
+              <rect x="256" y="54" width="36" height="3" rx="1.5" fill="#9eb2a7"/>
+              <path d="M256 92l8-9 6 6 5-5 9 8" stroke="#b9dc9a" stroke-width="2" fill="none" stroke-linecap="round"/>
+              <rect x="256" y="72" width="44" height="3" rx="1.5" fill="#9eb2a7"/>
+            </svg>
+          </div>
+        </div>
+        <p class="agent-flow">Invoice / conversational log <span aria-hidden="true">→</span> Purchase <span aria-hidden="true">→</span> Inventory <span aria-hidden="true">→</span> Reorder</p>
+        <ul class="agent-steps">
+          <li>Extract purchases from invoice photos or conversational quick-log</li>
+          <li>Create a purchase record for owner review and approval</li>
+          <li>Update inventory from every approved purchase</li>
+          <li>Detect low stock before it becomes a stockout</li>
+          <li>Calculate reorder quantities from your own consumption history</li>
+          <li>Compare historical prices per supplier</li>
+          <li>Generate purchase recommendations with evidence</li>
+          <li>Ask for owner confirmation before anything records</li>
+        </ul>
+      </article>
+
+      <article class="agent-card agent-planned">
+        <div class="agent-head">
+          <div>
+            <p class="agent-flag agent-flag-plain">PLANNED</p>
+            <h3>2 · Sales &amp; Menu Management Agent</h3>
+            <p class="agent-sub">Analyze sales, menu performance, costs and trends — simple answers, not spreadsheets.</p>
+          </div>
+          <div class="agent-illustration" aria-hidden="true">
+            <svg viewBox="0 0 320 120" class="agent-scene agent-scene-muted">
+              <rect x="100" y="14" width="120" height="92" rx="10" fill="#fff" stroke="#dce3d6"/>
+              <path d="M120 84c14-8 20-30 34-32s22 10 34-2" stroke="#c9d6bd" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-dasharray="5 5"/>
+              <rect x="120" y="28" width="34" height="7" rx="3.5" fill="#eef1e6"/>
+              <rect x="164" y="22" width="10" height="42" rx="4" fill="#d8e6ba" opacity=".55"/>
+              <rect x="178" y="34" width="10" height="30" rx="4" fill="#d8e6ba" opacity=".4"/>
+              <rect x="192" y="16" width="10" height="48" rx="4" fill="#d8e6ba" opacity=".7"/>
+              <circle cx="132" cy="52" r="6" fill="none" stroke="#c9d6bd" stroke-width="2" stroke-dasharray="3 3"/>
+            </svg>
+          </div>
+        </div>
+        <p class="agent-flow">Sales data <span aria-hidden="true">→</span> Trend analysis <span aria-hidden="true">→</span> Menu performance <span aria-hidden="true">→</span> Business insights</p>
+        <ul class="agent-steps">
+          <li>Import sales data from existing records</li>
+          <li>Analyze sales trends over time</li>
+          <li>Rank menu items by performance</li>
+          <li>Analyze menu profitability against ingredient costs</li>
+          <li>Detect unusual sales changes and flag them early</li>
+          <li>Extract keywords and sentiment, mapped to menu items or staff changes</li>
+          <li>Identify popular menu combinations</li>
+          <li>Recommend menu actions owners can actually take</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <!-- ================= DASHBOARD PREVIEW ================= -->
+  <section class="section section-tint" id="dashboard">
+    <div class="container">
+      <p class="eyebrow">THE DASHBOARD</p>
+      <h2 class="section-title">The same truth, in one calm view.</h2>
+      <p class="section-lede">Everything the agent records is yours to inspect: pending approvals, purchase history, inventory estimates, spending trends and price evidence — in Indonesian or English.</p>
+      <div class="browser" role="img" aria-label="The RestoPilot dashboard: sidebar with Overview and Inventory pages, stat tiles, a 14-day spending chart, top ingredients, and an approval card">
+        <div class="browser-bar"><span></span><span></span><span></span><em>restopilot-dashboard.pub.atoms.world/app.html</em></div>
+        <div class="browser-body">
+          <div class="dash-side">
+            <span class="dash-brand">r<span>·</span> RestoPilot</span>
+            <span class="dash-nav-item">Ringkasan</span>
+            <span class="dash-nav-item">Inventaris</span>
+            <span class="dash-nav-item">Pembelian</span>
+            <span class="dash-nav-item">Persetujuan</span>
+            <span class="dash-nav-item">Aturan</span>
+            <span class="dash-user">Warung Bu Sari</span>
+          </div>
+          <div class="dash-main">
+            <div class="dash-tiles">
+              <div class="dash-tile"><small>Pengeluaran 14 hari</small><strong>Rp4.810.000</strong></div>
+              <div class="dash-tile"><small>Stok menipis</small><strong class="dash-warn">2 item</strong></div>
+              <div class="dash-tile"><small>Draft menunggu</small><strong>1</strong></div>
+            </div>
+            <div class="dash-panels">
+              <div class="dash-panel">
+                <small>Tren pengeluaran · 14 hari</small>
+                <svg class="dash-chart" viewBox="0 0 260 90" preserveAspectRatio="none" aria-hidden="true">
+                  <path d="M0 70C20 66 30 40 50 44s28 26 48 22 26-38 46-42 30 10 46 6 30-18 70-26" fill="none" stroke="#6d8951" stroke-width="2.5" stroke-linecap="round"/>
+                  <path d="M0 70C20 66 30 40 50 44s28 26 48 22 26-38 46-42 30 10 46 6 30-18 70-26 L260 90 L0 90Z" fill="#6d8951" opacity=".12"/>
+                  <circle cx="190" cy="30" r="3.4" fill="#a86b24"/>
+                </svg>
+              </div>
+              <div class="dash-panel dash-approvals">
+                <small>Menunggu persetujuan</small>
+                <div class="dash-approval"><span class="dash-chip">Telur 10 kg · Rp28.500/kg</span><span class="dash-chip dash-chip-warn">+16.3% vs 30 hari</span></div>
+                <span class="dash-ya">Balas <strong>YA</strong> untuk setujui</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <ul class="dash-points">
+        <li><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg><div><strong>Charts with provenance.</strong><span>14-day spending trend and top ingredients — computed only from approved purchases.</span></div></li>
+        <li><svg class="ico" aria-hidden="true"><use href="#i-ledger"/></svg><div><strong>Stok opname.</strong><span>Physical counts reconcile the estimate; every stock write is confirmed, audited and retry-safe.</span></div></li>
+        <li><svg class="ico" aria-hidden="true"><use href="#i-globe"/></svg><div><strong>ID / EN, one toggle.</strong><span>The whole dashboard switches language and remembers your choice.</span></div></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= PRINCIPLES ================= -->
+  <section class="section" id="principles">
+    <div class="container">
+      <p class="eyebrow">WHY IT'S SAFE</p>
+      <h2 class="section-title">Honest by design.</h2>
+      <p class="section-lede">RestoPilot handles financial records, so it is deliberately narrow and deliberately human-in-the-loop:</p>
+      <div class="principle-grid">
+        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-calc"/></svg></span><strong>AI proposes; code calculates; a human decides.</strong>Unit-price math, unit conversion, price comparison, stock ledger and approval workflow are deterministic code — never LLM-decided.</div>
+        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-fingerprint"/></svg></span><strong>Approval is correlated, never generic.</strong>A “YA” approves only the action explicitly tied to that conversation — never an unrelated pending draft. Stale versions, duplicates and cross-tenant decisions are rejected.</div>
+        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-lock"/></svg></span><strong>Every restaurant is an isolated tenant.</strong>A WhatsApp number is linked to exactly one restaurant. A registered number's conversation is scoped to its own restaurant, always.</div>
+        <div class="principle"><span class="card-icon"><svg class="ico" aria-hidden="true"><use href="#i-scale"/></svg></span><strong>Honesty over impressive numbers.</strong>Stock is an estimate (no POS consumption data yet). A recorded purchase is not a recorded payment. Comparisons come only from your own approved history.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FAQ ================= -->
+  <section class="section section-tint" id="faq">
+    <div class="container faq-inner">
+      <p class="eyebrow">QUESTIONS</p>
+      <h2 class="section-title">Asked by owners, answered honestly.</h2>
+      <div class="faq-list">
+        <details open>
+          <summary>Do I have to replace my POS or QRIS?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p>No. POS and QRIS keep owning money-in. RestoPilot only handles the money-out side: purchases, stock estimates and supplier prices. You keep every tool you already use.</p>
+        </details>
+        <details>
+          <summary>What exactly can I send?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p>A WhatsApp or Telegram text like <em>“beli cabai 3 kg 150rb”</em>, a photo of a market nota, a PDF invoice, or a voice note. Photos and voice are transcribed into the same editable draft — you approve before anything records.</p>
+        </details>
+        <details>
+          <summary>Can the AI spend or record money by itself?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p>Never. The model only reads and phrases; all math is deterministic code, and every write needs your explicit, correlated approval. A stale or duplicated “YA” is rejected.</p>
+        </details>
+        <details>
+          <summary>Is my restaurant's data visible to others?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p>No. Each restaurant is an isolated tenant. A linked number's drafts, approvals and summaries are scoped to that restaurant only — the assistant cannot read or mention another restaurant's data.</p>
+        </details>
+        <details>
+          <summary>How accurate is the stock estimate?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p>Stock starts from your approved purchases and improves with usage, waste and sales records — and a physical count (stok opname) resets it to ground truth whenever you take one. We say plainly: it is an estimate, and every correction is audited.</p>
+        </details>
+        <details>
+          <summary>What does the demo include?<svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></summary>
+          <p>A seeded restaurant with purchase history, a WhatsApp simulator, the full dashboard, and both languages. Nothing you approve in the demo touches a real supplier — demo-grade authentication applies.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= CTA ================= -->
+  <section class="section cta">
+    <div class="container cta-inner">
+      <span class="cta-mark" aria-hidden="true">r<span>·</span></span>
+      <h2>From purchase to peace of mind.</h2>
+      <p>Run the demo: send a purchase over WhatsApp, review the draft, approve it, and watch the dashboard record the truth.</p>
+      <a class="button button-lg primary" href="/app.html">Sign in to the demo <svg class="ico" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-grid">
+    <div class="footer-brand">
+      <span class="brand"><span class="brand-mark" aria-hidden="true">r<span>·</span></span>RestoPilot</span>
+      <p>The money-out half of your restaurant — purchasing, stock and supplier prices, recorded through the chat you already use.</p>
+    </div>
+    <nav class="footer-col" aria-label="Landing sections">
+      <h4>Explore</h4>
+      <a href="#problem">The problem</a>
+      <a href="#solution">The solution</a>
+      <a href="#agents">The agents</a>
+      <a href="#dashboard">The dashboard</a>
+      <a href="#principles">Why it's safe</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <nav class="footer-col" aria-label="Project links">
+      <h4>Project</h4>
+      <a href="/app.html">Open the dashboard</a>
+      <a href="https://github.com/fredericsetievi/AI-Agent-Resto-Pilot" rel="noopener">GitHub repository</a>
+      <a href="#top">Back to top</a>
+    </nav>
+  </div>
+  <div class="container footer-fine-print">
+    <p>AIID Capstone · DeepWisdom Atoms (agent-first track) + StepFun models track · Frederic Setievi, Muneeb Alvi, Annabel Leonardi</p>
+    <p class="footer-fine">Demo-grade authentication · Stock is an estimate · Nothing posts without your approval.</p>
+  </div>
+</footer>
 </body>
 </html>
