@@ -69,6 +69,7 @@ from .telegram import (
     matches_secret as matches_telegram_secret,
     parse_update as parse_telegram_update,
     send_text as send_telegram_text,
+    send_voice as send_telegram_voice,
     validate_bot_token as validate_telegram_token,
     validate_secret_token as validate_telegram_secret,
 )
@@ -1523,7 +1524,7 @@ def create_app(
                         client=telegram_http_client,
                     )
                     digest = hashlib.sha256(photo).hexdigest()
-                    payload["operation_source"] = {"digest": digest}
+                    payload["operation_source"] = {"digest": digest, "caption": payload["text"]}
                     payload["extracted"] = await filter_kitchen_items(
                         await extract_invoice(
                             photo,
@@ -1533,6 +1534,7 @@ def create_app(
                             model=vision_model,
                             base_url=vision_base_url,
                             client=vision_http_client,
+                            caption=payload["text"],
                         ),
                         restaurant_id,
                     )
@@ -1650,18 +1652,44 @@ def create_app(
             # A Telegram retry of an update already answered; the stored
             # response replays but the bot must not double-send.
             return
-        try:
-            await send_telegram_text(
-                telegram_bot_token,
-                message["sender"],
-                outbound["body"],
-                api_base=telegram_api_base,
-                client=telegram_http_client,
-            )
-        except (TelegramError, ValueError) as exc:
-            await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], TG_OUTBOUND_PENDING)
-            status = exc.status if isinstance(exc, TelegramError) else 500
-            raise DomainError("telegram_send_failed", str(exc), status)
+        # Mirrors the WhatsApp summary voice note: the weekly summary may go
+        # out as a spoken voice note when StepFun TTS is configured. Every
+        # synthesis, upload or send problem degrades to the plain text reply.
+        voice_sent = False
+        summary_result = result.get("result") or {}
+        if summary_result.get("action") == "weekly_summary" and summary_result.get("summary") and vision_api_key:
+            try:
+                speech = await synthesize_speech(
+                    outbound["body"],
+                    api_key=vision_api_key,
+                    model=tts_model,
+                    voice=tts_voice,
+                    base_url=vision_base_url,
+                    client=vision_http_client,
+                )
+                await send_telegram_voice(
+                    telegram_bot_token,
+                    message["sender"],
+                    speech,
+                    api_base=telegram_api_base,
+                    client=telegram_http_client,
+                )
+                voice_sent = True
+            except (TelegramError, StepFunAudioError, ValueError) as exc:
+                logger.warning("Telegram voice reply unavailable; falling back to text: %s", exc)
+        if not voice_sent:
+            try:
+                await send_telegram_text(
+                    telegram_bot_token,
+                    message["sender"],
+                    outbound["body"],
+                    api_base=telegram_api_base,
+                    client=telegram_http_client,
+                )
+            except (TelegramError, ValueError) as exc:
+                await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], TG_OUTBOUND_PENDING)
+                status = exc.status if isinstance(exc, TelegramError) else 500
+                raise DomainError("telegram_send_failed", str(exc), status)
         await run_in_threadpool(store.set_whatsapp_message_status, outbound["id"], TG_OUTBOUND_SENT)
 
 

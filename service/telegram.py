@@ -104,7 +104,11 @@ def parse_update(raw):
     if isinstance(photo, list) and photo and all(isinstance(item, dict) for item in photo):
         largest = max(photo, key=lambda item: item.get("file_size") or 0)
         media_id = largest.get("file_id")
-        text, num_media, media_kind = "", 1, "image"
+        # The caption rides along as the purchase text, the same way WhatsApp
+        # reads image captions; a missing or oversized caption stays empty.
+        caption = message.get("caption")
+        caption = caption.strip() if isinstance(caption, str) else ""
+        text, num_media, media_kind = (caption if caption and len(caption) <= 10_000 else ""), 1, "image"
     elif isinstance(message.get("voice"), dict):
         media_id = message["voice"].get("file_id")
         text, num_media, media_kind = "", 1, "audio"
@@ -155,6 +159,41 @@ async def send_text(token, chat_id, text, *, api_base=DEFAULT_API_BASE, client=N
         raise TelegramError("Telegram returned an invalid success response.")
     if ok is not True:
         raise TelegramError("Telegram reported the reply as failed.")
+
+
+async def send_voice(token, chat_id, audio, *, api_base=DEFAULT_API_BASE, client=None, filename="restopilot.ogg"):
+    """Send one OGG voice note (multipart upload — no JSON body).
+
+    Telegram requires Opus-encoded OGG for sendVoice; callers degrade to a
+    plain text reply when synthesis or the upload fails, so this never
+    becomes the only way a reply reaches the owner.
+    """
+    if not token or not token.strip():
+        raise TelegramError("Telegram Bot API is not configured.", 503)
+    if not isinstance(audio, (bytes, bytearray)) or not audio:
+        raise TelegramError("Telegram voice reply needs synthesized audio bytes.", 400)
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=30.0, follow_redirects=False)
+    try:
+        response = await client.post(
+            api_base + f"/bot{token}/sendVoice",
+            data={"chat_id": chat_id},
+            files={"voice": (filename, bytes(audio), "audio/ogg")},
+        )
+    except httpx.HTTPError:
+        raise TelegramError("Telegram Bot API could not be reached.")
+    finally:
+        if owns_client:
+            await client.aclose()
+    if response.status_code != 200:
+        status = 429 if response.status_code == 429 else 502
+        raise TelegramError(f"Telegram rejected the voice reply (HTTP {response.status_code}).", status)
+    try:
+        ok = response.json()["ok"]
+    except (ValueError, TypeError):
+        raise TelegramError("Telegram returned an invalid success response.")
+    if ok is not True:
+        raise TelegramError("Telegram reported the voice reply as failed.")
 
 
 async def download_file(token, file_id, *, api_base=DEFAULT_API_BASE, client=None, max_bytes=None):
