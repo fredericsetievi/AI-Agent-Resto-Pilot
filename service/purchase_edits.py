@@ -125,13 +125,21 @@ class PurchaseEditsMixin:
 
     SQL runs through ``self._inventory_query`` so ``?`` placeholders work
     on SQLite and Postgres alike, exactly like the inventory operations.
+    The tenant column is ``restaurant_id`` in SQLite and ``slug`` in the
+    hosted Postgres schema, resolved per query via ``_tenant_col()``.
     """
+
+    def _tenant_col(self):
+        return "slug" if self.inventory_postgres else "restaurant_id"
+
+    def _stock_table(self):
+        return "stock" if self.inventory_postgres else "inventory"
 
     def _edit_purchase_rows(self, conn, tenant, limit=30):
         rows = self._inventory_query(
             conn,
             "SELECT id, supplier, created_at, body, voided_at FROM purchases "
-            "WHERE restaurant_id=? AND voided_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ?",
+            f"WHERE {self._tenant_col()}=? AND voided_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ?",
             (tenant, limit),
         ).fetchall()
         purchases = []
@@ -195,7 +203,7 @@ class PurchaseEditsMixin:
         row = self._inventory_query(
             conn,
             "SELECT id, supplier, created_at, body, voided_at FROM purchases "
-            "WHERE restaurant_id=? AND id LIKE ? AND voided_at IS NULL",
+            f"WHERE {self._tenant_col()}=? AND id LIKE ? AND voided_at IS NULL",
             (tenant, purchase_id + "%"),
         ).fetchone()
         if not row:
@@ -326,22 +334,23 @@ class PurchaseEditsMixin:
         # Compensating stock movements: the difference between the recorded
         # items and the corrected ones, applied per ingredient.
         for ingredient, delta in deltas.items():
-            row = self._inventory_query(conn, "SELECT quantity FROM inventory WHERE restaurant_id=? AND ingredient_id=?",
+            row = self._inventory_query(conn, f"SELECT quantity FROM {self._stock_table()} WHERE {self._tenant_col()}=? AND ingredient_id=?",
                                         (tenant, ingredient)).fetchone()
             stock = Decimal(row[0]) if row and row[0] is not None else Decimal(0)
             new_quantity = stock + delta
             if row:
-                self._inventory_query(conn, "UPDATE inventory SET quantity=? WHERE restaurant_id=? AND ingredient_id=?",
+                self._inventory_query(conn, f"UPDATE {self._stock_table()} SET quantity=? WHERE {self._tenant_col()}=? AND ingredient_id=?",
                                       (str(new_quantity), tenant, ingredient))
             else:
-                self._inventory_query(conn, "INSERT INTO inventory (restaurant_id, ingredient_id, quantity) VALUES (?, ?, ?)",
+                self._inventory_query(conn, f"INSERT INTO {self._stock_table()} ({self._tenant_col()}, ingredient_id, quantity) VALUES (?, ?, ?)",
                                       (tenant, ingredient, str(new_quantity)))
-            self._inventory_query(conn, "INSERT INTO movements (id, purchase_id, ingredient_id, quantity, created_at, restaurant_id) VALUES (?, NULL, ?, ?, ?, ?)",
+            self._inventory_query(conn, f"INSERT INTO movements (id, purchase_id, ingredient_id, quantity, created_at, {self._tenant_col()}) VALUES (?, NULL, ?, ?, ?, ?)",
                                   (uuid.uuid4().hex, ingredient, str(delta), now(), tenant))
         if proposal["kind"] == "void":
             body = dict(purchase)
             body["voided"] = True
-            self._inventory_query(conn, "UPDATE purchases SET body=?, voided_at=? WHERE id=? AND restaurant_id=?",
+            self._inventory_query(conn, "UPDATE purchases SET body=?, voided_at=? WHERE id=? AND "
+                                        f"{self._tenant_col()}=?",
                                   (json.dumps(body, ensure_ascii=False), now(), purchase["id"], tenant))
             self._audit(conn, "purchase_voided",
                         f"Purchase {purchase['id'][:8]} voided from chat; stock reversed ("
@@ -354,7 +363,8 @@ class PurchaseEditsMixin:
         body["total_idr"] = draft_total(new_items, [])
         if proposal.get("new_supplier"):
             body["supplier"] = proposal["new_supplier"]
-        self._inventory_query(conn, "UPDATE purchases SET body=?, supplier=? WHERE id=? AND restaurant_id=?",
+        self._inventory_query(conn, "UPDATE purchases SET body=?, supplier=? WHERE id=? AND "
+                                    f"{self._tenant_col()}=?",
                               (json.dumps(body, ensure_ascii=False), body.get("supplier"), purchase["id"], tenant))
         self._audit(conn, "purchase_edited",
                     f"Purchase {purchase['id'][:8]} edited from chat ("

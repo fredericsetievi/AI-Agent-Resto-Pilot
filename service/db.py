@@ -1343,8 +1343,6 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 result["action"] = "active_draft_exists"
             else:
                 extracted = extracted_text if extracted_text is not None else extract_purchase(payload["text"])
-                import sys as _sys
-                print("DBG-EXTRACT:", payload["text"][:60], "->", [(i.get("raw_name"), i.get("canonical_quantity"), i.get("unit_price_idr")) for i in extracted.get("items", [])], "supplier:", extracted.get("supplier"), file=_sys.stderr)
                 # Plain text with no purchase signal (a greeting, chat noise) is
                 # an intent miss: every parsed line is a bare word with no
                 # catalog match, quantity, or price. Answer with help instead of
