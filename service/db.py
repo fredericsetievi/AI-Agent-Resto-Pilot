@@ -20,6 +20,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .inventory import InventoryMixin, SQLITE_SCHEMA
+from .menu_insights import MenuInsightsMixin
 from .operations import OperationsMixin, SQLITE_SCHEMA as OPERATIONS_SQLITE_SCHEMA
 from .purchase_sources import PurchaseSourcesMixin, SQLITE_SCHEMA as PURCHASE_SOURCES_SQLITE_SCHEMA
 from .purchase_idempotency import purchase_idempotent
@@ -232,7 +233,7 @@ def normalize_items_for_catalog(items, catalog):
     return normalized, list(dict.fromkeys(warnings))
 
 
-class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin):
+class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, MenuInsightsMixin):
     def __init__(self, path, seed=True):
         self.path = str(path)
         # Each restaurant owns a catalog: the shared base plus the ingredients

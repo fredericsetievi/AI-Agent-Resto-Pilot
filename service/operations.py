@@ -286,7 +286,16 @@ class OperationsMixin:
             return None
         text = str(text or "").strip()
         command = normalized(text)
+        from .menu_insights import menu_question_preempts_operations
+        if not isinstance(candidate, dict) and menu_question_preempts_operations(text) and self.menu_facts(text, tenant, conn=conn) is not None:
+            # A question about recorded sales (ranking/margin/recap) is
+            # answered from the ledger; never claimed as an operations report.
+            return None
         candidate = candidate if isinstance(candidate, dict) else parse_operations_text(text)
+        if not candidate and self.menu_facts(text, tenant, conn=conn) is not None:
+            # A sales/menu question is answered from the ledger (the
+            # stock_answer slot); the operations classifier must not claim it.
+            return None
         available = self._operations_available(conn)
         if not available:
             if candidate:
