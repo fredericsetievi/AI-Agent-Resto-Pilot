@@ -3,12 +3,13 @@
 Tests use fresh restaurants (no seeded purchase history) so counts and
 resolutions are exact; the demo tenant carries synthetic history.
 """
+import contextlib
 import json
 from decimal import Decimal
 from uuid import uuid4
 
 from service.db import Store
-from service.suppliers import parse_supplier_command, supplier_alert_hint
+from service.suppliers import SupplierMixin, parse_supplier_command, supplier_alert_hint
 
 SENDER = "628888000111"  # linked to the fresh restaurant, not the demo tenant
 
@@ -164,3 +165,38 @@ def test_proactive_alert_hint_names_the_cheapest_known_source(tmp_path):
     # No quotes or purchases for the ingredient → honest empty hint.
     empty = supplier_alert_hint(store, rid, [{"ingredient_id": "telur", "name": "Telur"}])
     assert empty is None
+
+
+class _TenantColumnStub(SupplierMixin):
+    """Captures supplier SQL so tests can pin the dialect-aware tenant column.
+
+    Regression: supplier_for_phone hardcoded ``restaurant_id`` in its SELECT,
+    which 500s every hosted Telegram message (Postgres uses ``slug``).
+    """
+
+    def __init__(self, postgres):
+        self.inventory_postgres = postgres
+        self.captured_sql = None
+
+    def transaction(self):
+        return contextlib.nullcontext(None)
+
+    def _inventory_query(self, conn, sql, params):
+        self.captured_sql = sql
+
+        class _Cursor:
+            def fetchone(self):
+                return None
+
+        return _Cursor()
+
+
+def test_supplier_for_phone_selects_dialect_tenant_column():
+    stub = _TenantColumnStub(postgres=True)
+    assert stub.supplier_for_phone("628111222333") is None
+    assert "slug" in stub.captured_sql
+    assert "restaurant_id" not in stub.captured_sql
+
+    stub = _TenantColumnStub(postgres=False)
+    assert stub.supplier_for_phone("628111222333") is None
+    assert "restaurant_id" in stub.captured_sql
