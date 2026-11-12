@@ -33,7 +33,9 @@ const integrationDir = path.resolve(adapterDir, '../deploy/restopilot-integratio
 const frontendDir = path.join(integrationDir, 'frontend');
 const landingDir = path.join(integrationDir, 'landing');
 const shimPath = path.join(adapterDir, 'restopilot-adapter/api-base.js');
-const APP_SCRIPT = '<script src="/assets/app.js" defer></script>';
+// Tolerates cache-busted tags like <script src="/assets/app.js?v=20261112a" defer></script>
+// ( Frederic's cache-busting broke the exact string match once already).
+const APP_SCRIPT_PATTERN = /<script src="\/assets\/app\.js(?:\?[^"]*)?" defer><\/script>/;
 
 const ASSETS: Record<string, { file: string; type: string }> = {
   '/assets/i18n.js': { file: path.join(frontendDir, 'i18n.js'), type: 'text/javascript; charset=utf-8' },
@@ -55,11 +57,16 @@ function readSource(file: string): Buffer {
 
 function dashboardHtml(): string {
   const html = readSource(path.join(frontendDir, 'index.html')).toString('utf-8');
-  if (!html.includes(APP_SCRIPT)) {
+  if (!APP_SCRIPT_PATTERN.test(html)) {
     throw new Error('RestoPilot index.html no longer loads /assets/app.js; update the adapter.');
   }
   return html
-    .replace(APP_SCRIPT, `<script src="/assets/restopilot-api-base.js"></script>\n  ${APP_SCRIPT}`)
+    .replace(APP_SCRIPT_PATTERN, `<script src="/assets/restopilot-api-base.js"></script>\n  $&`)
+    // The Atoms static host serves the dashboard at the clean URL /app and
+    // answers direct /app.html requests with its "not ready" fallback, so
+    // every link into the dashboard must use /app (Nov 2026 pilot finding:
+    // the landing rendered fine but its login link led to the placeholder).
+    .replace(/href="\/app\.html"/g, 'href="/app"')
     .replace(/<title>/, '<title data-mgx-overview="title">');
 }
 
@@ -71,7 +78,8 @@ function landingHtml(): string {
   if (!html.includes('/landing-assets/styles.css')) {
     throw new Error('RestoPilot landing/index.html no longer references its stylesheet; update the adapter.');
   }
-  return html;
+  // Rewrite to the clean /app URL the Atoms static host actually serves.
+  return html.replace(/href="\/app\.html"/g, 'href="/app"');
 }
 
 function allAssets(): Record<string, { file: string; type: string }> {
@@ -139,10 +147,19 @@ export function restopilotDashboard(): Plugin {
       if (!fs.readFileSync(indexTarget).toString('utf-8').includes('/landing-assets/styles.css')) {
         throw new Error('RestoPilot build output lost the landing index.html.');
       }
+      const dashboard = dashboardHtml();
       const appTarget = path.join(outDir, 'app.html');
-      fs.writeFileSync(appTarget, dashboardHtml());
-      if (!fs.readFileSync(appTarget).toString('utf-8').includes(APP_SCRIPT)) {
+      fs.writeFileSync(appTarget, dashboard);
+      if (!APP_SCRIPT_PATTERN.test(fs.readFileSync(appTarget).toString('utf-8'))) {
         throw new Error('RestoPilot build output lost the dashboard app.html.');
+      }
+      // The Atoms static host serves the dashboard at the clean URL /app and
+      // 404s direct /app.html requests; publish the dashboard under both so
+      // the landing link and any bookmarked legacy URL both work.
+      const cleanTarget = path.join(outDir, 'app');
+      fs.writeFileSync(cleanTarget, dashboard);
+      if (!APP_SCRIPT_PATTERN.test(fs.readFileSync(cleanTarget).toString('utf-8'))) {
+        throw new Error('RestoPilot build output lost the dashboard /app.');
       }
     },
   };
