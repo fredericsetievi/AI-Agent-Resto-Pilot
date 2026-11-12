@@ -600,8 +600,7 @@ def draft_reply(draft, catalog_names=None):
     notes = []
     if unmapped:
         notes.append(
-            "Catatan: " + ", ".join(unmapped)
-            + " belum ada di daftar bahan — akan ditambahkan otomatis saat kamu balas YA."
+            "Baru: " + ", ".join(unmapped) + " — masuk daftar saat YA."
         )
     fuzzy = []
     for item in draft.get("items", []):
@@ -609,38 +608,34 @@ def draft_reply(draft, catalog_names=None):
         if not typed:
             continue
         name = (catalog_names or CATALOG_NAMES).get(item.get("ingredient_id")) or str(item.get("raw_name") or "").strip()
-        fuzzy.append(f"'{typed}' saya baca sebagai {name}")
+        fuzzy.append(f"'{typed}' → {name}")
     if fuzzy:
-        notes.append("Catatan: " + "; ".join(fuzzy) + " — tolong dicek dulu, benar kan? Balas YA jika sudah benar.")
+        notes.append("Kira-kira: " + "; ".join(fuzzy) + " — benar kan?")
     if any(_UNMAPPED_WARNING.search(str(warning_text)) is None for warning_text in draft.get("warnings", [])):
-        notes.append("Catatan: ada baris yang perlu dicek di dashboard (harga, satuan, atau keterbacaan foto).")
+        notes.append("Ada baris perlu dicek (harga, satuan, atau keterbacaan foto).")
     supplier = str(draft.get("supplier") or "").strip()
     total = _draft_total(draft)
 
     def _sections(header, items, total_label, footer):
-        summary = []
-        if supplier:
-            summary.append(f"Pemasok: {supplier}")
-        if total:
-            summary.append(f"{total_label}: Rp{_idr(total)}")
-        sections = [[header] + items]
+        main = [header] + items
         if warning:
-            sections.append([warning])
-        if summary:
-            sections.append(summary)
+            main.append(warning)
+        if supplier:
+            main.append(f"Pemasok: {supplier}")
+        if total:
+            main.append(f"{total_label}: Rp{_idr(total)}")
         if notes:
-            sections.append(notes)
-        sections.append([footer])
-        return "\n\n".join("\n".join(section) for section in sections)
+            main.extend(notes)
+        main.append(footer)
+        return "\n".join(main)
 
     if draft["status"] == "needs_clarification":
         if unmapped:
-            footer = ("Balas YA untuk konfirmasi semua item di atas — item baru otomatis masuk daftar bahan. "
-                      "Atau perbaiki dulu di dashboard. BATAL untuk batal.")
+            footer = "YA untuk catat, BATAL untuk batal."
         else:
-            footer = "Perbaiki di dashboard, lalu balas YA kalau sudah benar & barang diterima. BATAL untuk batal."
+            footer = "Perbaiki di dashboard, lalu YA. BATAL untuk batal."
         return _sections("Draf pembelian (perlu konfirmasi):", lines, "Total sementara", footer)
-    return _sections("Draf pembelian:", lines, "Total", "Balas YA jika semua barang sudah diterima, BATAL untuk batal.")
+    return _sections("Draf pembelian:", lines, "Total", "YA = barang diterima & dicatat, BATAL = batal.")
 
 
 _REMOVE_ALL = re.compile(r"(?i)^\s*(?:hapus|remove)\s+(?:semua|semuanya|all)\s*$")
