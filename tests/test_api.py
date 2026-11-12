@@ -117,6 +117,28 @@ def test_bare_count_drafts_as_pieces_and_flags_only_real_gaps(client):
     assert "Unit is missing." in item["warnings"]
 
 
+def test_followup_answer_merges_into_active_draft(client):
+    # The bot asks for bapao's missing price; the owner's answer used to be
+    # swallowed and the draft stayed stuck. The answer now merges into the
+    # active draft by item name, filling the gap so YA can record it.
+    draft = client.post("/v1/whatsapp/simulate", headers=headers(), json={"sender": "628123456789", "text": "beli bolkus jumbo 15 4000, bapao srikaya 2"}).json()["data"]["draft"]
+    assert draft["status"] == "needs_clarification"
+
+    follow = client.post("/v1/whatsapp/simulate", headers=headers(), json={"sender": "628123456789", "text": "bapao srikaya 2 4000"}).json()["data"]["draft"]
+    assert follow["id"] == draft["id"]
+    assert follow["version"] == draft["version"] + 1
+    assert follow["status"] == "pending_approval"
+    by_name = {item["raw_name"]: item for item in follow["items"]}
+    assert len(follow["items"]) == 2
+    assert by_name["bolkus jumbo"]["line_total_idr"] == 4000
+    assert by_name["bapao srikaya"]["line_total_idr"] == 4000
+    assert follow["warnings"] == []
+
+    # A follow-up with no purchase signal never disturbs the draft.
+    chatter = client.post("/v1/whatsapp/simulate", headers=headers(), json={"sender": "628123456789", "text": "halo pagi"}).json()["data"]["draft"]
+    assert chatter["version"] == follow["version"]
+
+
 def test_intake_edit_approval_updates_real_stock_and_spend(client):
     response = client.post("/v1/intake", headers=headers(), json={"text": "Cabai 500 g 25rb", "supplier": "Pasar Pagi"})
     assert response.status_code == 201, response.text

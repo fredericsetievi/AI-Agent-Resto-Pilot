@@ -1359,8 +1359,65 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 reply = stock_answer["body"]
                 result["action"] = "stock_answer"
             elif draft:
-                reply = draft_reply(draft, names)
-                result["action"] = "active_draft_exists"
+                # A follow-up during clarification usually answers the open
+                # questions ("bapao srikaya 2 4000" after "berapa harganya?").
+                # If the text parses as real purchase lines, merge them into
+                # the active draft instead of ignoring the message (Nov 2026
+                # pilot finding: the bot asked for a missing price and then
+                # swallowed the answer, leaving the draft stuck).
+                extracted = extracted_text if extracted_text is not None else extract_purchase(payload["text"])
+                parsed = [item for item in extracted["items"] if not is_chatter_item(item)]
+                has_signal = any(item.get("quantity") is not None or item.get("unit") is not None or item.get("line_total_idr") is not None for item in parsed)
+                draft_names = {str(item.get("raw_name") or "").strip().casefold() for item in draft["items"] if item.get("raw_name")}
+                # Merge only when the follow-up names an item already in the
+                # draft — a gap-fill or correction ("bapao srikaya 2 4000"
+                # after "berapa harganya?"). A text with only brand-new items
+                # is a separate purchase and still waits behind the active
+                # draft (the anti-replacement guard).
+                touches_draft = any(str(item.get("raw_name") or "").strip().casefold() in draft_names for item in parsed)
+                if parsed and has_signal and touches_draft:
+                    raw_items = [
+                        {"raw_name": item.get("raw_name"), "quantity": item.get("quantity"), "unit": item.get("unit"), "line_total_idr": item.get("line_total_idr")}
+                        for item in draft["items"]
+                    ]
+                    changed, added = [], []
+                    for new_item in parsed:
+                        name = str(new_item.get("raw_name") or "").strip().casefold()
+                        position = next((index for index, item in enumerate(raw_items) if str(item.get("raw_name") or "").strip().casefold() == name), None) if name else None
+                        fields = {"quantity": new_item.get("quantity"), "unit": new_item.get("unit"), "line_total_idr": new_item.get("line_total_idr")}
+                        if position is None:
+                            raw_items.append({"raw_name": new_item.get("raw_name"), **fields})
+                            added.append(str(new_item.get("raw_name")))
+                        else:
+                            raw_items[position].update(fields)
+                            changed.append(str(new_item.get("raw_name")))
+                    merged, field_warnings = self._normalize(raw_items, self._catalog_for(tenant))
+                    all_warnings = list(dict.fromkeys(list(extracted.get("warnings") or []) + field_warnings))
+                    draft.update({
+                        "items": merged, "warnings": all_warnings,
+                        "status": "needs_clarification" if all_warnings else "pending_approval",
+                        "total_idr": draft_total(merged, all_warnings),
+                        "version": draft["version"] + 1,
+                        "source_text": (draft.get("source_text") or payload["text"]) + "\n" + payload["text"],
+                    })
+                    if extracted.get("supplier") and not draft.get("supplier"):
+                        draft["supplier"] = extracted["supplier"]
+                    self._save_draft(conn, draft)
+                    thread["active_version"] = draft["version"]
+                    self._audit(conn, "draft_updated_from_message", f"Draft {draft['id'][:8]} updated with a follow-up message.", tenant)
+                    changed_text = ", ".join(f"'{name}'" for name in changed) if changed else ""
+                    added_text = ", ".join(f"'{name}'" for name in added) if added else ""
+                    parts = []
+                    if changed_text:
+                        parts.append(f"{changed_text} diperbarui")
+                    if added_text:
+                        parts.append(f"{added_text} ditambahkan")
+                    summary = " dan ".join(parts) if parts else "Draf diperbarui"
+                    reply = f"{summary}.\n\n" + draft_reply(draft, names)
+                    result["action"] = "draft_updated"
+                else:
+                    reply = draft_reply(draft, names)
+                    result["action"] = "active_draft_exists"
             else:
                 extracted = extracted_text if extracted_text is not None else extract_purchase(payload["text"])
                 # Plain text with no purchase signal (a greeting, chat noise) is
