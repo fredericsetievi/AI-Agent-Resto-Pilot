@@ -131,46 +131,60 @@ def _plain_decimal(value: Decimal) -> str:
     return text or "0"
 
 
-def _parse_price(text: str) -> tuple[str, int | None, str | None]:
-    """Return remaining text, integer IDR total, and an optional problem."""
+def _parse_price(text: str) -> tuple[str, int | None, str | None, bool]:
+    """Return remaining text, integer IDR amount, an optional problem, and a
+    flag telling whether the amount is a per-unit price from a bare number."""
     match = _PRICE_SUFFIX.search(text)
     if match:
         amount = _decimal_text(match.group("amount"))
         if amount is None:
-            return text[: match.start()].strip(), None, "Invalid or out-of-range price; enter a positive amount."
+            return text[: match.start()].strip(), None, "Invalid or out-of-range price; enter a positive amount.", False
         scale = match.group("scale").casefold()
         multiplier = Decimal(1_000 if scale in {"rb", "ribu"} else 1_000_000)
         total = amount * multiplier
         if total != total.to_integral_value() or total > _MAX_TOTAL:
-            return text[: match.start()].strip(), None, "Price must resolve to a whole IDR amount no greater than 1000000000000."
-        return text[: match.start()].strip(), int(total), None
+            return text[: match.start()].strip(), None, "Price must resolve to a whole IDR amount no greater than 1000000000000.", False
+        return text[: match.start()].strip(), int(total), None, False
 
     match = _RP_INTEGER.search(text)
     if match:
         digits = match.group("amount").replace(".", "")
         if len(digits) > 13:
-            return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000."
+            return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000.", False
         total = int(digits)
         if total <= 0 or total > _MAX_TOTAL:
-            return text[: match.start()].strip(), None, "Price must be positive and no greater than 1000000000000 IDR."
-        return text[: match.start()].strip(), total, None
+            return text[: match.start()].strip(), None, "Price must be positive and no greater than 1000000000000 IDR.", False
+        # An Rp-prefixed amount is always a lot total (per-piece prices with
+        # the Rp marker would be written "Rp2.500/pcs" — unsupported nuance).
+        return text[: match.start()].strip(), total, None, False
 
-    # A bare integer after an explicit quantity and unit is likely a total, but
-    # the parser requires an explicit Rp or rb/ribu/jt/juta marker to avoid
-    # confusing a total with another quantity. Real quantities are small, so a
-    # bare trailing whole number of at least 1000 is accepted as a total —
-    # owners write "cabai 2 kg 30000" far more often than they mean 30000 kg.
+    # A bare integer after an explicit quantity reads as a per-unit price —
+    # owners quote prices per piece ("banana cake 10 2500" means Rp2.500
+    # each, not a Rp250 piece; Nov 2026 pilot finding). The marker-free
+    # form avoids confusing a total with another quantity: real quantities
+    # are small, so a bare trailing whole number of at least 1000 is the
+    # price. Write "total" before the number for a lot price instead.
     match = _UNPREFIXED_INTEGER.search(text)
-    if match and _TRAILING_QUANTITY.search(text[: match.start()]):
-        bare = int(match.group("amount"))
-        if bare >= 1000:
-            return text[: match.start()].strip(), bare, None
-        return text[: match.start()].strip(), None, "Unprefixed whole-number price is unsupported; use Rp or an rb/ribu/jt/juta suffix."
+    if match:
+        prefix = text[: match.start()]
+        # "total" before the amount flips the reading: "cabai 2 kg total
+        # 30000" is Rp30.000 for the lot even without Rp/rb markers. The
+        # marker word must not break the quantity anchor, so quantity
+        # detection runs on the prefix with "total" removed.
+        lot_total = bool(re.search(r"(?i)\btotal\b", prefix))
+        if lot_total:
+            prefix = re.sub(r"(?i)\s*\btotal\b\s*", " ", prefix)
+        if _TRAILING_QUANTITY.search(prefix):
+            bare = int(match.group("amount"))
+            if bare >= 1000:
+                remainder = re.sub(r"(?i)\s*\btotal\b\s*$", "", text[: match.start()]).strip()
+                return remainder, bare, None, not lot_total
+            return text[: match.start()].strip(), None, "Unprefixed whole-number price is unsupported; use Rp or an rb/ribu/jt/juta suffix.", False
 
     # A malformed currency token is not silently treated as part of an item name.
     if _CURRENCY_MARKER.search(text):
-        return re.sub(r"(?i)\s+rp\s*[\d.,]+\s*$", "", text).strip(), None, "Could not safely read the Rp price. Use Rp followed by an integer amount."
-    return text.strip(), None, None
+        return re.sub(r"(?i)\s+rp\s*[\d.,]+\s*$", "", text).strip(), None, "Could not safely read the Rp price. Use Rp followed by an integer amount.", False
+    return text.strip(), None, None, False
 
 
 def _parse_quantity(text: str) -> tuple[str, str | None, str | None, str | None]:
@@ -262,8 +276,22 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
         return None, [f"Line {line_number}: no item name was found."]
 
     # Price is parsed first so its numeric amount can never become a quantity.
-    remainder, line_total, price_problem = _parse_price(source)
+    remainder, price_value, price_problem, bare_unit = _parse_price(source)
     remainder, quantity, unit, quantity_problem = _parse_quantity(remainder)
+    line_total = price_value
+    if bare_unit and price_value is not None:
+        # The bare number is a per-unit price ("banana cake 10 2500" = ten
+        # pieces at Rp2.500 each). Without a quantity there is no line total.
+        if quantity is None:
+            warnings.append(f"Line {line_number}: the price reads as per-piece; add a quantity so the total can be computed.")
+            line_total = None
+        else:
+            total_dec = Decimal(price_value) * Decimal(quantity)
+            if total_dec == total_dec.to_integral_value():
+                line_total = int(total_dec)
+            else:
+                warnings.append(f"Line {line_number}: per-piece price times quantity is not a whole rupiah amount.")
+                line_total = None
     raw_name, ingredient_id, fuzzy = match_catalog_detail(remainder)
     if not raw_name:
         return None, [f"Line {line_number}: no item name was found."]
