@@ -203,7 +203,7 @@ def test_unmapped_ingredient_self_heals_on_approval(client):
     assert draft["status"] == "pending_approval"
     assert draft["items"][0]["ingredient_id"] is None and draft["items"][0]["raw_name"] == "gula"
     reply = created["messages"][-1]["body"]
-    assert "gula belum ada di daftar bahan" in reply and "ditambahkan otomatis" in reply
+    assert "Baru: gula — masuk daftar saat YA." in reply and "masuk daftar" in reply
     approved = data(simulate(client, "ya"))
     assert approved["result"]["action"] == "approved"
     confirmation = approved["messages"][-1]["body"]
@@ -326,8 +326,8 @@ def test_draft_reply_template_is_scannable_and_confirms_as_one():
     assert "• Bawang merah — 2 kg × Rp40.000 = Rp80.000" in lines
     assert "• Gula — 1 kg × Rp20.000 = Rp20.000" in lines
     assert "Total: Rp100.000" in lines
-    assert any("Catatan: gula belum ada di daftar bahan" in line and "balas YA" in line for line in lines)
-    assert lines[-1] == "Balas YA jika semua barang sudah diterima, BATAL untuk batal."
+    assert any("Baru: gula — masuk daftar saat YA." in line for line in lines)
+    assert lines[-1] == "YA = barang diterima & dicatat, BATAL = batal."
 
 
 def test_draft_reply_needs_clarification_shows_total_supplier_and_groups_notes():
@@ -351,9 +351,9 @@ def test_draft_reply_needs_clarification_shows_total_supplier_and_groups_notes()
     # grouped into one friendly note and other problems stay generic.
     assert "unknown ingredient" not in reply
     assert "select a catalog item" not in reply
-    assert "Catatan: pecombang belum ada di daftar bahan" in reply
-    assert "perlu dicek di dashboard" in reply
-    assert reply.splitlines()[-1].startswith("Balas YA untuk konfirmasi semua item")
+    assert "Baru: pecombang — masuk daftar saat YA." in reply
+    assert "Ada baris perlu dicek (harga, satuan, atau keterbacaan foto)." in reply
+    assert reply.splitlines()[-1] == "YA untuk catat, BATAL untuk batal."
 
 
 def test_chatter_with_money_gets_help_not_a_draft(client):
@@ -394,8 +394,8 @@ def test_simulator_confirms_a_spelling_recovery_before_approval(client):
     assert first["draft"]["items"][0]["ingredient_id"] == "bawang_putih"
     assert first["draft"]["items"][0]["matched_from"] == "bwang putih"
     reply = first["messages"][-1]["body"]
-    assert "'bwang putih' saya baca sebagai Bawang putih" in reply
-    assert "Balas YA jika sudah benar" in reply
+    assert "'bwang putih' → Bawang putih" in reply
+    assert "benar kan?" in reply
     approved = data(simulate(client, "ya"))
     assert approved["result"]["action"] == "approved"
     # A recovered typo maps to the existing catalog entry; nothing new is created.
