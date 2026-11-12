@@ -453,10 +453,22 @@ def create_app(
             if store_factory is not None:
                 store = store_factory()
             else:
+                # Distinguish "launcher did not export env keys" from "database
+                # unreachable" — the Atoms log line must say which keys are
+                # missing so a rebooted-without-env worker is obvious instantly.
+                missing = [
+                    name for name in ("SUPABASE_URL", "SUPABASE_DB_PASSWORD")
+                    if not (os.environ.get(name) or "").strip()
+                ]
+                if missing:
+                    raise RuntimeError(
+                        "Environment keys absent at boot (the launcher did not export them?): "
+                        + ", ".join(missing)
+                    )
                 store = PostgresStore(seed=False, read_only_startup=True)
             storage = "supabase"
         except Exception as exc:  # noqa: BLE001 - any config/connect/schema failure fails closed
-            logger.error("Hosted storage unavailable; failing closed: %s", type(exc).__name__)
+            logger.error("Hosted storage unavailable; failing closed: %s: %s", type(exc).__name__, exc)
             store = None
             storage = "unavailable"
             storage_error = str(exc) if isinstance(exc, RuntimeError) else "The database could not be reached."
