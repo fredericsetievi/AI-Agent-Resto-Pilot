@@ -91,6 +91,32 @@ def test_draft_provenance_reflects_intake_channel(client):
     assert drafts[simulated["id"]]["source"]["created_at"]
 
 
+def test_bare_count_drafts_as_pieces_and_flags_only_real_gaps(client):
+    # A warung owner's casual list has no unit words: a bare count is pieces
+    # for anything not already a kg/l catalog ingredient, and only a real gap
+    # (a missing price) should force clarification — not the missing "pcs".
+    draft = client.post("/v1/intake", headers=headers(), json={
+        "text": "beli bolkus jumbo 15 4000, bapao srikaya 2, pukis 2 8000",
+    }).json()["data"]
+    assert draft["status"] == "needs_clarification"
+    by_name = {item["raw_name"]: item for item in draft["items"]}
+    assert by_name["bolkus jumbo"]["unit"] == "pcs"
+    assert by_name["bolkus jumbo"]["canonical_quantity"] == "15"
+    assert by_name["bolkus jumbo"]["unit_price_idr"] == "266.6666666666666666666666667"
+    assert by_name["pukis"]["unit_price_idr"] == "4000"
+    assert by_name["bapao srikaya"]["warnings"] == ["Line total is missing.", "Enter a valid positive whole-rupiah line total."]
+    assert draft["warnings"] == ["Line 1: line total is missing or unsupported.", "Item 2: Line total is missing.", "Item 2: Enter a valid positive whole-rupiah line total."]
+
+    clean = client.post("/v1/intake", headers=headers(), json={"text": "beli lepet 10 2500"}).json()["data"]
+    assert clean["status"] == "pending_approval"
+    assert clean["items"][0]["unit"] == "pcs"
+
+    mass = client.post("/v1/intake", headers=headers(), json={"text": "beli cabai 5 50000"}).json()["data"]
+    item = mass["items"][0]
+    assert item["ingredient_id"] == "cabai"
+    assert "Unit is missing." in item["warnings"]
+
+
 def test_intake_edit_approval_updates_real_stock_and_spend(client):
     response = client.post("/v1/intake", headers=headers(), json={"text": "Cabai 500 g 25rb", "supplier": "Pasar Pagi"})
     assert response.status_code == 201, response.text

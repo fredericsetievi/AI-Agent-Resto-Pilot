@@ -211,6 +211,26 @@ def normalize_items_for_catalog(items, catalog):
         if not ingredient:
             if not str(result.get("raw_name") or "").strip():
                 local_warnings.append("Select a known ingredient.")
+        # A bare count with no unit word ("bolkus jumbo 15 4000") means pieces
+        # for anything that is not a known mass/volume ingredient. Demanding a
+        # unit word on every line pushed each countable draft into
+        # needs_clarification (Nov 2026 pilot finding). Unmatched items default
+        # to "pcs"; items matched to a custom-unit ingredient default to that
+        # unit; known kg/l ingredients still require an explicit unit.
+        ingredient_unit = (ingredient or {}).get("unit")
+        if result.get("unit") is None and (ingredient_unit is None or ingredient_unit not in {"kg", "g", "l", "ml"}):
+            raw_qty = None
+            try:
+                raw_qty = Decimal(str(result.get("quantity")))
+                if not raw_qty.is_finite() or raw_qty <= 0 or raw_qty > Decimal("1000000000"):
+                    raw_qty = None
+            except (InvalidOperation, ValueError, TypeError):
+                raw_qty = None
+            if raw_qty is not None:
+                result["unit"] = ingredient_unit or "pcs"
+                result["canonical_unit"] = ingredient_unit or "pcs"
+                result["canonical_quantity"] = decimal_string(raw_qty)
+                local_warnings = [w for w in local_warnings if w != "Unit is missing."]
         try:
             quantity = Decimal(str(result.get("canonical_quantity")))
             if not quantity.is_finite() or quantity <= 0 or quantity > Decimal("1000000000"):

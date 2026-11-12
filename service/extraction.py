@@ -273,7 +273,10 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
         warnings.append(f"Line {line_number}: {quantity_problem}")
     if quantity is None:
         warnings.append(f"Line {line_number}: quantity is missing or unsupported.")
-    if unit is None:
+    if unit is None and _EXPECTED_UNIT.get(ingredient_id) in {"kg", "g", "l", "ml"}:
+        # Only known mass/volume ingredients must name their unit; a bare
+        # count ("bolkus jumbo 15 4000") is pieces, and the store layer
+        # defaults it (Nov 2026 pilot finding).
         warnings.append(f"Line {line_number}: unit is missing; choose a supported unit or pack.")
     if line_total is None:
         warnings.append(f"Line {line_number}: line total is missing or unsupported.")
