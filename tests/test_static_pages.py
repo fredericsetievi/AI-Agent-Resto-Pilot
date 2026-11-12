@@ -17,7 +17,9 @@ def test_landing_serves_at_root_without_login(tmp_path):
     # The landing links to the dashboard's static Atoms path, not to /app.
     assert 'href="/app.html"' in page.text
     assert 'href="/app"' not in page.text
-    assert "<script" not in page.text
+    # The landing may carry its own lightweight scripts (the ID/EN language
+    # toggle), but must not load the dashboard bundle.
+    assert "/assets/app.js" not in page.text
 
 
 def test_dashboard_serves_at_app_and_app_html(tmp_path):
