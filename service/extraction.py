@@ -413,8 +413,6 @@ def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
     unit = _UNIT_ALIASES.get(unit_raw.casefold(), unit_raw.casefold()) if isinstance(unit_raw, str) else None
     if unit_raw is None:
         warnings.append("Unit is missing.")
-    elif unit not in {"kg", "g", "l", "ml"}:
-        warnings.append(f"Unit '{unit_raw}' is not supported for automatic normalization; choose a catalog pack conversion.")
 
     ingredient_id = item.get("ingredient_id")
     expected_unit = _EXPECTED_UNIT.get(ingredient_id)
@@ -428,6 +426,14 @@ def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
         canonical_quantity = qty / factor
         result["canonical_quantity"] = _plain_decimal(canonical_quantity)
         result["canonical_unit"] = canonical_unit
+    elif qty is not None and unit in {"pcs", "buah"}:
+        # Plain counts record as-is: a cake warung buys in pieces, and
+        # inventory for countable items tracks counts, not mass. Pack units
+        # (tray, ikat, dus...) still require a catalog pack conversion.
+        result["canonical_quantity"] = _plain_decimal(qty)
+        result["canonical_unit"] = unit
+    elif unit is not None and unit not in {"kg", "g", "l", "ml", "pcs", "buah"}:
+        warnings.append(f"Unit '{unit_raw}' is not supported for automatic normalization; choose a catalog pack conversion.")
 
     if ingredient_id not in _EXPECTED_UNIT and not str(item.get("raw_name") or "").strip():
         # With a raw name the store can auto-create the ingredient on approval;
