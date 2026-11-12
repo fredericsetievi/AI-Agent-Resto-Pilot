@@ -28,10 +28,14 @@ test('Atoms serves the landing at / and the dashboard at /app.html', () => {
   const api = fs.readFileSync(path.join(__dirname, '../service/api.py'), 'utf8');
   const plugin = fs.readFileSync(path.join(__dirname, '../deploy/atoms/frontend/plugins/restopilot-dashboard.ts'), 'utf8');
 
-  // The landing carries only its own lightweight scripts (the ID/EN language
-  // toggle), links only to the dashboard's real file path, and references its
-  // stylesheet through the served landing-assets prefix.
-  assert.ok(!landing.includes('/assets/app.js'), 'landing must not load the dashboard bundle');
+  // The landing owns exactly one inline script — the ID/EN language toggle —
+  // links only to the dashboard's real file path, and references its
+  // stylesheet through the served landing-assets prefix. It must never load
+  // the dashboard bundles or any external script.
+  const scripts = [...landing.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]);
+  assert.equal(scripts.length, 1, 'landing must keep only its inline ID/EN toggle script');
+  assert.ok(!scripts[0].includes('src='), 'the landing toggle script must stay inline');
+  assert.ok(!landing.includes('/assets/app.js') && !landing.includes('/assets/i18n.js'), 'landing must not load dashboard bundles');
   assert.ok(landing.includes('href="/app.html"'), 'landing must link /app.html');
   assert.ok(!landing.includes('href="/app"'), 'landing must not link /app (it falls back to the landing on Atoms)');
   assert.ok(landing.includes('href="/landing-assets/styles.css"'), 'landing must reference its served stylesheet');
