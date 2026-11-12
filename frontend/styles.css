@@ -126,3 +126,43 @@ body.is-admin .page-heading > .button{display:none}
 .lang-toggle button.active{background:var(--green);color:#fff}
 .topbar .lang-toggle{margin-right:4px}
 .login-card .lang-toggle{margin-bottom:14px}
+
+/* --- Pilot UI pass: mobile bottom tabs + desktop interaction polish (Nov 13) ---
+   Responsive-continuity rule: same pages and components on phone and laptop,
+   only their shape adapts. Mobile gets a thumb-reachable bottom tab bar with
+   always-visible icons (Sapaad/Foodics pattern from the UI reference board);
+   desktop keeps the sidebar and gains restrained hover feedback (Apple HIG:
+   hover hints interactivity, never moves layout). */
+@media(max-width:620px){
+  nav{position:fixed;left:0;right:0;bottom:0;z-index:25;flex-direction:row;margin:0;gap:2px;padding:8px 8px calc(8px + env(safe-area-inset-bottom,0px));background:var(--green-dark);box-shadow:0 -8px 28px rgba(24,63,53,.22);overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  nav::-webkit-scrollbar{display:none}
+  nav a{flex:1 0 auto;flex-direction:column;align-items:center;gap:5px;padding:8px 11px;font-size:9px;font-weight:550;letter-spacing:.2px;border-radius:9px;color:#9db5a8}
+  nav a>span:first-child{display:block;font-size:22px;width:auto;line-height:1;color:#b7cabe;transition:color .15s}
+  nav a.active{background:rgba(255,255,255,.10);color:#f0f5e3}
+  nav a.active>span:first-child{color:#dcedb4}
+  nav a:hover{background:rgba(255,255,255,.07);color:#e2ebdd}
+  .nav-count{margin-left:5px;font-size:8px;padding:2px 5px}
+  main{padding-bottom:88px}
+  .page-footer{padding-bottom:6px}
+  .toast{bottom:96px}
+}
+@media(min-width:621px){
+  nav a{transition:background .15s,color .15s}
+  nav a:hover{background:rgba(255,255,255,.14);color:#eef3df;padding-left:18px}
+  nav a:hover>span:first-child{color:#dcedb4}
+}
+.button,.draft-card,.metric{transition:box-shadow .15s,background .15s,border-color .15s}
+.button:hover:not(:disabled){border-color:#c6d1b8;box-shadow:0 2px 12px rgba(33,79,64,.10)}
+.secondary:hover:not(:disabled){background:#eef2e3}
+.primary:hover:not(:disabled){background:#163e30;box-shadow:0 4px 14px rgba(24,63,53,.22)}
+.danger:hover:not(:disabled){background:#fceeea;border-color:#e7c9c2}
+.text-button,.icon-button{transition:color .15s,background .15s}
+.text-button:hover{color:var(--green-dark)}
+.draft-card:hover{border-color:#d4dcc6;box-shadow:0 4px 18px rgba(37,60,52,.08)}
+.metric:hover{box-shadow:0 4px 16px rgba(37,60,52,.07)}
+tbody tr:hover td{background:#fbfcf8}
+.inventory-row,.activity-row,.hbar-row{transition:background .15s}
+.inventory-row:hover{background:#fafbf5}
+button{will-change:auto}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
