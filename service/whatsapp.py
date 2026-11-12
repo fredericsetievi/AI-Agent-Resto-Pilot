@@ -617,17 +617,20 @@ def draft_reply(draft, catalog_names=None):
     total = _draft_total(draft)
 
     def _sections(header, items, total_label, footer):
-        main = [header] + items
+        blocks = [[header] + items]
         if warning:
-            main.append(warning)
+            blocks.append([warning])
+        summary = []
         if supplier:
-            main.append(f"Pemasok: {supplier}")
+            summary.append(f"Pemasok: {supplier}")
         if total:
-            main.append(f"{total_label}: Rp{_idr(total)}")
+            summary.append(f"{total_label}: Rp{_idr(total)}")
+        if summary:
+            blocks.append(summary)
         if notes:
-            main.extend(notes)
-        main.append(footer)
-        return "\n".join(main)
+            blocks.append(notes)
+        blocks.append([footer])
+        return "\n\n".join("\n".join(block) for block in blocks)
 
     if draft["status"] == "needs_clarification":
         if unmapped:
