@@ -331,8 +331,10 @@ function purchaseTable(purchases) {
   if (!purchases.length) return `<div class="empty"><strong>${t('Riwayat pembelian Anda dimulai di sini.','Your purchase history starts here.')}</strong>${t('Pembelian yang disetujui akan muncul di sini.','Approved purchases will appear in this view.')}</div>`;
   return `<div class="table-wrap"><table><thead><tr><th>${t('Pembelian','Purchase')}</th><th>${t('Pemasok','Supplier')}</th><th>${t('Jumlah','Amount')}</th><th>${t('Status','Status')}</th></tr></thead><tbody>${purchases.map(purchase => `<tr><td><button class="text-button" data-review="${e(purchase.draft_id)}">${e(itemSummary(purchase.items))}</button><small>${e(date(purchase.created_at))}</small></td><td>${e(purchase.supplier || t('Tidak disebutkan','Unspecified'))}</td><td class="money">${rupiah(purchase.total_idr)}<small>${t('Pembayaran belum diketahui','Payment unknown')}</small></td><td>${badge('recorded')}</td></tr>`).join('')}</tbody></table></div>`;
 }
-function inventoryRows(inventory) {
-  return `<div class="inventory-list">${inventory.map(item => `<div class="inventory-row"><span class="ingredient-icon" aria-hidden="true">${icons[item.ingredient_id] || '▦'}</span><div><strong>${e(item.name)}</strong><small>${item.low_stock?`<span class="badge red">${t('stock_low_badge')}</span>`:`<span class="badge green">${t('badge_recorded')}</span>`}</small></div><div class="stock ${item.low_stock?'low':''}">${number(item.quantity)} <span>${e(item.unit)}</span><small>${t('w_threshold')} ${number(item.reorder_threshold)} ${e(item.unit)}</small></div></div>`).join('')}</div>`;
+function inventoryRows(inventory, editableUnits=false) {
+  const unitOptions=item=>[...new Set([item.unit,'pcs','kg','g','liter','ml','buah','ikat','tray','dus'])].filter(Boolean).map(u=>`<option value="${e(u)}" ${u===item.unit?'selected':''}>${e(u)}</option>`).join('');
+  const unitHtml=item=>editableUnits?`<select class="unit-select" data-unit-select="${e(item.ingredient_id)}" aria-label="${t('Ubah satuan','Change unit')}" title="${t('Ubah satuan','Change unit')}">${unitOptions(item)}</select>`:`<span>${e(item.unit)}</span>`;
+  return `<div class="inventory-list">${inventory.map(item => `<div class="inventory-row"><span class="ingredient-icon" aria-hidden="true">${icons[item.ingredient_id] || '▦'}</span><div><strong>${e(item.name)}</strong><small>${item.low_stock?`<span class="badge red">${t('stock_low_badge')}</span>`:`<span class="badge green">${t('badge_recorded')}</span>`}</small></div><div class="stock ${item.low_stock?'low':''}">${number(item.quantity)} ${unitHtml(item)}<small>${t('w_threshold')} ${number(item.reorder_threshold)} ${e(item.unit)}</small></div></div>`).join('')}</div>`;
 }
 function activityRows(activity) {
   if (!activity.length) return `<div class="empty">${t('Aktivitas dapur Anda akan muncul di sini.','Your kitchen activity will appear here.')}</div>`;
@@ -419,7 +421,7 @@ function render() {
   if (page==='overview') html=overview();
   if (page==='approvals') html=`<section class="panel">${panelHeading(t('Antrean peninjauan','Review queue'),`${pendingDrafts().length} ${t('draf menunggu keputusan Anda','drafts waiting for your decision')}`)}<div class="full-list">${pendingDrafts().map(draftCard).join('') || `<div class="empty"><strong>${t('Semua beres.','All clear.')}</strong>${t('Setiap draf sudah punya keputusan.','Every draft has a decision.')}</div>`}</div></section>`;
   if (page==='purchases') html=`<p class="subtle-note">${t('Termasuk pembelian pembuka sintetis untuk demo perbandingan harga. Mencatat pembelian tidak menandai pemasok sebagai dibayar.','Includes synthetic opening purchases used to demonstrate price comparisons. Recording a purchase does not mark a supplier as paid.')}</p><section class="panel">${panelHeading(t('Riwayat pembelian','Purchase history'))}${purchaseTable(state.data.purchases)}</section>`;
-  if (page==='inventory') html=`<section class="panel">${panelHeading(t('Estimasi stok','Estimated inventory'),t('Hanya jumlah barang yang diterima dan disetujui. Koreksi angkanya dengan stok opname lewat chat atau formulir di bawah.','Approved received quantities only. Correct the numbers with a stock opname over chat or with the form below.'))}${inventoryRows(state.data.inventory)}<div class="panel-note">${t('Ambang stok rendah adalah konfigurasi demo. Bandingkan dengan hitungan fisik sebelum memesan.','Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.')}</div></section>` + opnameFormPanel() + catalogImportPanel() + (state.data.stock_counts?.length ? `<section class="panel">${panelHeading(t('Riwayat stok opname','Stock count history'),t('Koreksi stok fisik dari chat dan dashboard. Semua angka dari database.','Physical corrections from chat and the dashboard. Every figure comes from the database.'))}${state.data.stock_counts.map(item=>`<div class="number-row"><code>${e(item.name)}</code><span>${e(item.estimated_quantity)} → ${e(item.counted_quantity)} (${t('selisih','delta')} ${e(item.delta)})</span><span class="spacer"></span><small>${e(date(item.applied_at))}</small></div>`).join('')}</section>` : '');
+  if (page==='inventory') html=`<section class="panel">${panelHeading(t('Estimasi stok','Estimated inventory'),t('Hanya jumlah barang yang diterima dan disetujui. Koreksi angkanya dengan stok opname lewat chat atau formulir di bawah.','Approved received quantities only. Correct the numbers with a stock opname over chat or with the form below.'))}${inventoryRows(state.data.inventory, true)}<div class="panel-note">${t('Ambang stok rendah adalah konfigurasi demo. Bandingkan dengan hitungan fisik sebelum memesan.','Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.')}</div></section>` + opnameFormPanel() + catalogImportPanel() + (state.data.stock_counts?.length ? `<section class="panel">${panelHeading(t('Riwayat stok opname','Stock count history'),t('Koreksi stok fisik dari chat dan dashboard. Semua angka dari database.','Physical corrections from chat and the dashboard. Every figure comes from the database.'))}${state.data.stock_counts.map(item=>`<div class="number-row"><code>${e(item.name)}</code><span>${e(item.estimated_quantity)} → ${e(item.counted_quantity)} (${t('selisih','delta')} ${e(item.delta)})</span><span class="spacer"></span><small>${e(date(item.applied_at))}</small></div>`).join('')}</section>` : '');
   if (page==='activity') html=`<section class="panel">${panelHeading(t('Riwayat aktivitas','Activity history'),t('Termasuk catatan pembuka sintetis. Semua tindakan baru tersimpan.','Includes synthetic setup records. All new actions are persisted.'))}${activityRows(state.data.activity)}</section>`;
   if (page==='whatsapp') html=whatsappPage();
   if (page==='rules') html=rulesPage();
@@ -478,6 +480,16 @@ async function applyOpname() {
 }
 function catalogImportPanel() {
   return `<section class="panel"><div class="panel-heading"><div><h2>Impor katalog bahan</h2><p>${t('Unggah file .xlsx atau .csv berisi daftar bahan: kolom nama wajib, sedangkan satuan, jumlah stok, kode, dan ambang minimum opsional. Baris tanpa nama dilewati.','Upload an .xlsx or .csv file listing ingredients: a name column is required, while unit, stock quantity, code, and minimum threshold are optional. Rows without a name are skipped.')}</p></div><button class="button mini primary" data-catalog-import ${state.catalogImportBusy?'disabled':''}>Impor katalog</button></div><input id="catalog-import-file" type="file" accept=".xlsx,.csv" hidden><div id="catalog-import-error" class="notice error" role="alert" hidden></div><div id="catalog-import-result" class="notice" role="status" hidden></div><div class="panel-note">${t('Nama yang sudah ada di katalog hanya diperbarui stoknya; bahan baru masuk ke katalog resto ini.','Names already in the catalog only get their stock updated; new ingredients are added to this restaurant\'s catalog.')}</div></section>`;
+}
+async function changeIngredientUnit(ingredientId, unit) {
+  try {
+    await api(`/v1/catalog/${encodeURIComponent(ingredientId)}`, {method:'PATCH', body:{unit}});
+    state.data = null; await refresh();
+    toast(t(`Satuan diubah ke ${unit}.`,`Unit changed to ${unit}.`));
+  } catch(error) {
+    toast(error.message || t('Satuan gagal diubah.','Failed to change unit.'));
+    render(); // restore the select to the stored value
+  }
 }
 async function importCatalogFile(file) {
   if(state.catalogImportBusy)return;state.catalogImportBusy=true;showError('catalog-import-error','');showError('catalog-import-result','');
@@ -840,6 +852,7 @@ document.addEventListener('submit',event=>{if(event.target.id==='inventory-form'
 document.addEventListener('input',event=>{if(event.target.closest('#inventory-form'))updateInventoryPreview();});
 document.addEventListener('change',event=>{
   if(event.target.id==='catalog-import-file'&&event.target.files?.[0])importCatalogFile(event.target.files[0]);
+  if(event.target.matches('[data-unit-select]'))changeIngredientUnit(event.target.dataset.unitSelect,event.target.value);
   if(event.target.name==='saved_recipe'){
     const recipe=inventoryState.recipesSnapshot.find(row=>row.id===event.target.value),form=$('#inventory-form');
     form.elements.recipe_name.value=recipe?.name||'';

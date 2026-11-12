@@ -163,6 +163,47 @@ def test_catalog_import_endpoint_reports_skipped_rows(tmp_path):
     assert response.json()["data"]["skipped"] == 1
 
 
+def test_import_without_satuan_defaults_to_pcs(tmp_path):
+    """A cake warung sheet without a satuan column should not default every
+    row to kg (pilot's real 98-row import had every cake in kg)."""
+    client = catalog_api(tmp_path)
+    content = "nama,stok\nKue pandan,8\n".encode()
+    response = client.post("/v1/catalog/import", json={
+        "filename": "katalog.csv",
+        "content_base64": base64.b64encode(content).decode(),
+    })
+    assert response.status_code == 200, response.text
+    inventory = {row["name"]: row for row in client.get("/v1/overview").json()["data"]["inventory"]}
+    assert inventory["Kue pandan"]["unit"] == "pcs"
+
+
+def test_ingredient_unit_patch_updates_imported_item(tmp_path):
+    client = catalog_api(tmp_path)
+    content = "nama\nKue pandan\n".encode()
+    client.post("/v1/catalog/import", json={
+        "filename": "katalog.csv",
+        "content_base64": base64.b64encode(content).decode(),
+    })
+    inventory = {row["name"]: row for row in client.get("/v1/overview").json()["data"]["inventory"]}
+    ingredient_id = inventory["Kue pandan"]["ingredient_id"]
+    response = client.patch(f"/v1/catalog/{ingredient_id}", json={"unit": "tray"})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["unit"] == "tray"
+    inventory = {row["name"]: row for row in client.get("/v1/overview").json()["data"]["inventory"]}
+    assert inventory["Kue pandan"]["unit"] == "tray"
+
+
+def test_ingredient_unit_patch_rejects_base_catalog_and_invalid(tmp_path):
+    client = catalog_api(tmp_path)
+    # Base-catalog ingredients are shared across restaurants: not editable.
+    base = client.patch("/v1/catalog/cabai", json={"unit": "pcs"})
+    assert base.status_code == 422
+    assert base.json()["error"]["code"] == "ingredient_not_custom"
+    # Invalid unit payloads.
+    assert client.patch("/v1/catalog/whatever", json={"unit": "   "}).status_code == 422
+    assert client.patch("/v1/catalog/whatever", json={"unit": "x" * 25}).status_code == 422
+
+
 def test_catalog_import_endpoint_rejects_bad_input(tmp_path):
     client = catalog_api(tmp_path)
     content = build_xlsx([["nama", "stok"]] + [[f"Bahan ke-{index}", index] for index in range(201)])

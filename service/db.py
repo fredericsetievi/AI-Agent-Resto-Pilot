@@ -307,6 +307,29 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         """The restaurant's full catalog (base + custom), for filter checks."""
         return self._catalog_for(restaurant_id)["list"]
 
+    def set_ingredient_unit(self, restaurant_id, ingredient_id, unit):
+        """Edit the unit of one imported ingredient (tenant-scoped).
+
+        Base-catalog ingredients (cabai, telur, ...) are shared across
+        restaurants, so their unit is not editable here; owners change those
+        via re-import with a satuan column.
+        """
+        clean = str(unit or "").strip().casefold()
+        if not clean or len(clean) > 20 or any(ch in clean for ch in "\n\r\t"):
+            raise DomainError("invalid_unit", "Satuan tidak valid.", 422)
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE custom_ingredients SET unit=? WHERE restaurant_id=? AND id=?",
+                (clean, restaurant_id, ingredient_id),
+            )
+            if not cursor.rowcount:
+                raise DomainError("ingredient_not_custom", "Satuan bahan ini tidak bisa diubah di sini. Bahan hasil impor bisa; bawaan katalog diubah lewat impor dengan kolom satuan.", 422)
+        # Keep the cached catalog copy coherent without a full reload.
+        entry = self._catalog_for(restaurant_id)["by_id"].get(ingredient_id)
+        if entry:
+            entry["unit"] = clean
+        return {"id": ingredient_id, "unit": clean}
+
     @staticmethod
     def slugify_name(raw_name):
         return Store._slugify(raw_name)
@@ -341,7 +364,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                         unique, suffix = f"{slug}_{suffix}", suffix + 1
                     used_ids.add(unique)
                     stored_threshold = decimal_string(threshold) if threshold is not None else "0"
-                    stored_unit = unit or "kg"
+                    stored_unit = unit or "pcs"
                     conn.execute("INSERT INTO custom_ingredients (id, name, unit, reorder_threshold, created_at, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)", (unique, name, stored_unit, stored_threshold, now(), restaurant_id))
                     conn.execute("INSERT INTO inventory (restaurant_id, ingredient_id, quantity) VALUES (?, ?, '0')", (restaurant_id, unique))
                     entry = {"id": unique, "name": name, "unit": stored_unit, "reorder_threshold": stored_threshold}
@@ -729,7 +752,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 raise DomainError("clarification_required", "The ingredient name is not usable; correct it on the dashboard.", 422)
             if slug not in catalog["by_id"]:
                 name = str(raw_name).strip().capitalize()
-                unit = item.get("canonical_unit") or "kg"
+                unit = item.get("canonical_unit") or "pcs"
                 conn.execute("INSERT INTO custom_ingredients (id, name, unit, reorder_threshold, created_at, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)", (slug, name, unit, "0", now(), restaurant_id))
                 conn.execute("INSERT INTO inventory (restaurant_id, ingredient_id, quantity) VALUES (?, ?, '0')", (restaurant_id, slug))
                 entry = {"id": slug, "name": name, "unit": unit, "reorder_threshold": "0"}
