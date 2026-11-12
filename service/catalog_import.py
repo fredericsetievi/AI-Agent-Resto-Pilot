@@ -15,8 +15,6 @@ import io
 import re
 from decimal import Decimal, InvalidOperation
 
-import openpyxl
-
 MAX_ITEMS = 200
 MAX_NAME_CHARS = 60
 HEADER_SCAN_ROWS = 10
@@ -88,9 +86,21 @@ def _column_map(row):
 
 
 def _xlsx_rows(content):
+    # Imported lazily: openpyxl is an optional extra on some deployment hosts.
+    # A module-level import here would fail the whole service.api import chain
+    # and silently remove every RestoPilot route (the Nov 2026 Atoms outage).
+    try:
+        import openpyxl
+    except ImportError as exc:  # pragma: no cover - deployment packaging guard
+        raise CatalogImportError(
+            "Fitur impor Excel belum tersedia di server ini (paket openpyxl hilang). "
+            "Gunakan file CSV sebagai gantinya."
+        ) from exc
     try:
         workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
         return [list(row) for row in next(iter(workbook.worksheets)).iter_rows(values_only=True)]
+    except CatalogImportError:
+        raise
     except Exception as exc:  # openpyxl raises a zoo of formats for junk files
         raise CatalogImportError("File Excel tidak dapat dibaca. Simpan ulang sebagai .xlsx lalu coba lagi.") from exc
 
