@@ -157,9 +157,14 @@ def _parse_price(text: str) -> tuple[str, int | None, str | None]:
 
     # A bare integer after an explicit quantity and unit is likely a total, but
     # the parser requires an explicit Rp or rb/ribu/jt/juta marker to avoid
-    # confusing a total with another quantity.
+    # confusing a total with another quantity. Real quantities are small, so a
+    # bare trailing whole number of at least 1000 is accepted as a total —
+    # owners write "cabai 2 kg 30000" far more often than they mean 30000 kg.
     match = _UNPREFIXED_INTEGER.search(text)
     if match and _TRAILING_QUANTITY.search(text[: match.start()]):
+        bare = int(match.group("amount"))
+        if bare >= 1000:
+            return text[: match.start()].strip(), bare, None
         return text[: match.start()].strip(), None, "Unprefixed whole-number price is unsupported; use Rp or an rb/ribu/jt/juta suffix."
 
     # A malformed currency token is not silently treated as part of an item name.

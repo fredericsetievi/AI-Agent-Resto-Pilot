@@ -202,15 +202,22 @@ def test_oversized_rp_amount_and_normalization_total_are_rejected_without_except
 
 
 def test_unprefixed_whole_number_price_is_not_assumed():
-    result = extract_purchase("beli cabai 1 kg 25000")
-    assert result["items"][0] == {
+    # Large bare trailing numbers are realistic prices ("cabai 2 kg 30000")
+    # and quantities are never that big, so >= 1000 reads as a total.
+    priced = extract_purchase("beli cabai 1 kg 25000")
+    assert priced["items"][0] == {
         "ingredient_id": "cabai",
         "raw_name": "cabai",
         "quantity": "1",
         "unit": "kg",
-        "line_total_idr": None,
+        "line_total_idr": 25000,
     }
-    assert any("Unprefixed whole-number price" in warning for warning in result["warnings"])
+    assert priced["warnings"] == []
+
+    # Small bare numbers stay ambiguous — "5" is more likely another quantity.
+    small = extract_purchase("beli cabai 1 kg 5")
+    assert small["items"][0]["line_total_idr"] is None
+    assert any("Unprefixed whole-number price" in warning for warning in small["warnings"])
 
 
 def test_normalization_warns_when_quantity_is_missing():
