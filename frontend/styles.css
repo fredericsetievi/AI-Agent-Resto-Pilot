@@ -126,3 +126,5 @@ body.is-admin .page-heading > .button{display:none}
 .lang-toggle button.active{background:var(--green);color:#fff}
 .topbar .lang-toggle{margin-right:4px}
 .login-card .lang-toggle{margin-bottom:14px}
+
+.unit-select{width:auto;min-width:64px;padding:4px 8px;font-size:12px;border-radius:6px}
