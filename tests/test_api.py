@@ -102,8 +102,8 @@ def test_bare_count_drafts_as_pieces_and_flags_only_real_gaps(client):
     by_name = {item["raw_name"]: item for item in draft["items"]}
     assert by_name["bolkus jumbo"]["unit"] == "pcs"
     assert by_name["bolkus jumbo"]["canonical_quantity"] == "15"
-    assert by_name["bolkus jumbo"]["unit_price_idr"] == "266.6666666666666666666666667"
-    assert by_name["pukis"]["unit_price_idr"] == "4000"
+    assert by_name["bolkus jumbo"]["unit_price_idr"] == "4000"  # bare = per piece
+    assert by_name["pukis"]["unit_price_idr"] == "8000"
     assert by_name["bapao srikaya"]["warnings"] == ["Line total is missing.", "Enter a valid positive whole-rupiah line total."]
     assert draft["warnings"] == ["Line 1: line total is missing or unsupported.", "Item 2: Line total is missing.", "Item 2: Enter a valid positive whole-rupiah line total."]
 
@@ -130,8 +130,8 @@ def test_followup_answer_merges_into_active_draft(client):
     assert follow["status"] == "pending_approval"
     by_name = {item["raw_name"]: item for item in follow["items"]}
     assert len(follow["items"]) == 2
-    assert by_name["bolkus jumbo"]["line_total_idr"] == 4000
-    assert by_name["bapao srikaya"]["line_total_idr"] == 4000
+    assert by_name["bolkus jumbo"]["line_total_idr"] == 60000  # 15 × Rp4.000 per piece
+    assert by_name["bapao srikaya"]["line_total_idr"] == 8000  # 2 × Rp4.000 per piece
     assert follow["warnings"] == []
 
     # A follow-up with no purchase signal never disturbs the draft.
