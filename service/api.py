@@ -18,7 +18,7 @@ import hashlib
 import re
 import io
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import AsyncExitStack
 from time import perf_counter
 from pathlib import Path
@@ -835,7 +835,15 @@ def create_app(
         slot_hour = settings["morning_hour"] if slot == "morning" else settings["evening_hour"]
         if not REMINDER_MIN_HOUR <= slot_hour <= REMINDER_MAX_HOUR:
             return {**base, "skipped": "quiet_hours"}
-        body_text = build_morning_reply() if slot == "morning" else build_evening_reply()
+        envelope = None
+        if slot == "evening":
+            # The evening recap folds in today's cash envelope: ask for the
+            # change brought back, or report the unrecorded gap.
+            envelope = await run_in_threadpool(store.cash_envelope_status, restaurant_id)
+        else:
+            yesterday = (local_now.date() - timedelta(days=1)).isoformat()
+            envelope = await run_in_threadpool(store.cash_envelope_status, restaurant_id, yesterday)
+        body_text = build_morning_reply(envelope) if slot == "morning" else build_evening_reply(envelope)
         if dry_run:
             return {**base, "slot": slot, "body": body_text}
         # Silence-aware: a recent inbound message on any linked sender means
@@ -1285,6 +1293,11 @@ def create_app(
     @app.post("/v1/reminders/check")
     async def reminders_check(dry_run: bool = False, actor=Depends(owner_actor)):
         return {"data": await run_reminder_check(actor["restaurant_id"], dry_run=dry_run)}
+
+    @app.get("/v1/cash-envelope")
+    def cash_envelope_get(actor=Depends(owner_actor)):
+        """Today's cash envelope: budget, recorded spend, leftover, the gap."""
+        return {"data": store.cash_envelope_status(actor["restaurant_id"])}
 
     # ---- Owner-managed channel links: one phone may serve many platforms ----
 

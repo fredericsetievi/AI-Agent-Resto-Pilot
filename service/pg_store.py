@@ -37,6 +37,7 @@ from .operations import OperationsMixin
 from .purchase_edits import PurchaseEditsMixin
 from .suppliers import SupplierMixin
 from .reminders import ReminderMixin, parse_reminder_command
+from .cash_envelope import CashEnvelopeMixin, parse_envelope_command
 from .purchase_sources import PurchaseSourcesMixin
 from .purchase_idempotency import purchase_idempotent
 from .phone_auth import PhoneAuthMixin
@@ -62,7 +63,7 @@ from .whatsapp import (
 )
 
 
-class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, PurchaseEditsMixin, MenuInsightsMixin, SupplierMixin, ReminderMixin):
+class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, PurchaseEditsMixin, MenuInsightsMixin, SupplierMixin, ReminderMixin, CashEnvelopeMixin):
     """The RestoPilot authority in Supabase Postgres. Same contract as Store."""
 
     inventory_postgres = True
@@ -92,6 +93,7 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         "app_metadata": {"key", "value"},
         "reminder_settings": {"slug", "morning_hour", "evening_hour", "enabled",
                               "last_morning_date", "last_evening_date", "updated_at"},
+        "cash_envelopes": {"slug", "day", "envelope_idr", "leftover_idr", "recorded_at"},
     }
 
     def __init__(self, path=None, seed=True, read_only_startup=False):
@@ -1300,6 +1302,11 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                 # settings: they run even while a purchase draft waits, since
                 # the sentence can never be a purchase line.
                 reply, result = self.apply_reminder_command(conn, tenant, reminder_cmd)
+            elif tenant and (envelope_cmd := parse_envelope_command(payload["text"])):
+                # Cash-envelope commands ("budget hari ini 2 juta") report the
+                # day's cash, never a stock change; they run even while a
+                # purchase draft waits.
+                reply, result = self.apply_envelope_command(conn, tenant, envelope_cmd)
             elif extracted_photo:
                 source_digest, source_result = self._purchase_source_guard(conn, tenant, operation_source)
                 if source_result is not None:
