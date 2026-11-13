@@ -1937,12 +1937,14 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
             drafts = [self._present(conn, json.loads(row["body"]), restaurant_id) for row in conn.execute("SELECT body FROM drafts WHERE restaurant_id=? ORDER BY rowid DESC", (restaurant_id,))]
             purchases = [json.loads(row["body"]) for row in conn.execute("SELECT body FROM purchases WHERE restaurant_id=? ORDER BY created_at DESC, id DESC", (restaurant_id,))]
             inventory = []
+            custom_ids = {row[0] for row in conn.execute("SELECT id FROM custom_ingredients WHERE restaurant_id=?", (restaurant_id,))}
             for ingredient in catalog["list"]:
                 row = conn.execute("SELECT quantity FROM inventory WHERE restaurant_id=? AND ingredient_id=?", (restaurant_id, ingredient["id"])).fetchone()
                 quantity = row[0] if row else "0"
                 inventory.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
                                   "unit": ingredient["unit"], "reorder_threshold": ingredient["reorder_threshold"],
-                                  "low_stock": Decimal(quantity) < Decimal(ingredient["reorder_threshold"])})
+                                  "low_stock": Decimal(quantity) < Decimal(ingredient["reorder_threshold"]),
+                                  "unit_editable": ingredient["id"] in custom_ids})
             today = datetime.now(RESTAURANT_TIMEZONE).date()
             # Provenance is read from the message ledger, never guessed: the
             # earliest inbound WhatsApp message that produced each draft. Drafts

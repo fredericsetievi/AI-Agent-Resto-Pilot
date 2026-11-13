@@ -333,7 +333,7 @@ function purchaseTable(purchases) {
 }
 function inventoryRows(inventory, editableUnits=false) {
   const unitOptions=item=>[...new Set([item.unit,'pcs','kg','g','liter','ml','buah','ikat','tray','dus'])].filter(Boolean).map(u=>`<option value="${e(u)}" ${u===item.unit?'selected':''}>${e(u)}</option>`).join('');
-  const unitHtml=item=>editableUnits?`<select class="unit-select" data-unit-select="${e(item.ingredient_id)}" aria-label="${t('Ubah satuan','Change unit')}" title="${t('Ubah satuan','Change unit')}">${unitOptions(item)}</select>`:`<span>${e(item.unit)}</span>`;
+  const unitHtml=item=>editableUnits&&item.unit_editable?`<select class="unit-select" data-unit-select="${e(item.ingredient_id)}" aria-label="${t('Ubah satuan','Change unit')}" title="${t('Ubah satuan','Change unit')}">${unitOptions(item)}</select>`:`<span>${e(item.unit)}</span>`;
   return `<div class="inventory-list">${inventory.map(item => `<div class="inventory-row"><span class="ingredient-icon" aria-hidden="true">${icons[item.ingredient_id] || '▦'}</span><div><strong>${e(item.name)}</strong><small>${item.low_stock?`<span class="badge red">${t('stock_low_badge')}</span>`:`<span class="badge green">${t('badge_recorded')}</span>`}</small></div><div class="stock ${item.low_stock?'low':''}">${number(item.quantity)} ${unitHtml(item)}<small>${t('w_threshold')} ${number(item.reorder_threshold)} ${e(item.unit)}</small></div></div>`).join('')}</div>`;
 }
 function activityRows(activity) {
