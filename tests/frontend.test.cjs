@@ -104,7 +104,7 @@ test('WhatsApp simulator renders the requested route and follows the language to
   assert.match(h.element('#content').innerHTML,/Tidak terhubung ke WhatsApp/);
   // Toggle to English: same page, translated.
   h.run('LANG="en";applyStaticI18n();render()');
-  assert.equal(h.element('#page-title').textContent,'A WhatsApp flow you can rehearse.');
+  assert.equal(h.element('#page-title').textContent,'A WhatsApp flow you can rehearse, Boss.');
   assert.match(h.element('#content').innerHTML,/does not connect to WhatsApp or send a live message/);
   const index=fs.readFileSync('frontend/index.html','utf8');
   assert.match(index,/#whatsapp[^>]*>.*WhatsApp/s);
