@@ -18,6 +18,7 @@ import hashlib
 import re
 import io
 import logging
+from datetime import datetime
 from contextlib import AsyncExitStack
 from time import perf_counter
 from pathlib import Path
@@ -43,7 +44,8 @@ from .audio import (
     validate_asr_model,
     validate_tts_model,
 )
-from .db import APPROVE_COMMANDS, DEMO_USERS, DomainError, REJECT_COMMANDS, SESSION_TTL, Store, SUMMARY_COMMANDS
+from .db import APPROVE_COMMANDS, DEMO_USERS, DomainError, REJECT_COMMANDS, RESTAURANT_TIMEZONE, SESSION_TTL, Store, SUMMARY_COMMANDS
+from .reminders import REMINDER_LOOP_SECONDS, REMINDER_MAX_HOUR, REMINDER_MIN_HOUR, REMINDER_SILENCE_HOURS, build_evening_reply, build_morning_reply
 from .catalog_import import CatalogImportError, parse_catalog_file
 from .pg_store import PostgresStore
 from .data_qa import build_answer as build_data_answer
@@ -399,6 +401,7 @@ def create_app(
     telegram_http_client=None,
     telegram_group_seconds=4.0,
     proactive_check_interval_seconds=None,
+    reminder_check_interval_seconds=None,
     hosted=False,
     secure_cookies=None,
     store_factory=None,
@@ -425,10 +428,11 @@ def create_app(
         if telegram_api_base == TELEGRAM_DEFAULT_API_BASE:
             telegram_api_base = os.environ.get("TELEGRAM_API_BASE") or telegram_api_base
     # The proactive loop closes over store/run_proactive_check by name; both
-    # are bound below before any request (or lifespan call) can run.
+    # are bound below before any request (or lifespan call) can run. The
+    # reminder loop does the same with run_reminder_check.
     @contextlib.asynccontextmanager
     async def _lifespan(_app):
-        task = None
+        tasks = []
         if proactive_check_interval_seconds and proactive_check_interval_seconds > 0:
             async def proactive_loop():
                 while True:
@@ -438,12 +442,24 @@ def create_app(
                             await run_proactive_check(resto["id"])
                         except Exception as exc:  # noqa: BLE001 - one resto must not stop the sweep
                             logger.warning("Proactive check failed for %s: %s", resto["id"], exc)
-            task = asyncio.create_task(proactive_loop())
+            tasks.append(asyncio.create_task(proactive_loop()))
             logger.info("Proactive low-stock checks scheduled every %s seconds.", proactive_check_interval_seconds)
+        reminder_interval = REMINDER_LOOP_SECONDS if reminder_check_interval_seconds is None else reminder_check_interval_seconds
+        if reminder_interval and reminder_interval > 0:
+            async def reminder_loop():
+                while True:
+                    await asyncio.sleep(reminder_interval)
+                    for resto in await run_in_threadpool(store.list_restaurants):
+                        try:
+                            await run_reminder_check(resto["id"])
+                        except Exception as exc:  # noqa: BLE001 - one resto must not stop the sweep
+                            logger.warning("Reminder check failed for %s: %s", resto["id"], exc)
+            tasks.append(asyncio.create_task(reminder_loop()))
+            logger.info("Reminder checks scheduled every %s seconds.", reminder_interval)
         try:
             yield
         finally:
-            if task:
+            for task in tasks:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
@@ -699,6 +715,60 @@ def create_app(
                 logger.warning("Opname phrasing failed; keeping the deterministic text: %s", exc)
         return {"body": reply, "items": parsed["items"]}
 
+    async def push_ledger_message(restaurant_id, body_text, kind):
+        """Push one deterministic ledger message to every linked sender.
+
+        Each link is reached on the platform it was linked to; WhatsApp
+        outside the 24-hour customer-service window goes as the approved
+        template (or is only recorded when none is configured). Shared by
+        the low-stock sweep and the reminder engine. Returns one status per
+        sender.
+        """
+        sent = []
+        meta_ready = bool(meta_access_token and meta_phone_number_id)
+        telegram_ready = bool(telegram_bot_token)
+        for link in store.linked_numbers(restaurant_id):
+            phone, platform = link["phone"], link["platform"]
+            channel = platform if (platform == "telegram" and telegram_ready) or (platform == "whatsapp" and meta_ready) else None
+            if channel is None:
+                logger.warning("%s for %s: %s link has no configured channel; recording only.", kind, restaurant_id, platform)
+                store.record_proactive_message(restaurant_id, kind + ":" + restaurant_id, phone, "proactive", body_text, "proactive_no_channel")
+                sent.append({"sender": phone, "platform": platform, "channel": None, "ok": False})
+                continue
+            # WhatsApp's 24-hour customer-service window: a free-form reply
+            # is only guaranteed while the owner wrote to us inside it.
+            # Outside the window the alert must go as an approved template;
+            # without one configured the link is recorded, not guessed.
+            use_template = False
+            if channel == "whatsapp":
+                age_hours = await run_in_threadpool(store.last_inbound_age_hours, phone, platform)
+                use_template = age_hours is None or age_hours >= 24.0
+                if use_template and not (whatsapp_alert_template or "").strip():
+                    logger.warning("%s for %s: %s is outside the 24-hour window and no template is configured; recording only.", kind, restaurant_id, phone)
+                    store.record_proactive_message(restaurant_id, kind + ":" + restaurant_id, phone, "proactive", body_text, "proactive_template_required")
+                    sent.append({"sender": phone, "platform": platform, "channel": channel, "ok": False})
+                    continue
+            message_id = store.record_proactive_message(restaurant_id, kind + ":" + restaurant_id, phone, "proactive", body_text, "proactive_pending")
+            try:
+                if channel == "whatsapp":
+                    if use_template:
+                        await send_template(
+                            meta_access_token, meta_phone_number_id, meta_graph_api_version, phone,
+                            whatsapp_alert_template, whatsapp_alert_template_lang, [body_text], client=meta_http_client)
+                    else:
+                        await send_text(
+                            meta_access_token, meta_phone_number_id, meta_graph_api_version, phone, body_text, client=meta_http_client)
+                else:
+                    await send_telegram_text(telegram_bot_token, phone, body_text, api_base=telegram_api_base, client=telegram_http_client)
+            except (MetaWhatsAppError, TelegramError, ValueError) as exc:
+                logger.warning("%s send to %s (%s) failed: %s", kind, phone, platform, exc)
+                await run_in_threadpool(store.set_whatsapp_message_status, message_id, "proactive_failed")
+                sent.append({"sender": phone, "platform": platform, "channel": channel, "ok": False})
+            else:
+                await run_in_threadpool(store.set_whatsapp_message_status, message_id, "proactive_sent")
+                sent.append({"sender": phone, "platform": platform, "channel": channel, "ok": True})
+        return sent
+
     async def run_proactive_check(restaurant_id, *, dry_run=False):
         """One proactive sweep for one restaurant: rules in, alert out.
 
@@ -734,52 +804,50 @@ def create_app(
             body_text = (body_text or "").rstrip() + "\n\n" + plan_text
         sent = []
         if not dry_run:
-            # Each linked sender is reached on the platform it was linked to:
-            # the same number may appear twice, once per platform.
-            meta_ready = bool(meta_access_token and meta_phone_number_id)
-            telegram_ready = bool(telegram_bot_token)
-            for link in store.linked_numbers(restaurant_id):
-                phone, platform = link["phone"], link["platform"]
-                channel = platform if (platform == "telegram" and telegram_ready) or (platform == "whatsapp" and meta_ready) else None
-                if channel is None:
-                    logger.warning("Proactive alert for %s: %s link has no configured channel; recording only.", restaurant_id, platform)
-                    store.record_proactive_message(restaurant_id, "proactive:" + restaurant_id, phone, "proactive", body_text, "proactive_no_channel")
-                    sent.append({"sender": phone, "platform": platform, "channel": None, "ok": False})
-                    continue
-                # WhatsApp's 24-hour customer-service window: a free-form reply
-                # is only guaranteed while the owner wrote to us inside it.
-                # Outside the window the alert must go as an approved template;
-                # without one configured the link is recorded, not guessed.
-                use_template = False
-                if channel == "whatsapp":
-                    age_hours = await run_in_threadpool(store.last_inbound_age_hours, phone, platform)
-                    use_template = age_hours is None or age_hours >= 24.0
-                    if use_template and not (whatsapp_alert_template or "").strip():
-                        logger.warning("Proactive alert for %s: %s is outside the 24-hour window and no template is configured; recording only.", restaurant_id, phone)
-                        store.record_proactive_message(restaurant_id, "proactive:" + restaurant_id, phone, "proactive", body_text, "proactive_template_required")
-                        sent.append({"sender": phone, "platform": platform, "channel": channel, "ok": False})
-                        continue
-                message_id = store.record_proactive_message(restaurant_id, "proactive:" + restaurant_id, phone, "proactive", body_text, "proactive_pending")
-                try:
-                    if channel == "whatsapp":
-                        if use_template:
-                            await send_template(
-                                meta_access_token, meta_phone_number_id, meta_graph_api_version, phone,
-                                whatsapp_alert_template, whatsapp_alert_template_lang, [body_text], client=meta_http_client)
-                        else:
-                            await send_text(
-                                meta_access_token, meta_phone_number_id, meta_graph_api_version, phone, body_text, client=meta_http_client)
-                    else:
-                        await send_telegram_text(telegram_bot_token, phone, body_text, api_base=telegram_api_base, client=telegram_http_client)
-                except (MetaWhatsAppError, TelegramError, ValueError) as exc:
-                    logger.warning("Proactive send to %s (%s) failed: %s", phone, platform, exc)
-                    await run_in_threadpool(store.set_whatsapp_message_status, message_id, "proactive_failed")
-                    sent.append({"sender": phone, "platform": platform, "channel": channel, "ok": False})
-                else:
-                    await run_in_threadpool(store.set_whatsapp_message_status, message_id, "proactive_sent")
-                    sent.append({"sender": phone, "platform": platform, "channel": channel, "ok": True})
+            sent = await push_ledger_message(restaurant_id, body_text, "proactive")
             store.mark_proactive_alerts(restaurant_id, candidates)
         return {"restaurant_id": restaurant_id, "candidates": candidates, "body": body_text, "sent": sent, "dry_run": bool(dry_run)}
+
+    async def run_reminder_check(restaurant_id, *, now=None, dry_run=False):
+        """One reminder sweep for one restaurant: schedule in, nudge out.
+
+        The schedule is per restaurant (defaults 09:00/21:00, adjustable by
+        chat). Fires only inside the exact configured hour, once per day per
+        slot, never during quiet hours, and skips while the owner interacted
+        recently — silence is the signal the nudge is needed. With dry_run
+        nothing is sent, recorded, or marked.
+        """
+        base = {"restaurant_id": restaurant_id, "slot": None, "body": None, "sent": [], "skipped": None, "dry_run": bool(dry_run)}
+        settings = await run_in_threadpool(store.reminder_settings, restaurant_id)
+        if not settings["enabled"]:
+            return base
+        local_now = now or datetime.now(RESTAURANT_TIMEZONE)
+        today = local_now.date().isoformat()
+        slot = None
+        if local_now.hour == settings["morning_hour"] and settings["last_morning_date"] != today:
+            slot = "morning"
+        elif local_now.hour == settings["evening_hour"] and settings["last_evening_date"] != today:
+            slot = "evening"
+        if slot is None:
+            return base
+        # Quiet hours are enforced twice: the chat command refuses hours in
+        # the band, and the engine refuses to fire a schedule row inside it.
+        slot_hour = settings["morning_hour"] if slot == "morning" else settings["evening_hour"]
+        if not REMINDER_MIN_HOUR <= slot_hour <= REMINDER_MAX_HOUR:
+            return {**base, "skipped": "quiet_hours"}
+        body_text = build_morning_reply() if slot == "morning" else build_evening_reply()
+        if dry_run:
+            return {**base, "slot": slot, "body": body_text}
+        # Silence-aware: a recent inbound message on any linked sender means
+        # the owner is already at the chat; skip without spending the day's
+        # send, so the nudge still goes out if they go quiet inside the hour.
+        for link in store.linked_numbers(restaurant_id):
+            age_hours = await run_in_threadpool(store.last_inbound_age_hours, link["phone"], link["platform"])
+            if age_hours is not None and age_hours < REMINDER_SILENCE_HOURS:
+                return {**base, "slot": slot, "body": body_text, "skipped": "owner_recently_active"}
+        sent = await push_ledger_message(restaurant_id, body_text, "reminder")
+        await run_in_threadpool(store.mark_reminder_sent, restaurant_id, slot, today)
+        return {**base, "slot": slot, "body": body_text, "sent": sent}
     app.state.store = store
     configured_origin = public_origin(public_base_url)
     meta_waba_id = validate_meta_id(meta_waba_id, "META_WABA_ID") if meta_waba_id else None
@@ -1208,6 +1276,15 @@ def create_app(
     @app.post("/v1/notifications/check")
     async def notifications_check(dry_run: bool = False, actor=Depends(owner_actor)):
         return {"data": await run_proactive_check(actor["restaurant_id"], dry_run=dry_run)}
+
+    @app.get("/v1/reminders")
+    def reminders_get(actor=Depends(owner_actor)):
+        """The restaurant's reminder schedule (dashboard + chat both read it)."""
+        return {"data": store.reminder_settings(actor["restaurant_id"])}
+
+    @app.post("/v1/reminders/check")
+    async def reminders_check(dry_run: bool = False, actor=Depends(owner_actor)):
+        return {"data": await run_reminder_check(actor["restaurant_id"], dry_run=dry_run)}
 
     # ---- Owner-managed channel links: one phone may serve many platforms ----
 
