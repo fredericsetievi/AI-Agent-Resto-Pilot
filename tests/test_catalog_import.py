@@ -126,6 +126,35 @@ def test_import_catalog_scoped_per_restaurant(tmp_path):
     assert "Kue pandan" in [entry["name"] for entry in store.catalog_list(TENANT)]
 
 
+def test_draft_links_imported_item_at_draft_time(tmp_path):
+    """A re-ordered item that is already in the imported catalog must not be
+    announced as "Baru" — the exact-slug match runs at draft creation."""
+    from uuid import uuid4
+
+    store = Store(tmp_path / "link.sqlite3")
+    store.import_catalog(TENANT, [{"name": "Kue pandan", "unit": "pcs", "quantity": None, "code": None, "threshold": None}])
+    result = store.whatsapp_ingest(uuid4().hex, {"sender": "628123456789", "text": "beli kue pandan 8 15000"}, restaurant_id=TENANT)
+    draft_id = result["thread"]["active_draft_id"]
+    draft = store.get_draft(draft_id, TENANT)
+    assert draft["items"][0]["ingredient_id"].startswith("kue_pandan")
+    body = next(m["body"] for m in result["messages"] if m["direction"] == "outbound")
+    assert "Baru" not in body
+
+
+def test_unmapped_item_still_self_heals_on_approval(tmp_path):
+    """A genuinely new name stays unmapped on the draft and only enters the
+    catalog when the owner approves — the import must not over-match."""
+    from uuid import uuid4
+
+    store = Store(tmp_path / "heal.sqlite3")
+    store.import_catalog(TENANT, [{"name": "Kue pandan", "unit": "pcs", "quantity": None, "code": None, "threshold": None}])
+    result = store.whatsapp_ingest(uuid4().hex, {"sender": "628123456789", "text": "beli bolu lumer 5 3000"}, restaurant_id=TENANT)
+    draft_id = result["thread"]["active_draft_id"]
+    draft = store.get_draft(draft_id, TENANT)
+    assert draft["items"][0]["ingredient_id"] is None
+    assert "bolu lumer" not in [entry["name"] for entry in store.catalog_list(TENANT)]
+
+
 # --- API endpoint -------------------------------------------------------------------
 
 
@@ -161,6 +190,47 @@ def test_catalog_import_endpoint_reports_skipped_rows(tmp_path):
     assert response.status_code == 200, response.text
     assert response.json()["data"]["imported"] == 1
     assert response.json()["data"]["skipped"] == 1
+
+
+def test_import_without_satuan_defaults_to_pcs(tmp_path):
+    """A cake warung sheet without a satuan column should not default every
+    row to kg (pilot's real 98-row import had every cake in kg)."""
+    client = catalog_api(tmp_path)
+    content = "nama,stok\nKue pandan,8\n".encode()
+    response = client.post("/v1/catalog/import", json={
+        "filename": "katalog.csv",
+        "content_base64": base64.b64encode(content).decode(),
+    })
+    assert response.status_code == 200, response.text
+    inventory = {row["name"]: row for row in client.get("/v1/overview").json()["data"]["inventory"]}
+    assert inventory["Kue pandan"]["unit"] == "pcs"
+
+
+def test_ingredient_unit_patch_updates_imported_item(tmp_path):
+    client = catalog_api(tmp_path)
+    content = "nama\nKue pandan\n".encode()
+    client.post("/v1/catalog/import", json={
+        "filename": "katalog.csv",
+        "content_base64": base64.b64encode(content).decode(),
+    })
+    inventory = {row["name"]: row for row in client.get("/v1/overview").json()["data"]["inventory"]}
+    ingredient_id = inventory["Kue pandan"]["ingredient_id"]
+    response = client.patch(f"/v1/catalog/{ingredient_id}", json={"unit": "tray"})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["unit"] == "tray"
+    inventory = {row["name"]: row for row in client.get("/v1/overview").json()["data"]["inventory"]}
+    assert inventory["Kue pandan"]["unit"] == "tray"
+
+
+def test_ingredient_unit_patch_rejects_base_catalog_and_invalid(tmp_path):
+    client = catalog_api(tmp_path)
+    # Base-catalog ingredients are shared across restaurants: not editable.
+    base = client.patch("/v1/catalog/cabai", json={"unit": "pcs"})
+    assert base.status_code == 422
+    assert base.json()["error"]["code"] == "ingredient_not_custom"
+    # Invalid unit payloads.
+    assert client.patch("/v1/catalog/whatever", json={"unit": "   "}).status_code == 422
+    assert client.patch("/v1/catalog/whatever", json={"unit": "x" * 25}).status_code == 422
 
 
 def test_catalog_import_endpoint_rejects_bad_input(tmp_path):

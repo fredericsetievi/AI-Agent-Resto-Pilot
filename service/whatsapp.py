@@ -599,9 +599,18 @@ def draft_reply(draft, catalog_names=None):
     ]
     notes = []
     if unmapped:
-        notes.append(
-            "Baru: " + ", ".join(unmapped) + " — masuk daftar saat YA."
-        )
+        if len(unmapped) > 3:
+            # Enumerating a long first-time list doubles the message; a count
+            # keeps the info without the repetition (pilot feedback: the
+            # 8-item cake draft repeated every name twice).
+            if len(unmapped) == len(draft["items"]):
+                notes.append("Semua item baru — masuk daftar saat YA.")
+            else:
+                notes.append(f"{len(unmapped)} item baru — masuk daftar saat YA.")
+        else:
+            notes.append(
+                "Baru: " + ", ".join(unmapped) + " — masuk daftar saat YA."
+            )
     fuzzy = []
     for item in draft.get("items", []):
         typed = str(item.get("matched_from") or "").strip()
@@ -612,7 +621,7 @@ def draft_reply(draft, catalog_names=None):
     if fuzzy:
         notes.append("Kira-kira: " + "; ".join(fuzzy) + " — benar kan?")
     if any(_UNMAPPED_WARNING.search(str(warning_text)) is None for warning_text in draft.get("warnings", [])):
-        notes.append("Ada baris perlu dicek (harga, satuan, atau keterbacaan foto).")
+        notes.append("Ada baris perlu dicek.")
     supplier = str(draft.get("supplier") or "").strip()
     total = _draft_total(draft)
 

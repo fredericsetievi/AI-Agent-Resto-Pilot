@@ -59,10 +59,16 @@ def record_purchase(store, restaurant, text="beli cabai 2 kg 100rb"):
 
 
 def age_purchases(store, hours=26.0):
-    """Move recorded purchases into the past so 'kemarin' points at them."""
+    """Move recorded purchases into the past so 'kemarin' points at them.
+
+    Anchored to yesterday's noon rather than now-minus-N-hours: a 26h shift
+    only lands on yesterday when the current clock is past 02:00, so the
+    suite went red when run after midnight.
+    """
+    yesterday_noon = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+        hour=12, minute=0, second=0, microsecond=0)
     with store.transaction() as conn:
-        conn.execute("UPDATE purchases SET created_at=?",
-                     ((datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(),))
+        conn.execute("UPDATE purchases SET created_at=?", (yesterday_noon.isoformat(),))
 
 
 def test_parse_commands():

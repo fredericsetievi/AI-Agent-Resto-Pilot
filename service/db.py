@@ -58,6 +58,42 @@ REJECT_COMMANDS = frozenset({"batal", "batalin", "cancel", "tidak", "tidak jadi"
 _COMMAND_PARTICLES = frozenset({"deh", "lah", "dong", "dulu", "aja", "saja"})
 
 
+_UNIT_EDIT_RE = re.compile(r"^(?:ganti|ubah)\s+(?:(semua)\s+)?(?:satuan|unit)\s+(.+?)\s+jadi\s+(\S+?)\s*[.!]?\s*$", re.IGNORECASE)
+_UNIT_EDIT_BARE_RE = re.compile(r"^(?:ganti|ubah)\s+(?:(semua)\s+)?(.+?)\s+jadi\s+(\S+?)\s*[.!]?\s*$", re.IGNORECASE)
+_UNIT_ALIASES = {
+    "pcs": "pcs", "kg": "kg", "g": "g", "gram": "g", "gr": "g",
+    "liter": "liter", "l": "liter", "ml": "ml", "buah": "buah",
+    "ikat": "ikat", "tray": "tray", "dus": "dus", "ons": "ons",
+}
+
+
+def parse_unit_command(text):
+    """Detect a catalog unit edit: "ganti satuan bolkus jumbo jadi pcs",
+    "ganti semua satuan kue jadi pcs", or the bare "ganti cabai merah jadi kg".
+
+    The bare form only fires when the final word is a known unit, so a
+    general "ganti penjual jadi pasar ..." sentence never becomes a unit
+    edit. Deterministic rules only — no model call, no credits.
+    """
+    text = str(text or "").strip()
+    for pattern, explicit in ((_UNIT_EDIT_RE, True), (_UNIT_EDIT_BARE_RE, False)):
+        match = pattern.match(text)
+        if not match:
+            continue
+        unit = _UNIT_ALIASES.get(match.group(3).casefold())
+        if unit is None:
+            if explicit:
+                return {"scope": "named", "target": match.group(2).strip(), "unit": None, "explicit": True}
+            continue
+        return {
+            "scope": "all" if match.group(1) else "single",
+            "target": match.group(2).strip(),
+            "unit": unit,
+            "explicit": explicit,
+        }
+    return None
+
+
 def _resolve_command(text):
     """Casefold a message into a command word, dropping casual particles.
 
@@ -207,6 +243,13 @@ def normalize_items_for_catalog(items, catalog):
         # The ledger enforces its own invariants even if an extractor changes.
         # An unmapped item that kept its raw name self-heals: the ingredient
         # is auto-created from that name when the draft is approved.
+        # An unmapped name whose exact slug already exists in this tenant's
+        # catalog (Excel import / earlier approval) links at draft time, so a
+        # re-ordered item is not announced as "Baru" to the owner.
+        if not result.get("ingredient_id") and str(result.get("raw_name") or "").strip():
+            slug = Store._slugify(result["raw_name"])
+            if slug and slug in catalog["by_id"]:
+                result["ingredient_id"] = slug
         ingredient = catalog["by_id"].get(result.get("ingredient_id"))
         if not ingredient:
             if not str(result.get("raw_name") or "").strip():
@@ -307,6 +350,106 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         """The restaurant's full catalog (base + custom), for filter checks."""
         return self._catalog_for(restaurant_id)["list"]
 
+    def set_ingredient_unit(self, restaurant_id, ingredient_id, unit):
+        """Edit the unit of one imported ingredient (tenant-scoped).
+
+        Base-catalog ingredients (cabai, telur, ...) are shared across
+        restaurants, so their unit is not editable here; owners change those
+        via re-import with a satuan column.
+        """
+        clean = str(unit or "").strip().casefold()
+        if not clean or len(clean) > 20 or any(ch in clean for ch in "\n\r\t"):
+            raise DomainError("invalid_unit", "Satuan tidak valid.", 422)
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE custom_ingredients SET unit=? WHERE restaurant_id=? AND id=?",
+                (clean, restaurant_id, ingredient_id),
+            )
+            if not cursor.rowcount:
+                raise DomainError("ingredient_not_custom", "Satuan bahan ini tidak bisa diubah di sini. Bahan hasil impor bisa; bawaan katalog diubah lewat impor dengan kolom satuan.", 422)
+        # Keep the cached catalog copy coherent without a full reload.
+        entry = self._catalog_for(restaurant_id)["by_id"].get(ingredient_id)
+        if entry:
+            entry["unit"] = clean
+        return {"id": ingredient_id, "unit": clean}
+
+    def set_ingredient_units(self, restaurant_id, ingredient_ids, unit, conn=None):
+        """Bulk-edit units of imported custom ingredients (tenant-scoped).
+
+        Returns the ids actually updated; base-catalog ingredients are
+        silently skipped (the caller reports them). Runs on the caller's
+        connection when given (whatsapp_ingest holds the write lock)."""
+        clean = str(unit or "").strip().casefold()
+        if not clean or len(clean) > 20 or any(ch in clean for ch in "\n\r\t"):
+            raise DomainError("invalid_unit", "Satuan tidak valid.", 422)
+        ids = [str(value) for value in (ingredient_ids or [])]
+        if not ids:
+            return []
+
+        def _work(connection):
+            placeholders = ",".join("?" for _ in ids)
+            rows = connection.execute(
+                f"SELECT id FROM custom_ingredients WHERE restaurant_id=? AND id IN ({placeholders})",
+                [restaurant_id, *ids],
+            ).fetchall()
+            existing = [row["id"] for row in rows]
+            if not existing:
+                return []
+            connection.execute(
+                f"UPDATE custom_ingredients SET unit=? WHERE restaurant_id=? AND id IN ({','.join('?' for _ in existing)})",
+                [clean, restaurant_id, *existing],
+            )
+            return existing
+
+        if conn is not None:
+            existing = _work(conn)
+        else:
+            with self.transaction() as owned:
+                existing = _work(owned)
+        by_id = self._catalog_for(restaurant_id)["by_id"]
+        for value in existing:
+            entry = by_id.get(value)
+            if entry:
+                entry["unit"] = clean
+        return existing
+
+    def apply_unit_command(self, tenant, command, conn=None):
+        """Resolve a chat unit-edit command against the catalog and apply it.
+
+        Returns (reply, updated_count). Never touches drafts, purchases, or
+        stock — it is a catalog-only operation, so it is safe to run while a
+        purchase draft is waiting.
+        """
+        fragment = str(command.get("target") or "").strip().casefold()
+        unit = command.get("unit")
+        if unit is None:
+            return ("Satuan tidak dikenal. Gunakan salah satu: pcs, kg, g, liter, ml, buah, ikat, tray, dus, ons.", 0)
+        if not fragment:
+            return "Sebutkan nama bahannya: 'ganti satuan bolkus jumbo jadi pcs'.", 0
+        matches = [item for item in self.catalog_list(tenant) if fragment in str(item.get("name") or "").casefold()]
+        if not matches:
+            return f"Tidak ada bahan yang cocok dengan '{command['target']}' di katalog.", 0
+        if command.get("scope") == "all" or len(matches) == 1:
+            updated = self.set_ingredient_units(tenant, [item["id"] for item in matches], unit, conn=conn)
+            names = [self._catalog_for(tenant)["by_id"].get(value, {}).get("name", value) for value in updated]
+            skipped = len(matches) - len(updated)
+            if not names:
+                skipped_names = ", ".join(item["name"] for item in matches[:4]) + ("…" if len(matches) > 4 else "")
+                return f"Bahan bawaan katalog tidak bisa diubah dari chat (dipakai semua resto): {skipped_names}.", 0
+            if len(names) == 1:
+                reply = f"Satuan {names[0]} diubah ke {unit}."
+            else:
+                reply = f"Satuan {len(names)} bahan diubah ke {unit}: {', '.join(names[:6])}" + ("…" if len(names) > 6 else "") + "."
+            if skipped:
+                reply += f" {skipped} bahan bawaan katalog dilewati."
+            return reply, len(names)
+        shown = ", ".join(item["name"] for item in matches[:5])
+        suffix = "…" if len(matches) > 5 else ""
+        return (
+            f"'{command['target']}' cocok {len(matches)} bahan: {shown}{suffix}. Sebutkan satu nama, atau 'ganti semua satuan {command['target']}' untuk semuanya.",
+            0,
+        )
+
     @staticmethod
     def slugify_name(raw_name):
         return Store._slugify(raw_name)
@@ -341,7 +484,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                         unique, suffix = f"{slug}_{suffix}", suffix + 1
                     used_ids.add(unique)
                     stored_threshold = decimal_string(threshold) if threshold is not None else "0"
-                    stored_unit = unit or "kg"
+                    stored_unit = unit or "pcs"
                     conn.execute("INSERT INTO custom_ingredients (id, name, unit, reorder_threshold, created_at, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)", (unique, name, stored_unit, stored_threshold, now(), restaurant_id))
                     conn.execute("INSERT INTO inventory (restaurant_id, ingredient_id, quantity) VALUES (?, ?, '0')", (restaurant_id, unique))
                     entry = {"id": unique, "name": name, "unit": stored_unit, "reorder_threshold": stored_threshold}
@@ -729,7 +872,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 raise DomainError("clarification_required", "The ingredient name is not usable; correct it on the dashboard.", 422)
             if slug not in catalog["by_id"]:
                 name = str(raw_name).strip().capitalize()
-                unit = item.get("canonical_unit") or "kg"
+                unit = item.get("canonical_unit") or "pcs"
                 conn.execute("INSERT INTO custom_ingredients (id, name, unit, reorder_threshold, created_at, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)", (slug, name, unit, "0", now(), restaurant_id))
                 conn.execute("INSERT INTO inventory (restaurant_id, ingredient_id, quantity) VALUES (?, ?, '0')", (restaurant_id, slug))
                 entry = {"id": slug, "name": name, "unit": unit, "reorder_threshold": "0"}
@@ -1152,6 +1295,13 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
             elif operation_result is not None:
                 reply = operation_result["reply"]
                 result = operation_result["result"]
+            elif tenant and (unit_cmd := parse_unit_command(payload["text"])):
+                # A catalog unit edit ("ganti satuan bolkus jumbo jadi pcs")
+                # is a pure catalog operation: it runs even while a purchase
+                # draft waits, and it must not be swallowed by the draft
+                # follow-up merge (the sentence names items in the draft).
+                reply, updated = self.apply_unit_command(tenant, unit_cmd, conn=conn)
+                result["action"] = "units_updated" if updated else "unit_edit_rejected"
             elif extracted_photo:
                 source_digest, source_result = self._purchase_source_guard(conn, tenant, operation_source)
                 if source_result is not None:

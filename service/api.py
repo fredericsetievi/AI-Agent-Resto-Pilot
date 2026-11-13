@@ -334,6 +334,10 @@ class CatalogImportRequest(Model):
     content_base64: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8_000_000)]
 
 
+class IngredientUnitRequest(Model):
+    unit: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20)]
+
+
 class RuleCreate(Model):
     rule: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 
@@ -1177,6 +1181,11 @@ def create_app(
             raise DomainError("catalog_import_failed", str(exc), 400) from exc
         stored = store.import_catalog(actor["restaurant_id"], parsed["items"])
         return {"data": {"imported": len(stored), "skipped": parsed["skipped"], "items": stored}}
+
+    @app.patch("/v1/catalog/{ingredient_id}")
+    def update_ingredient_unit(ingredient_id: str, body: IngredientUnitRequest, actor=Depends(owner_actor)):
+        """Edit one imported ingredient's unit from the dashboard (tenant-scoped)."""
+        return {"data": store.set_ingredient_unit(actor["restaurant_id"], ingredient_id, body.unit)}
 
     @app.get("/v1/rules")
     def rules_list(actor=Depends(owner_actor)):
