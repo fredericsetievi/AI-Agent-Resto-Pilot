@@ -200,3 +200,88 @@ def test_supplier_for_phone_selects_dialect_tenant_column():
     stub = _TenantColumnStub(postgres=False)
     assert stub.supplier_for_phone("628111222333") is None
     assert "restaurant_id" in stub.captured_sql
+
+
+def test_quote_without_keyword_stays_out_of_purchase_draft(tmp_path):
+    store, rid = fresh_store(tmp_path, "quote-gate.sqlite3")
+    # 'harga telur 45rb dari pak budi' is a price quote; it must never reach
+    # the purchase draft parser, while 'beli telur 45rb' stays a purchase.
+    assert parse_supplier_command("harga telur 45rb dari pak budi")["kind"] == "quote"
+    assert parse_supplier_command("beli telur 45rb") is None
+    store.supplier_add(uuid4().hex, {"name": "Pak Budi"}, rid)
+    response = ingest(store, "harga telur 45rb dari pak budi")
+    assert action(response) == "supplier_quote_recorded", reply(response)
+    quotes = store.supplier_quotes_recent(rid)
+    assert len(quotes) == 1 and quotes[0]["unit_price_idr"] == 45000
+
+
+def test_supplier_reply_line_with_two_items_stores_both(tmp_path):
+    store, rid = fresh_store(tmp_path, "multi-reply.sqlite3")
+    supplier = store.supplier_add(uuid4().hex, {"name": "Pak Budi"}, rid)
+    result = store.supplier_reply_intake(rid, supplier["id"], "telur 45rb\ncabai 32rb")
+    names = [(q["ingredient_name"], q["price"]) for q in result["stored"]]
+    assert ("Telur ayam", 45000) in names and ("Cabai merah", 32000) in names
+    assert result["unparsed"] == []
+
+
+def test_quote_unit_phrase_normalizes_per_kg(tmp_path):
+    store, rid = fresh_store(tmp_path, "unit-norm.sqlite3")
+    supplier = store.supplier_add(uuid4().hex, {"name": "Pak Budi"}, rid)
+    result = store.supplier_reply_intake(rid, supplier["id"], "telur 45rb per setengah kg")
+    stored = result["stored"]
+    assert stored[0]["price"] == 90000  # 45rb per half kg = 90rb per kg
+    assert "setengah kg" in (stored[0].get("note") or "")
+
+
+def test_quote_unknown_unit_keeps_raw_price_and_note(tmp_path):
+    store, rid = fresh_store(tmp_path, "unit-note.sqlite3")
+    supplier = store.supplier_add(uuid4().hex, {"name": "Pak Budi"}, rid)
+    result = store.supplier_reply_intake(rid, supplier["id"], "cabai 30rb per ikat")
+    stored = result["stored"]
+    assert stored[0]["price"] == 30000  # unknown multiplier: never invented
+    assert "per ikat" in (stored[0].get("note") or "")
+
+
+def test_hapus_supplier_requires_konfirmasi_then_removes(tmp_path):
+    store, rid = fresh_store(tmp_path, "hapus-chat.sqlite3")
+    store.supplier_add(uuid4().hex, {"name": "Pak Budi"}, rid)
+    confirm_needed = ingest(store, "hapus supplier pak budi")
+    assert action(confirm_needed) == "supplier_remove_confirm"
+    assert "KONFIRMASI" in reply(confirm_needed)
+    assert store.suppliers_list(rid), "nothing removed without confirmation"
+    removed = ingest(store, "hapus supplier pak budi konfirmasi")
+    assert action(removed) == "supplier_removed"
+    assert store.suppliers_list(rid) == []
+
+
+def test_update_supplier_contact_via_chat(tmp_path):
+    store, rid = fresh_store(tmp_path, "update-chat.sqlite3")
+    store.supplier_add(uuid4().hex, {"name": "Pak Budi"}, rid)
+    response = ingest(store, "ubah supplier budi wa 628123456999")
+    assert action(response) == "supplier_updated", reply(response)
+    assert store.suppliers_list(rid)[0]["contact_phone"] == "628123456999"
+
+
+def test_minta_harga_is_an_inquiry(tmp_path):
+    store, rid = fresh_store(tmp_path, "minta.sqlite3")
+    store.supplier_add(uuid4().hex, {"name": "Pak Budi", "contact_phone": "628888000777"}, rid)
+    response = ingest(store, "minta harga cabai ke supplier")
+    assert action(response) == "supplier_inquiry_created"
+
+
+def test_supplier_history_via_chat(tmp_path):
+    store, rid = fresh_store(tmp_path, "history-chat.sqlite3")
+    store.supplier_add(uuid4().hex, {"name": "Pak Budi"}, rid)
+    ingest(store, "catat harga telur pak budi 48rb")
+    response = ingest(store, "riwayat harga supplier pak budi")
+    assert action(response) == "supplier_history", reply(response)
+    assert "48.000" in reply(response)
+
+
+def test_unknown_question_is_logged_for_tuning(tmp_path):
+    store, rid = fresh_store(tmp_path, "unknown.sqlite3")
+    ingest(store, "berapa modal kulit lumpia bulan depan?")
+    with store.transaction() as conn:
+        row = conn.execute(
+            "SELECT message FROM activity WHERE event='intent_unknown' ORDER BY created_at DESC LIMIT 1").fetchone()
+    assert row and "kulit lumpia" in row[0]

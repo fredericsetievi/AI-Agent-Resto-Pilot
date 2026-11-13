@@ -205,3 +205,45 @@ def test_trend_question_survives_the_operations_classifier(tmp_path):
         assert response.status_code == 200, response.text
         answer = response.json()["data"]["messages"][-1]["body"]
         assert "Penjualan" in answer and "Operasi" not in answer
+
+
+def test_worst_seller_question_ranks_ascending(tmp_path):
+    app = create_app(tmp_path / "worst.sqlite3")
+    store = app.state.store
+    seed_events(store, [
+        sale("s1", "Nasi goreng", portions="10", revenue=150000, day=TODAY),
+        sale("s2", "Mie ayam", portions="2", revenue=30000, day=TODAY),
+    ])
+    body = store.menu_facts("menu paling sepi minggu ini?", TENANT)["body"]
+    assert "paling sepi" in body
+    assert body.index("Mie ayam") < body.index("Nasi goreng")  # worst first
+
+
+def test_revenue_wordings_reach_the_engine(tmp_path):
+    app = create_app(tmp_path / "revenue.sqlite3")
+    store = app.state.store
+    seed_events(store, [sale("s1", "Nasi goreng", portions="10", revenue=150000, day=TODAY)])
+    for question in ("berapa pendapatan hari ini?", "berapa pemasukan minggu ini?"):
+        body = store.menu_facts(question, TENANT)["body"]
+        assert body and ("150.000" in body or "porsi" in body), question
+
+
+def test_two_menu_comparison(tmp_path):
+    app = create_app(tmp_path / "pair.sqlite3")
+    store = app.state.store
+    seed_events(store, [
+        sale("s1", "Nasi goreng", portions="10", revenue=150000, day=TODAY),
+        sale("s2", "Mie ayam", portions="4", revenue=60000, day=TODAY),
+    ])
+    body = store.menu_facts("bandingkan nasi goreng dan mie ayam bulan ini", TENANT)["body"]
+    assert "Perbandingan" in body
+    assert "Mie ayam" in body and "Nasi goreng" in body
+    assert "Lebih laku: Nasi goreng" in body
+
+
+def test_question_with_numbers_is_still_a_question(tmp_path):
+    app = create_app(tmp_path / "numq.sqlite3")
+    store = app.state.store
+    seed_events(store, [sale("s1", "Nasi goreng", portions="10", revenue=150000, day=TODAY)])
+    body = store.menu_facts("berapa terjual nasi goreng 4 hari terakhir?", TENANT)["body"]
+    assert body and "4 hari terakhir" in body

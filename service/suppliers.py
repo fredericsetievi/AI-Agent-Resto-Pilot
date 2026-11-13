@@ -43,55 +43,169 @@ def _money_idr(value):
 
 
 def parse_supplier_command(text):
-    """Owner supplier commands: daftar / tambah / catat harga / tanya harga /
-    harga per bahan. Returns None when the message is not a supplier command."""
+    """Owner supplier commands: daftar / tambah / hapus / ubah / catat harga /
+    tanya harga / riwayat / harga per bahan. Returns None when the message is
+    not a supplier command."""
     text = str(text or "").strip()
     if len(text) > 300 or not re.search(r"(?i)\b(supplier|pemasok|catat\s+harga)\b", text):
+        # A bare price quote ('harga telur 45rb dari pak budi') names no
+        # supplier keyword; keep it out of the purchase draft parser, where it
+        # used to be filed as a purchase instead of a price quote.
+        if re.match(r"(?i)^harga\s+\S+", text) and _MONEY.search(text) \
+                and not re.search(r"(?i)\b(beli|ambil|pesan|jual)\b", text) and "?" not in text:
+            return {"kind": "quote", "text": text}
         return None
     lowered = text.casefold()
     if re.search(r"(?i)\b(daftar|list)\s+(supplier|pemasok)", lowered):
         return {"kind": "list"}
     if re.search(r"(?i)\btambah\s+(supplier|pemasok)\b", lowered):
         return {"kind": "add", "text": text}
-    if re.search(r"(?i)\btanya\s+harga\b", lowered):
+    if re.search(r"(?i)\bhapus\s+(supplier|pemasok)\b", lowered):
+        return {"kind": "remove", "text": text}
+    if re.search(r"(?i)\b(ubah|ganti)\s+(supplier|pemasok|nomor|kontak)\b", lowered):
+        return {"kind": "update", "text": text}
+    if re.search(r"(?i)\briwayat\s+harga\b", lowered):
+        return {"kind": "history", "text": text}
+    if re.search(r"(?i)\b(tanya|minta)\s+harga\b", lowered):
         return {"kind": "inquiry", "text": text}
     if re.search(r"(?i)\bcatat\s+harga\b", lowered):
+        return {"kind": "quote", "text": text}
+    # Recording with the supplier named explicitly and no question words:
+    # 'supplier budi cabai 30rb' is a quote, not a comparison question.
+    if _MONEY.search(text) and re.search(r"(?i)\bsupplier\b", lowered) \
+            and not re.search(r"(?i)\b(berapa|banding|dibanding|murah|termurah)\b", lowered) and "?" not in text:
         return {"kind": "quote", "text": text}
     if re.search(r"(?i)\bsupplier\b", lowered) and re.search(r"(?i)\b(harga|berapa|murah|termurah|banding)\b", lowered):
         return {"kind": "compare", "text": text}
     return None
 
 
-def parse_supplier_reply(text, catalog):
+_UNIT_PHRASE_RE = re.compile(
+    r"(?i)\bper\s+((?:setengah|1\s*/\s*2|½)?\s*(?:\d+[.,]?\d*\s*)?"
+    r"(?:kg|kilo(?:gram)?|gram|gr|g|ons|ikat|tray|peti|dus|bungkus|bks|pak|porsi|liter|lt))\b")
+_UNIT_WORD_RE = re.compile(
+    r"(?i)^(setengah|1\s*/\s*2|½|\d+[.,]?\d*)?\s*(kg|kilo|kilogram|gram|gr|g|ons|ikat|tray|peti|dus|bungkus|bks|pak|porsi|liter|lt)$")
+
+
+def _unit_multiplier(phrase, catalog_unit):
+    """Per-catalog-unit multiplier for a 'per <unit>' phrase, or None when it
+    is unknown (the quote keeps its raw amount and carries the phrase as a
+    note, so comparisons never silently mix units)."""
+    if not phrase or not catalog_unit:
+        return None
+    catalog_unit = str(catalog_unit).strip().casefold()
+    if catalog_unit not in ("kg", "kilo", "kilogram"):
+        return None
+    phrase = re.sub(r"\s+", " ", phrase.strip().casefold())
+    if re.search(r"(?i)setengah|1\s*/\s*2|½|0[,×.]5", phrase) and re.search(r"(?i)kg|kilo", phrase):
+        return Decimal(2)
+    mass_grams = None
+    if re.search(r"(?i)kg|kilo", phrase):
+        mass_grams = Decimal(1000)
+        grams = re.search(r"(\d+[.,]?\d*)", phrase)
+        if grams and not re.search(r"(?i)\bkg\b|kilo", grams.group(0)):
+            mass_grams = Decimal(grams.group(1).replace(",", "."))
+        elif grams:
+            pass
+    number = re.search(r"(\d+[.,]?\d*)", phrase)
+    if number and re.search(r"(?i)\bgram\b|\bgr\b|\bg\b", phrase):
+        mass_grams = Decimal(number.group(1).replace(",", "."))
+    if number and re.search(r"(?i)\bons\b", phrase):
+        mass_grams = Decimal(number.group(1).replace(",", ".")) * Decimal(100)
+    if mass_grams is None or mass_grams <= 0:
+        return None
+    return (Decimal(1000) / mass_grams).quantize(Decimal("0.0001"))
+
+
+def _quote_unit_note(line):
+    """A 'per <unit>' phrase on the reply line, or None."""
+    match = _UNIT_PHRASE_RE.search(str(line or ""))
+    return match.group(0).strip() if match else None
+
+
+def _pair_line_quotes(line, resolve, catalog_unit=None):
+    """Pair every money token on a reply line with its nearest ingredient.
+
+    Deterministic segment walk: 'telur 45rb cabai 30rb' yields two quotes,
+    '45rb untuk telur' pairs backwards. A 'per <unit>' phrase is removed
+    before price scanning (so 'per 500 gram' is never read as a price) and
+    becomes either a per-catalog-unit normalization or an honest note.
+    Returns (quotes, leftover_texts); never invents a price.
+    """
+    cleaned = str(line or "")
+    unit_note = None
+    unit_match = _UNIT_PHRASE_RE.search(cleaned)
+    if unit_match:
+        unit_note = unit_match.group(0).strip()
+        cleaned = cleaned[:unit_match.start()] + " " + cleaned[unit_match.end():]
+
+    matches = list(_MONEY.finditer(cleaned))
+    if not matches:
+        return [], [cleaned.strip()] if cleaned.strip() else []
+    segments, cursor = [], 0
+    for match in matches:
+        segments.append((cleaned[cursor:match.start()], _money_idr(match.group(0)), match.group(0)))
+        cursor = match.end()
+    segments.append((cleaned[cursor:], None, None))
+
+    quotes, leftover = [], []
+    pending = None  # (amount, raw) waiting for a later ingredient mention
+    for seg_text, price_after, raw in segments:
+        found = resolve(seg_text)
+        if found:
+            amount = pending[0] if pending else price_after
+            pending = None
+            if amount:
+                note = unit_note
+                multiplier = _unit_multiplier(unit_note, catalog_unit) if unit_note else None
+                final = int((Decimal(amount) * multiplier).to_integral_value()) if multiplier else amount
+                if multiplier and multiplier != 1:
+                    note = f"asli Rp{amount:,} {unit_note}; dinormalisasi per {catalog_unit}"
+                quotes.append({"ingredient_id": found[0], "ingredient_name": found[1],
+                               "unit_price_idr": final, "note": note, "line": line})
+            else:
+                leftover.append(seg_text.strip() or f"(bahan tanpa harga: {found[1]})")
+        elif price_after is not None:
+            if pending is not None:
+                leftover.append(f"(harga tanpa nama bahan: {pending[1]})")
+            pending = (price_after, raw)
+    if pending is not None:
+        leftover.append(f"(harga tanpa nama bahan: {pending[1]})")
+    return quotes, leftover
+
+
+def parse_supplier_reply(text, catalog, units=None):
     """Parse one supplier reply into priced ingredient quotes.
 
-    Deterministic: money tokens ('48rb', 'Rp50.000') paired with a known
-    ingredient name/alias on the same line. Returns
-    {"quotes": [{ingredient_id, ingredient_name, unit_price_idr}], "unparsed": [...]}.
-    Never invents a price.
+    Deterministic: money tokens ('48rb', 'Rp50.000') paired with the nearest
+    known ingredient name/alias on the same line; every pair on the line is
+    extracted ('telur 45rb cabai 30rb' → two quotes). Returns
+    {"quotes": [{ingredient_id, ingredient_name, unit_price_idr, note}],
+    "unparsed": [...]}. Never invents a price.
     """
     quotes, unparsed = [], []
-    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
-    for line in lines:
-        price = _MONEY.search(line)
-        if not price:
-            unparsed.append(line)
+    for line in [line.strip() for line in str(text or "").splitlines() if line.strip()]:
+        def resolve(segment):
+            seg = _normalized(segment)
+            if not seg:
+                return None
+            for candidate_id, aliases in catalog.items():
+                for alias in aliases:
+                    alias = _normalized(alias)
+                    # Segment-only matching: a whole-line fallback would
+                    # attribute every price on the line to the first catalog
+                    # entry ('telur 45rb cabai 30rb' → two Telur quotes).
+                    if alias and alias in seg:
+                        return (candidate_id, aliases[0])
+            return None
+
+        probe_pairs, probe_leftover = _pair_line_quotes(line, resolve)
+        if not probe_pairs and not probe_leftover:
             continue
-        matched = None
-        lowered = _normalized(line)
-        for candidate_id, aliases in catalog.items():
-            for alias in aliases:
-                alias = _normalized(alias)
-                if alias and (alias in lowered or (len(lowered) >= 4 and lowered in alias)):
-                    matched = (candidate_id, aliases[0])
-                    break
-            if matched:
-                break
-        amount = _money_idr(price.group(0))
-        if matched and amount:
-            quotes.append({"ingredient_id": matched[0], "ingredient_name": matched[1], "unit_price_idr": amount, "line": line})
-        else:
-            unparsed.append(line)
+        catalog_unit = (units or {}).get(probe_pairs[0]["ingredient_id"]) if probe_pairs else None
+        line_pairs, line_leftover = _pair_line_quotes(line, resolve, catalog_unit)
+        quotes.extend(line_pairs)
+        unparsed.extend(text for text in line_leftover if text)
     return {"quotes": quotes, "unparsed": unparsed}
 
 
@@ -456,6 +570,12 @@ class SupplierMixin:
                     {"action": "supplier_added", "supplier_id": result.get("id")})
         if kind == "quote":
             return self._supplier_quote_from_text(conn, tenant, command.get("text") or text, key)
+        if kind == "remove":
+            return self._supplier_remove_via_chat(conn, tenant, command.get("text") or text, key)
+        if kind == "update":
+            return self._supplier_update_via_chat(conn, tenant, command.get("text") or text, key)
+        if kind == "history":
+            return self._supplier_history_reply(conn, tenant, command.get("text") or text)
         if kind == "inquiry":
             request = self._inquiry_request_text(text)
             inquiry_id, contact_count = self.supplier_inquiry_create(conn, tenant, request)
@@ -493,6 +613,114 @@ class SupplierMixin:
                                                   "raw_message": command_text}, tenant, conn=conn)
         return (f"Harga {ingredient_name} dari {supplier_hit['name']}: Rp{price:,}/satuan. Tercatat.",
                 {"action": "supplier_quote_recorded", "result": result})
+
+    def _resolve_supplier_from_text(self, conn, tenant, text):
+        """Match 'hapus supplier pak budi' style text to exactly one supplier.
+
+        Accepts the supplier name (case-insensitive containment), the first 8
+        hex characters of its id, or its contact phone. Returns
+        (supplier, None) | (None, reply_text) — multiple matches ask the
+        owner to be more specific rather than guessing.
+        """
+        suppliers = self.suppliers_list(tenant, conn=conn)
+        lowered = str(text or "").casefold()
+        phone = None
+        phone_match = re.search(r"(?i)(628\d{6,}|[1-9]\d{6,14})", lowered)
+        if phone_match:
+            phone = phone_match.group(1)
+        id8 = None
+        id_match = re.search(r"\b([0-9a-f]{8})\b", lowered)
+        if id_match:
+            id8 = id_match.group(1)
+        matches = []
+        stop = {"supplier", "pemasok", "hapus", "ubah", "ganti", "nomor", "kontak", "whatsapp",
+                "telegram", "riwayat", "harga", "konfirmasi", "catatan", "kirim", "pagi"}
+        for supplier in suppliers:
+            name = str(supplier["name"] or "").casefold()
+            if phone and supplier["contact_phone"] and phone in str(supplier["contact_phone"]):
+                matches.append(supplier)
+                continue
+            if id8 and str(supplier["id"]).startswith(id8):
+                matches.append(supplier)
+                continue
+            if name and name in lowered:
+                matches.append(supplier)
+                continue
+            # Shorthand ('budi' for 'Pak Budi'): a distinctive name token the
+            # owner typed still identifies the supplier.
+            name_tokens = {token for token in re.split(r"[^a-z0-9]+", name) if len(token) >= 4 and token not in stop}
+            text_tokens = set(re.findall(r"[a-z0-9]{4,}", lowered))
+            if name_tokens and name_tokens & text_tokens:
+                matches.append(supplier)
+        if not matches:
+            return None, ("Supplier tidak dikenali. Supplier terdaftar: "
+                          + (", ".join(str(s["name"]) for s in suppliers) or "belum ada") + ".")
+        if len(matches) > 1:
+            return None, ("Beberapa supplier cocok — sebutkan lebih spesifik: "
+                          + ", ".join(str(s["name"]) for s in matches) + ".")
+        return matches[0], None
+
+    def _supplier_remove_via_chat(self, conn, tenant, text, key):
+        """'hapus supplier pak budi' — destructive, so it executes only when
+        the same message carries the word KONFIRMASI; otherwise the owner
+        gets the exact confirmation wording back (no thread state needed)."""
+        target, error = self._resolve_supplier_from_text(conn, tenant, text)
+        if error:
+            return (error, {"action": "supplier_remove_rejected"})
+        if not re.search(r"(?i)\bkonfirmasi\b", str(text or "")):
+            return (f"Menghapus supplier menghapus juga kutipan harganya. Ketik ulang dengan kata KONFIRMASI: "
+                    f"'hapus supplier {target['name']} KONFIRMASI'.",
+                    {"action": "supplier_remove_confirm", "supplier_id": target["id"]})
+        removed = self.supplier_remove(tenant, target["id"], key, conn=conn)
+        return (f"Supplier '{target['name']}' dihapus.", {"action": "supplier_removed", "result": removed})
+
+    def _supplier_update_via_chat(self, conn, tenant, text, key):
+        """'ubah supplier budi wa 6281234567' / 'ubah supplier budi catatan murah'."""
+        from .db import DomainError
+        target, error = self._resolve_supplier_from_text(conn, tenant, re.sub(r"(?i)\b(ubah|ganti)\s+(supplier|pemasok|nomor|kontak)\b", " ", str(text or "")))
+        if error:
+            return (error, {"action": "supplier_update_rejected"})
+        lowered = str(text or "").casefold()
+        payload = {}
+        phone_match = re.search(r"(?i)\b(wa|whatsapp|telegram|tg)\s*[:=]?\s*(628\d{6,}|[1-9]\d{6,14})", lowered)
+        if phone_match:
+            payload["contact_phone"] = phone_match.group(2)
+            payload["contact_platform"] = "telegram" if phone_match.group(1) in ("telegram", "tg") else "whatsapp"
+        notes_match = re.search(r"(?i)\bcatatan\s*[:=]?\s*(.+)", text)
+        if notes_match:
+            payload["notes"] = notes_match.group(1)[:300]
+        if not payload:
+            return ("Sebutkan yang diubah, contoh: 'ubah supplier budi wa 628123456789' "
+                    "atau 'ubah supplier budi catatan: kirim pagi'.",
+                    {"action": "supplier_update_rejected"})
+        try:
+            updated = self.supplier_update(tenant, target["id"], key, payload, conn=conn)
+        except DomainError as exc:
+            return (str(exc), {"action": "supplier_update_rejected"})
+        contact = f"{updated.get('contact_platform') or 'wa'} {updated.get('contact_phone')}" if updated.get("contact_phone") else "tanpa kontak"
+        return (f"Supplier '{updated.get('name')}' diperbarui · kontak: {contact}.",
+                {"action": "supplier_updated", "supplier_id": updated.get("id")})
+
+    def _supplier_history_reply(self, conn, tenant, text):
+        """'riwayat harga supplier budi' — every recent quote from one supplier."""
+        target, error = self._resolve_supplier_from_text(conn, tenant, re.sub(r"(?i)\briwayat\s+harga\b", " ", str(text or "")))
+        if error:
+            return (error, {"action": "supplier_history_missing"})
+        rows = self._inventory_query(
+            conn,
+            "SELECT q.ingredient_name, q.unit_price_idr, q.note, q.created_at "
+            f"FROM supplier_price_quotes q WHERE q.{self._tenant_col()}=? AND q.supplier_id=? "
+            "ORDER BY q.created_at DESC LIMIT 12", (tenant, target["id"])).fetchall()
+        if not rows:
+            return (f"Belum ada kutipan harga dari {target['name']}. "
+                    f"'tanya harga <bahan> ke supplier' untuk menanyakan langsung.",
+                    {"action": "supplier_history_empty"})
+        lines = [f"Kutipan harga dari {target['name']} (terbaru dulu):"]
+        for ingredient_name, price, note, created_at in rows:
+            price_text = f"Rp{price:,}".replace(",", ".") if price is not None else "?"
+            note_text = f" ({note})" if note else ""
+            lines.append(f"• {ingredient_name}: {price_text}{note_text} · {str(created_at or '')[:10]}")
+        return ("\n".join(lines), {"action": "supplier_history", "supplier_id": target["id"]})
 
     def _supplier_compare_reply(self, conn, tenant, text):
         """Cheapest supplier for one ingredient: freshest quotes, purchase baseline."""
@@ -564,28 +792,39 @@ class SupplierMixin:
         """Parse one supplier reply and store price quotes (never purchases).
 
         Deterministic: money tokens paired with ingredient names via the
-        same alias mapping as stock questions. Unparseable lines are stored
-        as notes on the quote-less record and reported to the owner.
+        same alias mapping as stock questions; every ingredient/price pair on
+        a line is extracted ('telur 45rb cabai 30rb' → two quotes). A
+        'per <unit>' phrase is normalized to the catalog unit when known,
+        otherwise stored as the quote's note. Unparseable lines are reported
+        to the owner, never guessed.
         """
         from .db import now
+        units = {item["id"]: item.get("unit") for item in self._catalog_for(restaurant_id)["list"]}
         parsed_quotes = []
         unparsed = []
         # Ingredient matching opens its own short transactions: do it BEFORE
         # the write transaction so SQLite never nests BEGIN IMMEDIATE.
+        def resolve(segment):
+            if not str(segment or "").strip():
+                return None
+            return self._ingredient_from_text(None, restaurant_id, segment)
+
         for line in [line.strip() for line in str(text or "").splitlines() if line.strip()]:
-            price = _MONEY_IDR(line)
-            ingredient_id, ingredient_name = self._ingredient_from_text(None, restaurant_id, line)
-            if price is not None and ingredient_id:
-                parsed_quotes.append({"ingredient_id": ingredient_id, "ingredient_name": ingredient_name, "price": price})
-            else:
-                unparsed.append(line)
+            line_pairs, line_leftover = _pair_line_quotes(line, resolve)
+            catalog_unit = units.get(line_pairs[0]["ingredient_id"]) if line_pairs else None
+            if catalog_unit:
+                line_pairs, line_leftover = _pair_line_quotes(line, resolve, catalog_unit)
+            for pair in line_pairs:
+                parsed_quotes.append({"ingredient_id": pair["ingredient_id"], "ingredient_name": pair["ingredient_name"],
+                                      "price": pair["unit_price_idr"], "note": pair.get("note"), "line": line})
+            unparsed.extend(text for text in line_leftover if text)
         with self.transaction() as conn:
             stored = []
             for quote in parsed_quotes:
                 quote_id = uuid.uuid4().hex
                 tc = self._tenant_col()
-                self._inventory_query(conn, f"INSERT INTO supplier_price_quotes (id, {tc}, supplier_id, ingredient_id, ingredient_name, unit_price_idr, note, raw_message, source, inquiry_id, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'reply', ?, ?)",
-                                      (quote_id, restaurant_id, supplier_id, quote["ingredient_id"], quote["ingredient_name"], quote["price"], line.strip()[:300], inquiry_id, now()))
+                self._inventory_query(conn, f"INSERT INTO supplier_price_quotes (id, {tc}, supplier_id, ingredient_id, ingredient_name, unit_price_idr, note, raw_message, source, inquiry_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reply', ?, ?)",
+                                      (quote_id, restaurant_id, supplier_id, quote["ingredient_id"], quote["ingredient_name"], quote["price"], quote.get("note"), quote["line"][:300], inquiry_id, now()))
                 stored.append(quote)
         return {"stored": stored, "unparsed": unparsed}
 

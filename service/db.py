@@ -1595,6 +1595,12 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 ):
                     reply = HELP_REPLY
                     result["action"] = "help_reply"
+                    # Mine real phrasings later: record what the agents could
+                    # not understand (bounded, never the full unbound text).
+                    try:
+                        self._audit(conn, "intent_unknown", str(payload.get("text") or "")[:160], tenant)
+                    except Exception:
+                        pass
                 else:
                     draft = self._new_draft(conn, payload["text"], extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=tenant)
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])
