@@ -99,7 +99,7 @@ test('WhatsApp simulator renders the requested route and follows the language to
   h.run('LANG="id"');
   h.run(`state.data={restaurant:{name:'Demo kitchen'},drafts:[]};state.whatsappLoaded=true;navigate()`);
   // Default language: Indonesian.
-  assert.equal(h.element('#page-title').textContent,'Alur WhatsApp yang bisa dilatih.');
+  assert.equal(h.element('#page-title').textContent,'Alur WhatsApp yang bisa dilatih, Bos.');
   assert.match(h.element('#content').innerHTML,/SIMULATED/);
   assert.match(h.element('#content').innerHTML,/Tidak terhubung ke WhatsApp/);
   // Toggle to English: same page, translated.
