@@ -145,16 +145,50 @@ def reminder_schedule_tail(settings):
     return f"Jadwal: pagi jam {settings['morning_hour']}, malam jam {settings['evening_hour']}."
 
 
-def build_morning_reply():
-    """Deterministic morning nudge — no model call, no invented figures."""
-    return ("🌅 Selamat pagi! Jangan lupa catat pembelian hari ini di chat ini ya — "
+def build_morning_reply(envelope=None):
+    """Deterministic morning nudge — no model call, no invented figures.
+
+    ``envelope`` is yesterday's cash-envelope status (from CashEnvelopeMixin);
+    when set, it flags the unrecorded gap so it is chased while still fresh.
+    """
+    from .cash_envelope import _rp
+
+    text = ("🌅 Selamat pagi! Jangan lupa catat pembelian hari ini di chat ini ya — "
             "kirim daftar belanjaannya, totalnya jadi patokan uang yang dibawa.")
+    if envelope and envelope.get("envelope_idr") is not None and (envelope.get("unrecorded_idr") or 0) > 0:
+        text += (f"\n\nKemarin budget {_rp(envelope['envelope_idr'])}, masih ada "
+                 f"{_rp(envelope['unrecorded_idr'])} yang belum tercatat — catat hari ini ya.")
+    return text
 
 
-def build_evening_reply():
-    """Deterministic evening nudge; the cash envelope folds in later (V33.2)."""
-    return ("🌙 Malam! Ada pembelian hari ini yang belum tercatat? Kirim sekarang "
+def build_evening_reply(envelope=None):
+    """Deterministic evening nudge, envelope-aware: the daily cash recap.
+
+    ``envelope`` is today's cash-envelope status. Without an envelope the
+    reply is the plain nudge; with one, the owner is asked for the change
+    they brought back (or shown the unrecorded gap once it is known).
+    """
+    from .cash_envelope import _rp
+
+    text = ("🌙 Malam! Ada pembelian hari ini yang belum tercatat? Kirim sekarang "
             "sebelum tutup, atau balas 'ringkas' untuk rekap mingguan.")
+    if not envelope or envelope.get("envelope_idr") is None:
+        return text
+    recorded, leftover = envelope["recorded_idr"], envelope["leftover_idr"]
+    if leftover is None:
+        return text + (f"\n\n💰 Budget hari ini {_rp(envelope['envelope_idr'])}, tercatat "
+                       f"{_rp(recorded)}. Uang kembali berapa? Balas 'uang kembali <jumlah>' "
+                       "ya (contoh: uang kembali 500 ribu).")
+    text += (f"\n\n💰 Rekap kas hari ini: budget {_rp(envelope['envelope_idr'])}, tercatat "
+             f"{_rp(recorded)}, kembali {_rp(leftover)}.")
+    unrecorded = envelope["unrecorded_idr"]
+    if unrecorded > 0:
+        text += f" Belum tercatat: {_rp(unrecorded)} — ada pembelian yang belum dikirim?"
+    elif unrecorded < 0:
+        text += f" Pengeluaran melebihi budget {_rp(-unrecorded)}."
+    else:
+        text += " Semua pembelian sudah tercatat 👍"
+    return text
 
 
 class ReminderMixin:
