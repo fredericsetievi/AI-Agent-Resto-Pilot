@@ -172,6 +172,30 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         """The restaurant's full catalog (base + custom), for filter checks."""
         return self._catalog_for(restaurant_id)["list"]
 
+    def set_ingredient_unit(self, restaurant_id, ingredient_id, unit):
+        """Edit the unit of one imported ingredient (tenant-scoped).
+
+        Base-catalog ingredients (cabai, telur, ...) are shared across
+        restaurants, so their unit is not editable here; owners change those
+        via re-import with a satuan column.
+        """
+        clean = str(unit or "").strip().casefold()
+        if not clean or len(clean) > 20 or any(ch in clean for ch in "\n\r\t"):
+            raise DomainError("invalid_unit", "Satuan tidak valid.", 422)
+        with pg_connection() as conn:
+            cursor = self._execute(
+                conn,
+                "UPDATE custom_ingredients SET unit=%s WHERE slug=%s AND id=%s",
+                (clean, restaurant_id, ingredient_id),
+            )
+            if not cursor.rowcount:
+                raise DomainError("ingredient_not_custom", "Satuan bahan ini tidak bisa diubah di sini. Bahan hasil impor bisa; bawaan katalog diubah lewat impor dengan kolom satuan.", 422)
+        # Keep the cached catalog copy coherent without a full reload.
+        entry = self._catalog_for(restaurant_id)["by_id"].get(ingredient_id)
+        if entry:
+            entry["unit"] = clean
+        return {"id": ingredient_id, "unit": clean}
+
     @staticmethod
     def slugify_name(raw_name):
         return PostgresStore._slugify(raw_name)
@@ -206,7 +230,7 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                         unique, suffix = f"{slug}_{suffix}", suffix + 1
                     used_ids.add(unique)
                     stored_threshold = decimal_string(threshold) if threshold is not None else "0"
-                    stored_unit = unit or "kg"
+                    stored_unit = unit or "pcs"
                     self._execute(conn, "INSERT INTO custom_ingredients (id, slug, name, unit, reorder_threshold) VALUES (%s, %s, %s, %s, %s)", (unique, restaurant_id, name, stored_unit, stored_threshold))
                     self._execute(conn, "INSERT INTO stock (slug, ingredient_id, quantity) VALUES (%s, %s, '0') ON CONFLICT DO NOTHING", (restaurant_id, unique))
                     entry = {"id": unique, "name": name, "unit": stored_unit, "reorder_threshold": stored_threshold}
@@ -562,7 +586,7 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                 raise DomainError("clarification_required", "The ingredient name is not usable; correct it on the dashboard.", 422)
             if slug not in catalog["by_id"]:
                 name = str(raw_name).strip().capitalize()
-                unit = item.get("canonical_unit") or "kg"
+                unit = item.get("canonical_unit") or "pcs"
                 self._execute(
                     conn,
                     "INSERT INTO custom_ingredients (id, slug, name, unit, reorder_threshold) VALUES (%s, %s, %s, %s, '0')",
