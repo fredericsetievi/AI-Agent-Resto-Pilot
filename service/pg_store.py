@@ -1800,11 +1800,14 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         drafts = [self._present(conn, body, restaurant_id, preloaded) for body in drafts_bodies]
 
         inventory = []
+        custom_ids = {row["id"] for row in self._rows(self._execute(
+            conn, "SELECT id FROM custom_ingredients WHERE slug=%s", (restaurant_id,)))}
         for ingredient in catalog["list"]:
             quantity = stock_map.get(ingredient["id"], "0")
             inventory.append({"ingredient_id": ingredient["id"], "name": ingredient["name"], "quantity": quantity,
                               "unit": ingredient["unit"], "reorder_threshold": ingredient["reorder_threshold"],
-                              "low_stock": Decimal(quantity) < Decimal(ingredient["reorder_threshold"])})
+                              "low_stock": Decimal(quantity) < Decimal(ingredient["reorder_threshold"]),
+                              "unit_editable": ingredient["id"] in custom_ids})
         today = datetime.now(RESTAURANT_TIMEZONE).date()
         sources_by_draft = {}
         for source in sources:
