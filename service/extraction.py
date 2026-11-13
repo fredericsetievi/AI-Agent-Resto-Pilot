@@ -175,7 +175,10 @@ def _parse_price(text: str) -> tuple[str, int | None, str | None, bool]:
         if lot_total:
             prefix = re.sub(r"(?i)\s*\btotal\b\s*", " ", prefix)
         if _TRAILING_QUANTITY.search(prefix):
-            bare = int(match.group("amount"))
+            digits = match.group("amount").replace(".", "")
+            if len(digits) > 13:
+                return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000.", False
+            bare = int(digits)
             if bare >= 1000:
                 remainder = re.sub(r"(?i)\s*\btotal\b\s*$", "", text[: match.start()]).strip()
                 return remainder, bare, None, not lot_total
@@ -271,6 +274,10 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
     if _MULTI_CLAUSE.search(source):
         return None, [f"Line {line_number}: multiple item clauses are ambiguous; put one item on each line."]
 
+    # Forwarded preorder lists use bullet markers ("- bolu pandan 2 pcs …");
+    # a bullet is formatting, not part of the item name. A marker directly
+    # followed by a digit stays untouched (negative amounts are not bullets).
+    source = re.sub(r"^\s*(?:[-*•·](?!\d)\s*)+", "", source)
     source = re.sub(r"(?i)^\s*(?:tolong\s+)?beli\s+", "", source).strip()
     if not source:
         return None, [f"Line {line_number}: no item name was found."]
