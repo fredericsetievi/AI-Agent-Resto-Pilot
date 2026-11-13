@@ -4,6 +4,18 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const e = escapeHTML;
 
+// newId() only exists in secure contexts (HTTPS, localhost). The
+// dashboard must also work over plain HTTP (LAN demos, hosting platforms that
+// serve without TLS), so build an RFC 4122 v4 UUID from getRandomValues there.
+function newId() {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
 // ---- Language: LANG and t() live in i18n.js (loaded first); t(id, en) also
 // supports inline bilingual pairs used throughout this file. ----
 const STATIC_I18N = {
@@ -150,7 +162,7 @@ async function adminAction(action, button) {
     if(action==='add-number')return adminDialogForm('Hubungkan nomor/chat', `<label for="f-phone">Nomor / chat ID (digit, kode negara di depan)</label><input id="f-phone" placeholder="6281234567890 atau chat ID Telegram" required><label for="f-platform">Platform</label><select id="f-platform"><option value="whatsapp">WhatsApp</option><option value="telegram">Telegram</option></select><label for="f-label">Label <span class="muted">(opsional)</span></label><input id="f-label" maxlength="100">`, 'add-number');
     if(action==='remove-number'){
       const platform=button.dataset.platform || 'whatsapp';
-      const response=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers/${encodeURIComponent(button.dataset.phone)}?platform=${encodeURIComponent(platform)}`,{method:'DELETE',key:crypto.randomUUID()});
+      const response=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers/${encodeURIComponent(button.dataset.phone)}?platform=${encodeURIComponent(platform)}`,{method:'DELETE',key:newId()});
       replaceRestoInList(response);renderAdmin();toast('Koneksi dihapus. Pesan dari situ tidak lagi diproses.');return;
     }
     if(action==='owner-phone'){
@@ -170,14 +182,14 @@ document.addEventListener('submit',async event => {
   const action=event.target.dataset.adminSubmit, value=name => { const el=$(`#f-${name}`); return el ? el.value.trim() : null; };
   try {
     let detail;
-    if(action==='create-resto')detail=await api('/v1/admin/restaurants',{method:'POST',body:{name:value('name'),address:value('address'),owner_username:value('user'),owner_password:value('pass'),whatsapp_number:value('phone'),number_label:value('label')},key:crypto.randomUUID()});
-    else if(action==='update-resto')detail=await api(`/v1/admin/restaurants/${state.adminSelected}`,{method:'PATCH',body:{name:value('name'),address:value('address')},key:crypto.randomUUID()});
-    else if(action==='add-number')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers`,{method:'POST',body:{whatsapp_number:value('phone'),platform:value('platform'),label:value('label')},key:crypto.randomUUID()});
+    if(action==='create-resto')detail=await api('/v1/admin/restaurants',{method:'POST',body:{name:value('name'),address:value('address'),owner_username:value('user'),owner_password:value('pass'),whatsapp_number:value('phone'),number_label:value('label')},key:newId()});
+    else if(action==='update-resto')detail=await api(`/v1/admin/restaurants/${state.adminSelected}`,{method:'PATCH',body:{name:value('name'),address:value('address')},key:newId()});
+    else if(action==='add-number')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/numbers`,{method:'POST',body:{whatsapp_number:value('phone'),platform:value('platform'),label:value('label')},key:newId()});
     else if(action==='owner-phone'){
       await api(`/v1/admin/restaurants/${state.adminSelected}/owner-phone`,{method:'PUT',body:{username:value('user'),phone:value('phone') || null,ownership_reviewed:$('#f-reviewed').checked}});
       $('#admin-dialog').close();toast(t('phone_admin_saved'));return;
     }
-    else if(action==='reset-password')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/reset-owner-password`,{method:'POST',body:{username:value('user'),new_password:value('pass')},key:crypto.randomUUID()});
+    else if(action==='reset-password')detail=await api(`/v1/admin/restaurants/${state.adminSelected}/reset-owner-password`,{method:'POST',body:{username:value('user'),new_password:value('pass')},key:newId()});
     else return;
     replaceRestoInList(detail);
     $('#admin-dialog').close();renderAdmin();toast(t('toast_saved'));
@@ -380,7 +392,7 @@ function renderWhatsAppChat() {
 async function sendWhatsAppMessage(text) {
   const clean=String(text || '').trim();if(!clean || state.whatsappSending)return;
   const fingerprint=JSON.stringify({text:clean,sender:WHATSAPP_SENDER});
-  if(state.whatsappPending?.fingerprint!==fingerprint)state.whatsappPending={fingerprint,event_id:crypto.randomUUID(),key:crypto.randomUUID()};
+  if(state.whatsappPending?.fingerprint!==fingerprint)state.whatsappPending={fingerprint,event_id:newId(),key:newId()};
   const pending=state.whatsappPending, body={text:clean,sender:WHATSAPP_SENDER,event_id:pending.event_id};
   state.whatsappSending=true;state.whatsappError='';renderWhatsAppChat();
   try {
@@ -443,13 +455,13 @@ async function loadLinks() {
 }
 async function addLink(phone, platform, label) {
   if(state.linksBusy)return;state.linksBusy=true;showError('links-error','');
-  try { await api('/v1/links',{method:'POST',body:{whatsapp_number:phone,platform,label:label||null},key:crypto.randomUUID()}); state.linksLoaded=false; await loadLinks(); }
+  try { await api('/v1/links',{method:'POST',body:{whatsapp_number:phone,platform,label:label||null},key:newId()}); state.linksLoaded=false; await loadLinks(); }
   catch(error) { showError('links-error',error.message); }
   finally { state.linksBusy=false; const button=document.querySelector('#links-form button[type="submit"]'); if(button)button.disabled=false; }
 }
 async function removeLink(phone, platform) {
   if(state.linksBusy)return;state.linksBusy=true;
-  try { await api('/v1/links/'+encodeURIComponent(phone)+'?platform='+encodeURIComponent(platform),{method:'DELETE',key:crypto.randomUUID()}); state.linksLoaded=false; await loadLinks(); }
+  try { await api('/v1/links/'+encodeURIComponent(phone)+'?platform='+encodeURIComponent(platform),{method:'DELETE',key:newId()}); state.linksLoaded=false; await loadLinks(); }
   catch(error) { toast('Gagal memutus koneksi: '+error.message); }
   finally { state.linksBusy=false; }
 }
@@ -472,7 +484,7 @@ async function applyOpname() {
   if(state.opnameBusy)return;state.opnameBusy=true;showError('opname-error','');
   const ingredient=$('#opname-ingredient').value, counted=$('#opname-counted').value.trim(), note=$('#opname-note').value.trim() || null;
   const button=document.querySelector('#opname-form button[type="submit"]');if(button)button.disabled=true;
-  try { await api('/v1/stock-counts',{method:'POST',body:{ingredient_id:ingredient,counted_quantity:counted,note},key:crypto.randomUUID()}); state.data=null; await refresh(); toast('Stok opname diterapkan.'); }
+  try { await api('/v1/stock-counts',{method:'POST',body:{ingredient_id:ingredient,counted_quantity:counted,note},key:newId()}); state.data=null; await refresh(); toast('Stok opname diterapkan.'); }
   catch(error) { showError('opname-error',error.message); }
   finally { state.opnameBusy=false; const b=document.querySelector('#opname-form button[type="submit"]'); if(b)b.disabled=false; }
 }
@@ -581,7 +593,7 @@ function renderReview() {
 }
 function updateApprovalButton() { const button=$('#approve-draft'); if(button)button.disabled=state.busy || !state.online || state.dirty || state.draft?.status!=='pending_approval' || !$('#goods-received')?.checked; }
 function reviewBusy(busy) { state.busy=busy;$('#review-form')?.querySelectorAll('button,input,select').forEach(control => control.disabled=busy);$('#review-dialog').querySelector('[data-close]')?.toggleAttribute('disabled',busy);if($('#add-item'))$('#add-item').disabled=busy || (state.draft?.items.length ?? 0)>=20;updateApprovalButton(); }
-function stableMutationKey(operation,body) { const fingerprint=operation+JSON.stringify(body);if(!state.mutationKeys.has(fingerprint))state.mutationKeys.set(fingerprint,crypto.randomUUID());return state.mutationKeys.get(fingerprint); }
+function stableMutationKey(operation,body) { const fingerprint=operation+JSON.stringify(body);if(!state.mutationKeys.has(fingerprint))state.mutationKeys.set(fingerprint,newId());return state.mutationKeys.get(fingerprint); }
 function editedItems() {
   return [...document.querySelectorAll('[data-item]')].map(row => {
     const original=state.draft.items[Number(row.dataset.item)], val=name => $(`[name="${name}"]`,row).value.trim();
@@ -671,7 +683,7 @@ $('#intake-form').addEventListener('submit',async event => {
   }
   if(photos.length > 5){showError('intake-error','Send at most 5 files at once — the rest can follow in another draft.');return;}
   const fingerprint=photos.length ? photos.map(photo=>`${photo.name}:${photo.size}:${photo.lastModified}`).join('|')+`:${supplier || ''}` : JSON.stringify({text,supplier});
-  if(state.intakeKey?.fingerprint!==fingerprint)state.intakeKey={fingerprint,key:crypto.randomUUID()};
+  if(state.intakeKey?.fingerprint!==fingerprint)state.intakeKey={fingerprint,key:newId()};
   button.disabled=true;button.textContent=photos.length>1?'Reading photos…':photos.length?'Reading photo…':'Preparing…';showError('intake-error','');
   try {
     const draft=pdfs.length === 1
@@ -770,7 +782,7 @@ function inventoryOptions(selected=''){return inventoryState.snapshot.map(item=>
 function recipeLine(){return `<div class="recipe-line"><label>Ingredient<select name="recipe_ingredient">${inventoryOptions()}</select></label><label>Amount per portion<input name="recipe_quantity" type="number" min="0.000001" step="any" required placeholder="e.g. 0.15"></label><button type="button" class="button mini" data-remove-recipe-line aria-label="Remove ingredient">Remove</button></div>`;}
 function openInventoryForm(kind){
   if(!inventoryState.data || state.user?.role!=='owner')return;
-  inventoryState.formId=crypto.randomUUID();inventoryState.snapshot=(state.data.inventory||[]).map(item=>({...item}));
+  inventoryState.formId=newId();inventoryState.snapshot=(state.data.inventory||[]).map(item=>({...item}));
   inventoryState.recipesSnapshot=(inventoryState.data.recipes||[]).map(recipe=>({...recipe,items:recipe.items.map(item=>({...item}))}));
   const settings=inventoryState.data.settings||{}, recipes=inventoryState.recipesSnapshot;
   const names={usage:'Record kitchen usage',waste:'Record waste',count:'Count remaining stock',sale:'Log sales',recipe:'Recipes for sales',settings:'Plan your next order'};
