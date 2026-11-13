@@ -352,8 +352,34 @@ def test_draft_reply_needs_clarification_shows_total_supplier_and_groups_notes()
     assert "unknown ingredient" not in reply
     assert "select a catalog item" not in reply
     assert "Baru: pecombang — masuk daftar saat YA." in reply
-    assert "Ada baris perlu dicek (harga, satuan, atau keterbacaan foto)." in reply
+    assert "Ada baris perlu dicek." in reply
     assert reply.splitlines()[-1] == "YA untuk catat, BATAL untuk batal."
+
+
+def test_draft_reply_long_all_new_list_skips_enumeration():
+    """An 8-item first-ever draft (pilot's cake list) stays short: the new-item
+    names are already on the item lines, so a full 'Baru:' enumeration repeats
+    the whole message. A compact count note keeps the catalog-entry info."""
+    draft = {
+        "id": "13dfeb45b39b4632", "version": 1, "status": "needs_clarification",
+        "total_idr": 38500,
+        "warnings": ["Line 5: price missing; verify this line."],
+        "items": [
+            {"ingredient_id": None, "raw_name": raw, "quantity": qty, "unit": "pcs",
+             "line_total_idr": total, "unit_price_idr": price}
+            for raw, qty, total, price in [
+                ("bolkus jumbo", "15", 4000, "267"), ("bolu panggang mika", "6", 8500, "1417"),
+                ("mangkok pink", "6", 7000, "1167"), ("bolu kismis", "6", 6000, "1000"),
+                ("bapao srikaya", "2", None, None), ("lepet", "10", 2500, "250"),
+                ("banana cake", "10", 2500, "250"), ("pukis", "2", 8000, "4000"),
+            ]
+        ],
+    }
+    reply = draft_reply(draft)
+    assert "Semua item baru — masuk daftar saat YA." in reply
+    assert "Baru: " not in reply  # no repeated name enumeration
+    assert "bolkus jumbo" not in reply.split("Semua item baru")[1]  # names appear once
+    assert "Ada baris perlu dicek." in reply
 
 
 def test_chatter_with_money_gets_help_not_a_draft(client):
