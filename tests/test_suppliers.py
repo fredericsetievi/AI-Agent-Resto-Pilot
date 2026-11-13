@@ -285,3 +285,92 @@ def test_unknown_question_is_logged_for_tuning(tmp_path):
         row = conn.execute(
             "SELECT message FROM activity WHERE event='intent_unknown' ORDER BY created_at DESC LIMIT 1").fetchone()
     assert row and "kulit lumpia" in row[0]
+
+
+def seed_market_prices(store, rid):
+    """Pak Budi cheaper for cabai; pasar pagi cheaper for telur."""
+    store.supplier_add(uuid4().hex, {"name": "Pak Budi"}, rid)
+    store.supplier_add(uuid4().hex, {"name": "pasar pagi"}, rid)
+    ingest(store, "catat harga cabai pak budi 30rb")
+    ingest(store, "catat harga telur pak budi 50rb")
+    ingest(store, "catat harga cabai pasar pagi 33rb")
+    ingest(store, "catat harga telur pasar pagi 45rb")
+
+
+def test_market_list_answers_best_price_per_ingredient(tmp_path):
+    store, rid = fresh_store(tmp_path, "market.sqlite3")
+    seed_market_prices(store, rid)
+    response = ingest(store, "supplier cabai telur termurah?")
+    body = reply(response)
+    assert action(response) == "supplier_shopping_list"
+    cabai_line = next(line for line in body.splitlines() if "Cabai merah" in line)
+    telur_line = next(line for line in body.splitlines() if "Telur ayam" in line)
+    assert "Pak Budi" in cabai_line and "Rp30.000" in cabai_line
+    assert "pasar pagi" in telur_line and "Rp45.000" in telur_line
+
+
+def test_market_list_with_quantities_estimates_cash(tmp_path):
+    store, rid = fresh_store(tmp_path, "market-qty.sqlite3")
+    seed_market_prices(store, rid)
+    response = ingest(store, "supplier cabai 5kg telur 3kg termurah")
+    body = reply(response)
+    assert "Estimasi modal" in body
+    assert "Rp285.000" in body  # 5kg cabai x 30rb + 3kg telur x 45rb
+    assert "150.000" in body and "135.000" in body  # per-item line totals
+
+
+def test_market_list_gram_quantity_converts_to_kg(tmp_path):
+    store, rid = fresh_store(tmp_path, "market-gram.sqlite3")
+    seed_market_prices(store, rid)
+    response = ingest(store, "supplier cabai 500 gram telur 3kg termurah")
+    assert "Rp15.000" in reply(response)  # 0.5kg cabai x 30rb
+    assert "Rp150.000" in reply(response)  # total 15rb + 135rb
+
+
+def test_market_list_names_missing_quotes_and_unknowns(tmp_path):
+    store, rid = fresh_store(tmp_path, "market-mixed.sqlite3")
+    seed_market_prices(store, rid)
+    response = ingest(store, "supplier cabai beras kulit lumpia termurah")
+    body = reply(response)
+    assert "Beras" in body and "belum ada kutipan" in body
+    assert "Tidak dikenali: kulit lumpia" in body
+
+
+def test_single_compare_regression_stays_single(tmp_path):
+    store, rid = fresh_store(tmp_path, "single.sqlite3")
+    seed_market_prices(store, rid)
+    response = ingest(store, "supplier cabai termurah?")
+    body = reply(response)
+    assert action(response) == "supplier_compare"
+    assert "Termurah saat ini: Pak Budi" in body
+
+
+def test_parse_shopping_gate(tmp_path):
+    assert parse_supplier_command("daftar belanja cabai telur")["kind"] == "shopping"
+    assert parse_supplier_command("belanja pasar hari ini")["kind"] == "shopping"
+    assert parse_supplier_command("daftar supplier")["kind"] == "list"
+
+
+def test_daftar_belanja_without_names_uses_below_threshold_stock(tmp_path):
+    store, rid = fresh_store(tmp_path, "refill.sqlite3")
+    seed_market_prices(store, rid)
+    with store.transaction() as conn:
+        conn.execute("UPDATE inventory SET quantity='2' WHERE restaurant_id=? AND ingredient_id='cabai'", (rid,))
+    response = ingest(store, "daftar belanja pasar")
+    body = reply(response)
+    assert action(response) == "shopping_plan"
+    assert "stok di bawah ambang" in body
+    cabai_line = next(line for line in body.splitlines() if "Cabai merah" in line)
+    assert "Pak Budi" in cabai_line and "Rp30.000" in cabai_line
+    assert "Estimasi modal" in body
+
+
+def test_daftar_belanja_when_stock_is_healthy_answers_honestly(tmp_path):
+    store, rid = fresh_store(tmp_path, "refill-none.sqlite3")
+    with store.transaction() as conn:
+        for ingredient in store._catalog_for(rid)["list"]:
+            store._inventory_query(conn, "INSERT OR REPLACE INTO inventory (restaurant_id, ingredient_id, quantity) VALUES (?,?,?)",
+                                   (rid, ingredient["id"], "99"))
+    response = ingest(store, "daftar belanja pasar")
+    assert action(response) == "shopping_empty"
+    assert "di atas ambang" in reply(response)

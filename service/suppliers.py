@@ -44,10 +44,10 @@ def _money_idr(value):
 
 def parse_supplier_command(text):
     """Owner supplier commands: daftar / tambah / hapus / ubah / catat harga /
-    tanya harga / riwayat / harga per bahan. Returns None when the message is
-    not a supplier command."""
+    tanya harga / riwayat / harga per bahan / daftar belanja pasar. Returns
+    None when the message is not a supplier command."""
     text = str(text or "").strip()
-    if len(text) > 300 or not re.search(r"(?i)\b(supplier|pemasok|catat\s+harga)\b", text):
+    if len(text) > 300 or not re.search(r"(?i)\b(supplier|pemasok|catat\s+harga|daftar\s+belanja|belanja\s+pasar|daftar\s+pasar|rencana\s+belanja)\b", text):
         # A bare price quote ('harga telur 45rb dari pak budi') names no
         # supplier keyword; keep it out of the purchase draft parser, where it
         # used to be filed as a purchase instead of a price quote.
@@ -58,6 +58,8 @@ def parse_supplier_command(text):
     lowered = text.casefold()
     if re.search(r"(?i)\b(daftar|list)\s+(supplier|pemasok)", lowered):
         return {"kind": "list"}
+    if re.search(r"(?i)\b(daftar\s+belanja|belanja\s+pasar|daftar\s+pasar|rencana\s+belanja)\b", lowered):
+        return {"kind": "shopping", "text": text}
     if re.search(r"(?i)\btambah\s+(supplier|pemasok)\b", lowered):
         return {"kind": "add", "text": text}
     if re.search(r"(?i)\bhapus\s+(supplier|pemasok)\b", lowered):
@@ -576,6 +578,11 @@ class SupplierMixin:
             return self._supplier_update_via_chat(conn, tenant, command.get("text") or text, key)
         if kind == "history":
             return self._supplier_history_reply(conn, tenant, command.get("text") or text)
+        if kind == "shopping":
+            items, unknowns = self._shopping_items(conn, tenant, command.get("text") or text)
+            if items:
+                return self._shopping_list_reply(conn, tenant, items, unknowns)
+            return self._refill_shopping_reply(conn, tenant)
         if kind == "inquiry":
             request = self._inquiry_request_text(text)
             inquiry_id, contact_count = self.supplier_inquiry_create(conn, tenant, request)
@@ -723,12 +730,21 @@ class SupplierMixin:
         return ("\n".join(lines), {"action": "supplier_history", "supplier_id": target["id"]})
 
     def _supplier_compare_reply(self, conn, tenant, text):
-        """Cheapest supplier for one ingredient: freshest quotes, purchase baseline."""
-        keywords = re.sub(r"(?i)\b(supplier|pemasok|harga|berapa|termurah|murah|banding|dibanding|dari|untuk|yang|mana)\b", " ", str(text))
-        ingredient_id, ingredient_name = self._ingredient_from_text(conn, tenant, keywords)
+        """Cheapest supplier per ingredient: one ingredient answers directly,
+        two or more become a market shopping list."""
+        items, unknowns = self._shopping_items(conn, tenant, text)
+        if len(items) >= 2:
+            return self._shopping_list_reply(conn, tenant, items, unknowns)
+        keywords = re.sub(r"(?i)\b(supplier|pemasok|harga|berapa|termurah|murah|banding(?:kan)?|dibanding(?:kan)?|dari|untuk|yang|mana|semua|daftar|belanja|pasar)\b", " ", str(text))
+        if not items:
+            ingredient_id, ingredient_name = self._ingredient_from_text(conn, tenant, keywords)
+        else:
+            ingredient_id, ingredient_name = items[0]["ingredient_id"], items[0]["name"]
         if not ingredient_id:
-            return ("Sebutkan bahannya, contoh: supplier cabai termurah?",
-                    {"action": "supplier_compare_missing"})
+            reply = "Sebutkan bahannya, contoh: supplier cabai termurah?"
+            if unknowns:
+                reply += f" Tidak dikenali: {', '.join(unknowns)}."
+            return (reply, {"action": "supplier_compare_missing"})
         comparison = self.supplier_price_comparison(tenant, ingredient_id, conn=conn)
         lines = [f"Harga {ingredient_name} per supplier:"]
         cheapest = None
@@ -747,8 +763,199 @@ class SupplierMixin:
             lines.append(f"Termurah saat ini: {cheapest}.")
         else:
             lines.append("Belum ada kutipan harga — 'tanya harga " + ingredient_name + " ke supplier' untuk menanyakan langsung.")
+        if unknowns:
+            lines.append(f"Tidak dikenali: {', '.join(unknowns)}.")
         return ("\n".join(lines), {"action": "supplier_compare",
                                    "comparison": comparison, "purchase_baseline": baseline})
+
+    _STOP_COMMAND_WORDS = re.compile(
+        r"(?i)\b(supplier|pemasok|termurah|murah|harga|berapa|daftar|belanja|pasar|semua|dari|untuk|yang|mana"
+        r"|banding(?:kan)?|dibanding(?:kan)?|vs|rekomendasi|apa|saja|aja|tolong|coba)\b")
+
+    def _ingredient_spans(self, conn, tenant, text):
+        """Every catalog ingredient mention in the text as literal spans.
+
+        Longest alias wins and matches never overlap; the span covers the
+        alias literal itself, so 'cabai' matches even though the display
+        name is 'Cabai merah'. Custom runtime ingredients join the same
+        alias list the stock-question matcher uses.
+        """
+        from .extraction import catalog_aliases
+        lowered_full = " " + re.sub(r"\s+", " ", str(text or "").strip().casefold()) + " "
+        aliases = list(catalog_aliases())
+        covered = {ingredient_id for _alias, ingredient_id in aliases}
+        for ingredient in self._catalog_for(tenant)["list"]:
+            if ingredient["id"] in covered:
+                continue
+            for surface in (str(ingredient["id"]).replace("_", " "), str(ingredient["name"]).casefold()):
+                surface = surface.strip()
+                if surface:
+                    aliases.append((surface, ingredient["id"]))
+        catalog_by_id = {entry["id"]: entry for entry in self._catalog_for(tenant)["list"]}
+        spans, taken = [], []
+        for alias, ingredient_id in sorted(aliases, key=lambda pair: len(pair[0]), reverse=True):
+            for match in re.finditer(r"(?<![a-z0-9_])" + re.escape(alias) + r"(?![a-z0-9_])", lowered_full):
+                start, end = match.start() - 1, match.end() - 1  # undo the padding space
+                if any(start < other_end and other_start < end for other_start, other_end in taken):
+                    continue
+                taken.append((start, end))
+                ingredient = catalog_by_id.get(ingredient_id)
+                spans.append((start, end, ingredient_id, (ingredient or {}).get("name") or alias))
+                break
+        return sorted(spans)
+
+    def _shopping_items(self, conn, tenant, text):
+        """Parse a market-list question into item dicts plus unknown names.
+
+        Fragments split on commas, 'dan', 'vs', or slashes; every catalog
+        ingredient named inside a fragment becomes an item ('cabai telur' in
+        one breath yields two). Quantities ('cabai 5kg', '500 gram') convert
+        to the catalog unit. Words left over after all known ingredients are
+        removed are reported as unknown names.
+        """
+        cleaned = self._STOP_COMMAND_WORDS.sub(" ", str(text or ""))
+        # Spans and fragments must share one coordinate system: collapse and
+        # strip once here; _ingredient_spans re-normalizes idempotently.
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        spans = self._ingredient_spans(conn, tenant, cleaned)
+        fragments = [f.strip() for f in re.split(r"[,;&/+]|\bdan\b", cleaned) if f.strip()]
+        catalog_units = {item["id"]: (item.get("unit") or "") for item in self._catalog_for(tenant)["list"]}
+        unit_words = {"kg", "kilo", "kilogram", "gram", "gr", "ons", "ikat", "tray", "peti",
+                      "dus", "bungkus", "bks", "pak", "porsi", "liter", "biji", "dengan", "untuk"}
+        items, unknowns = [], []
+        seen_ids = set()
+        for fragment in fragments:
+            frag_start = cleaned.find(fragment)
+            if frag_start < 0:
+                continue
+            frag_end = frag_start + len(fragment)
+            frag_spans = [(s, e, iid, name) for (s, e, iid, name) in spans if s >= frag_start and e <= frag_end]
+            leftover = fragment
+            for span_start, span_end in sorted(((s - frag_start, e - frag_start) for s, e, _i, _n in frag_spans), reverse=True):
+                leftover = leftover[:span_start] + " " + leftover[span_end:]
+            leftover_words = [w for w in re.findall(r"[a-z]{4,}", leftover.casefold())
+                              if w not in unit_words and w not in unknowns]
+            if leftover_words and ",".join(leftover_words) not in " ".join(unknowns):
+                unknowns.append(" ".join(leftover_words)[:40])
+            for span_start, span_end, ingredient_id, ingredient_name in sorted(frag_spans):
+                if ingredient_id in seen_ids:
+                    continue
+                seen_ids.add(ingredient_id)
+                rel_start, rel_end = span_start - frag_start, span_end - frag_start
+                qty_match = (re.match(r"\s*(\d+(?:[.,]\d+)?)\s*(kg|kilo(?:gram)?|gram|gr|g|ons|ikat|tray|peti|dus|bungkus|bks|pak|porsi|liter|lt|biji)?\b",
+                                      fragment[rel_end:], re.IGNORECASE)
+                             or re.search(r"(\d+(?:[.,]\d+)?)\s*(kg|kilo(?:gram)?|gram|gr|g|ons|ikat|tray|peti|dus|bungkus|bks|pak|porsi|liter|lt|biji)?\s*$",
+                                          fragment[:rel_start], re.IGNORECASE))
+                qty, qty_unit = None, None
+                if qty_match:
+                    qty = Decimal(qty_match.group(1).replace(",", "."))
+                    qty_unit = (qty_match.group(2) or catalog_units.get(ingredient_id) or "").casefold() or None
+                factor = self._qty_factor(qty_unit, catalog_units.get(ingredient_id))
+                converted = qty * factor if (qty is not None and factor is not None) else None
+                items.append({"ingredient_id": ingredient_id, "name": ingredient_name,
+                              "qty": converted,
+                              "unit": catalog_units.get(ingredient_id) or ""})
+        return items, unknowns
+
+    @staticmethod
+    def _qty_factor(unit, catalog_unit):
+        """Multiply a fragment quantity into the catalog's unit, or None when
+        the conversion is unknown (the total then honestly skips the item)."""
+        unit = (unit or "").strip().casefold()
+        catalog_unit = (catalog_unit or "").strip().casefold()
+        if not catalog_unit or unit == catalog_unit or not unit:
+            return Decimal(1)
+        if catalog_unit in ("kg", "kilo", "kilogram"):
+            if unit in ("gram", "gr", "g"):
+                return Decimal("0.001")
+            if unit == "ons":
+                return Decimal(10)
+        if catalog_unit in ("gram", "gr", "g"):
+            if unit in ("kg", "kilo", "kilogram"):
+                return Decimal(1000)
+            if unit == "ons":
+                return Decimal(100)
+        if catalog_unit == "liter" and unit in ("liter", "lt"):
+            return Decimal(1)
+        return None
+
+    def _shopping_list_reply(self, conn, tenant, items, unknowns):
+        """Best price per ingredient across suppliers, with a cash estimate
+        when quantities were given. Missing quotes stay honest per item."""
+        catalog_units = {item["id"]: (item.get("unit") or "") for item in self._catalog_for(tenant)["list"]}
+        lines = ["Daftar belanja pasar (termurah per bahan):"]
+        total = Decimal(0)
+        priced_qty_items = 0
+        for item in items:
+            unit = item["unit"] or catalog_units.get(item["ingredient_id"]) or ""
+            comparison = self.supplier_price_comparison(tenant, item["ingredient_id"], conn=conn)
+            candidates = [q for q in comparison["quotes"] if q["unit_price_idr"] is not None]
+            if not candidates:
+                lines.append(f"• {item['name']} — belum ada kutipan ('tanya harga {item['name'].casefold()} ke supplier')")
+                continue
+            cheapest = min(candidates, key=lambda q: q["unit_price_idr"])
+            price = f"Rp{cheapest['unit_price_idr']:,}".replace(",", ".")
+            note = f" ({cheapest['note']})" if cheapest.get("note") else ""
+            date_text = f" · {str(cheapest.get('created_at') or '')[:10]}" if cheapest.get("created_at") else ""
+            line = f"• {item['name']} — {price}/{unit}{note} · {cheapest['supplier_name']}{date_text}"
+            if item["qty"] is not None:
+                line_total = (Decimal(item["qty"]) * Decimal(cheapest["unit_price_idr"])).to_integral_value()
+                line += f" · {item['qty']:g} {unit} ≈ Rp{line_total:,}".replace(",", ".")
+                total += Decimal(line_total)
+                priced_qty_items += 1
+            lines.append(line)
+        if unknowns:
+            lines.append(f"Tidak dikenali: {', '.join(unknowns)}.")
+        if priced_qty_items:
+            total_text = f"Rp{int(total):,}".replace(",", ".")
+            coverage = f" ({priced_qty_items}/{len(items)} bahan dengan jumlah)" if priced_qty_items < len(items) else ""
+            lines.append(f"Estimasi modal{coverage}: {total_text}")
+        return ("\n".join(lines), {"action": "supplier_shopping_list",
+                                   "items": [{"name": i["name"], "qty": str(i["qty"]) if i["qty"] is not None else None} for i in items],
+                                   "total_est_idr": int(total)})
+
+    def _refill_shopping_reply(self, conn, tenant):
+        """No ingredients named: build the list from stock below threshold,
+        crossed with the cheapest supplier per ingredient when quotes exist."""
+        from .notifications import refill_suggestion
+        catalog = self._catalog_for(tenant)["list"]
+        prices = self.last_purchase_unit_prices(tenant)
+        planned = []
+        for ingredient in catalog:
+            row = self._inventory_query(conn, "SELECT quantity FROM inventory WHERE restaurant_id=? AND ingredient_id=?",
+                                        (tenant, ingredient["id"])).fetchone()
+            quantity = row[0] if row else "0"
+            suggestion = refill_suggestion(quantity, ingredient["reorder_threshold"])
+            if not suggestion:
+                continue
+            planned.append({"id": ingredient["id"], "name": ingredient["name"], "unit": ingredient["unit"],
+                            "suggest": Decimal(str(suggestion)), "price_est": prices.get(ingredient["id"])})
+        if not planned:
+            return ("Semua stok masih di atas ambang — tidak ada yang perlu dibeli. "
+                    "Atau sebutkan bahannya: 'daftar belanja cabai telur'.",
+                    {"action": "shopping_empty"})
+        lines = ["🌙 Daftar belanja pasar (stok di bawah ambang):"]
+        total = 0
+        for item in planned:
+            comparison = self.supplier_price_comparison(tenant, item["id"], conn=conn)
+            candidates = [q for q in comparison["quotes"] if q["unit_price_idr"] is not None]
+            cheapest = min(candidates, key=lambda q: q["unit_price_idr"]) if candidates else None
+            unit_price = cheapest["unit_price_idr"] if cheapest else item["price_est"]
+            est = int((item["suggest"] * Decimal(unit_price)).to_integral_value()) if unit_price else None
+            if cheapest:
+                price_text = f"Rp{cheapest['unit_price_idr']:,}".replace(",", ".")
+                lines.append(f"• {item['name']} — beli ±{item['suggest']:g} {item['unit']} · termurah: "
+                             f"{cheapest['supplier_name']} {price_text}/{item['unit']}"
+                             + (f" (≈Rp{est:,})".replace(",", ".") if est else ""))
+            else:
+                est_text = f" (≈Rp{est:,})".replace(",", ".") if est else " (harga belum tercatat)"
+                lines.append(f"• {item['name']} — beli ±{item['suggest']:g} {item['unit']}{est_text}")
+            if est:
+                total += est
+        if total:
+            lines.append(f"Estimasi modal: Rp{total:,}".replace(",", "."))
+        lines.append("Catat pembeliannya di chat; estimasi dari harga terbaik per bahan.")
+        return ("\n".join(lines), {"action": "shopping_plan", "total_est_idr": total})
 
     def _parse_add_parts(self, command_text, original=None):
         original = str(original if original is not None else command_text or "")
