@@ -94,20 +94,20 @@ test('simulated chat history escapes untrusted message text',()=>{
   assert.ok(html.includes('received'));
 });
 
-test('WhatsApp simulator renders the requested route and follows the language toggle',()=>{
+test('chat assistant page renders the requested route and follows the language toggle',()=>{
   const h=harness({hash:'#whatsapp'});
   h.run('LANG="id"');
   h.run(`state.data={restaurant:{name:'Demo kitchen'},drafts:[]};state.whatsappLoaded=true;navigate()`);
   // Default language: Indonesian.
-  assert.equal(h.element('#page-title').textContent,'Alur WhatsApp yang bisa dilatih, Bos.');
-  assert.match(h.element('#content').innerHTML,/SIMULATED/);
-  assert.match(h.element('#content').innerHTML,/Tidak terhubung ke WhatsApp/);
+  assert.equal(h.element('#page-title').textContent,'Chat dengan asisten, Bos.');
+  assert.match(h.element('#content').innerHTML,/ASISTEN PEMBELIAN/);
+  assert.match(h.element('#content').innerHTML,/diproses langsung oleh RestoPilot/);
   // Toggle to English: same page, translated.
   h.run('LANG="en";applyStaticI18n();render()');
-  assert.equal(h.element('#page-title').textContent,'A WhatsApp flow you can rehearse, Boss.');
-  assert.match(h.element('#content').innerHTML,/does not connect to WhatsApp or send a live message/);
+  assert.equal(h.element('#page-title').textContent,'Chat with your assistant, Boss.');
+  assert.match(h.element('#content').innerHTML,/processed directly by RestoPilot/);
   const index=fs.readFileSync('frontend/index.html','utf8');
-  assert.match(index,/#whatsapp[^>]*>.*WhatsApp/s);
+  assert.match(index,/#whatsapp[\s\S]*?nav_whatsapp">Chat</);
 });
 
 test('simulator POST uses the requested body and reuses event id and idempotency key on retry',async()=>{
@@ -138,6 +138,54 @@ test('message history GET uses the restaurant-linked sender number',async()=>{
   h.run(`WHATSAPP_SENDER='628123456789';state.user={display_name:'Bu Sari',role:'owner'};state.data={restaurant:{name:'Demo kitchen'},drafts:[],whatsapp_numbers:[{phone:'628123456789',label:'Bu Sari'}],metrics:{purchases_today_idr:0,low_stock_count:0,recorded_purchases:0},purchases:[],inventory:[],activity:[],ingredients:[]};location.hash='#whatsapp';navigate()`);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(request.path,'/v1/whatsapp/messages?sender=628123456789');
+});
+
+test('chat offers inline decisions for pending drafts only',()=>{
+  const h=harness();
+  h.run('state.online=true;state.whatsappResult=null;state.whatsappDraft={id:"d1",version:2,status:"pending_approval"}');
+  const pending=h.run('whatsappOutcomeHTML()');
+  assert.match(pending,/data-chat-approve="d1"/);
+  assert.match(pending,/data-chat-reject="d1"/);
+  assert.match(pending,/data-whatsapp-review="d1"/);
+  h.run('state.whatsappDraft={id:"d2",version:1,status:"needs_clarification"}');
+  const clarify=h.run('whatsappOutcomeHTML()');
+  assert.ok(!clarify.includes('data-chat-approve'));
+  assert.match(clarify,/data-whatsapp-review="d2"/);
+  h.run('state.whatsappDraft={id:"d3",version:1,status:"recorded"}');
+  assert.ok(!h.run('whatsappOutcomeHTML()').includes('data-chat-approve'));
+  h.run('state.whatsappDraft={id:"d1",version:2,status:"pending_approval"};state.online=false');
+  assert.ok(!h.run('whatsappOutcomeHTML()').includes('data-chat-approve'));
+});
+
+test('chat decisions post expected_version and reuse the mutation key on retry',async()=>{
+  const requests=[];
+  const fetchImpl=async(path,options)=>{
+    if(options.method==='POST')requests.push({path,options});
+    if(requests.length===1)return {ok:false,json:async()=>({error:{message:'Try again'}})};
+    return {ok:true,json:async()=>({data:{}})};
+  };
+  const h=harness({fetchImpl});
+  h.run('state.online=true;state.whatsappDraft={id:"d1",version:3,status:"pending_approval"}');
+  await h.run(`chatDecision('d1','approve')`);
+  await h.run(`chatDecision('d1','approve')`);
+  assert.equal(requests.length,2);
+  assert.equal(requests[0].path,'/v1/drafts/d1/decision');
+  const body=JSON.parse(requests[0].options.body);
+  assert.equal(body.expected_version,3);
+  assert.equal(body.decision,'approve');
+  assert.equal(body.received,true);
+  assert.equal(requests[0].options.headers['Idempotency-Key'],requests[1].options.headers['Idempotency-Key']);
+});
+
+test('chat decisions ignore drafts that are not awaiting approval',async()=>{
+  let sent=false;
+  const h=harness({fetchImpl:async()=>{sent=true;return {ok:true,json:async()=>({data:{}})}}});
+  h.run('state.online=true;state.whatsappDraft={id:"d2",version:1,status:"needs_clarification"}');
+  await h.run(`chatDecision('d2','approve')`);
+  assert.equal(sent,false);
+  h.run('state.whatsappDraft={id:"d1",version:1,status:"pending_approval"}');
+  await h.run(`chatDecision('other','approve')`);
+  assert.equal(sent,false);
 });
 
 test('unauthenticated boot shows the login page and hides the shell',async()=>{
