@@ -24,7 +24,7 @@ const I18N = {
     connecting:'Menghubungkan…',
     refresh_aria:'Muat ulang dashboard',
     eyebrow_tagline:'SEDIKIT KEJELASAN UNTUK DAPUR ANDA',
-    page_overview_title:'Dapur Anda, terpantau.',
+    page_overview_title:'Dapur Anda, terpantau, Bos.',
     page_overview_sub:'Pembelian, stok, dan keputusan yang menunggu Anda.',
     btn_log_purchase:'Catat pembelian',
     loading_kitchen:'Memuat dapur Anda…',
