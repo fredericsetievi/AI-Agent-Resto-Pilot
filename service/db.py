@@ -243,6 +243,13 @@ def normalize_items_for_catalog(items, catalog):
         # The ledger enforces its own invariants even if an extractor changes.
         # An unmapped item that kept its raw name self-heals: the ingredient
         # is auto-created from that name when the draft is approved.
+        # An unmapped name whose exact slug already exists in this tenant's
+        # catalog (Excel import / earlier approval) links at draft time, so a
+        # re-ordered item is not announced as "Baru" to the owner.
+        if not result.get("ingredient_id") and str(result.get("raw_name") or "").strip():
+            slug = Store._slugify(result["raw_name"])
+            if slug and slug in catalog["by_id"]:
+                result["ingredient_id"] = slug
         ingredient = catalog["by_id"].get(result.get("ingredient_id"))
         if not ingredient:
             if not str(result.get("raw_name") or "").strip():
