@@ -20,15 +20,16 @@ from decimal import Decimal
 from .data_qa import find_windows, parse_window
 
 _MENU_HINT_RE = re.compile(
-    r"(?i)(\b(menu|terlaris|paling\s+laku|paling\s+banyak|paling\s+dicari|best\s*seller|best\s*selling|populer|penjualan|terjual|omzet|margin|untung|laba|keuntungan|rekap\s+penjualan)\b|\bjualan)")
-_RANK_RE = re.compile(r"(?i)\b(terlaris|paling\s+laku|paling\s+banyak\s*terjual|populer|ranking|peringkat)\b")
-_MARGIN_RE = re.compile(r"(?i)\b(margin|untung|laba|keuntungan|profit)\b")
-_TREND_RE = re.compile(r"(?i)\b(penjualan|terjual|omzet)\b")
-_COMPARE_RE = re.compile(r"(?i)\b(vs|dibanding|dibandingkan|banding|kenaikan|penurunan|turun|naik)\b")
+    r"(?i)(\b(menu|terlaris|paling\s+laku|paling\s+banyak|paling\s+dicari|paling\s+sepi|paling\s+jarang|paling\s+tidak\s*laku|kurang\s+laku|best\s*seller|best\s*selling|populer|penjualan|terjual|omzet|pendapatan|pemasukan|margin|untung|laba|rugi|keuntungan|rekap\s+penjualan)\b|\bjualan)")
+_RANK_RE = re.compile(r"(?i)\b(terlaris|paling\s+laku|paling\s+banyak\s*terjual|populer|ranking|peringkat|paling\s+sepi|paling\s+jarang|paling\s+tidak\s*laku|kurang\s+laku|paling\s+sedikit|terendah)\b")
+_WORST_RE = re.compile(r"(?i)\b(paling\s+sepi|paling\s+jarang|paling\s+tidak\s*laku|kurang\s+laku|paling\s+sedikit|paling\s+dikit|terendah|tidak\s+laku)\b")
+_MARGIN_RE = re.compile(r"(?i)\b(margin|untung|laba|keuntungan|profit|rugi)\b")
+_TREND_RE = re.compile(r"(?i)\b(penjualan|terjual|omzet|pendapatan|pemasukan)\b")
+_COMPARE_RE = re.compile(r"(?i)\b(vs|dibanding|dibandingkan|banding|bandingkan|kenaikan|penurunan|turun|naik)\b")
 # Narrow preemption set for the operations classifier: rank/margin/recap
 # words are questions about recorded sales, never a sale recording itself
 # ("terjual 4 nasi goreng" must keep reaching the operations parser).
-_OPS_PREEMPT_RE = re.compile(r"(?i)\b(terlaris|paling\s+laku|paling\s+banyak\s*terjual|populer|margin|untung|laba|keuntungan|rekap|peringkat)\b")
+_OPS_PREEMPT_RE = re.compile(r"(?i)\b(terlaris|paling\s+laku|paling\s+banyak\s*terjual|populer|margin|untung|laba|keuntungan|rekap|peringkat|paling\s+sepi|paling\s+jarang|paling\s+tidak|pendapatan|pemasukan)\b")
 
 
 def menu_question_preempts_operations(text):
@@ -43,9 +44,13 @@ def menu_question_preempts_operations(text):
     if _OPS_PREEMPT_RE.search(text):
         return True
     if "?" in text and re.search(r"(?i)\b(penjualan|omzet|terjual)\b", text) \
-            and re.search(r"(?i)(minggu\s+(ini|lalu|terakhir)|bulan\s+(ini|lalu)|hari\s+ini|kemarin|\d+\s*hari|\bvs\b)", text) \
-            and not re.search(r"\d", text):
-        return True
+            and re.search(r"(?i)(minggu\s+(ini|lalu|terakhir)|bulan\s+(ini|lalu)|hari\s+ini|kemarin|\d+\s*hari|\bvs\b)", text):
+        # An explicit question word ('berapa', 'apa', …) wins even when the
+        # sentence carries numbers: 'berapa terjual nasi goreng 4 hari
+        # terakhir?' is a question, never a recording. Without a question
+        # word, digits keep it a recording ('terjual 4 nasi goreng').
+        if re.search(r"(?i)\b(berapa|apa|gimana|bagaimana)\b", text) or not re.search(r"\d", text):
+            return True
     return False
 
 
@@ -159,7 +164,12 @@ class MenuInsightsMixin:
             recipes = self._menu_recipes(conn, restaurant_id)
             prices = self._ingredient_unit_prices(conn, restaurant_id)
         menu_name = self._menu_name_from_text(text, events, recipes)
-        if not has_hint and not (menu_name and vs_or_window and questionish):
+        # Two named menus with a comparison word ("bandingkan nasi goreng dan
+        # mie ayam bulan ini") is a menu question even without a sales hint.
+        menu_pair = None
+        if _COMPARE_RE.search(text):
+            menu_pair = self._two_menu_names(text, events, recipes)
+        if not has_hint and not menu_pair and not (menu_name and vs_or_window and questionish):
             # Without a hint, only a named menu inside a window question
             # ("nasi goreng minggu ini vs minggu lalu?") is a menu question.
             return None
@@ -169,11 +179,16 @@ class MenuInsightsMixin:
             body = self._margin_answer(menu_name, events, recipes, prices, cur_start, cur_end, cur_label, prev_start, prev_end)
             if body:
                 return {"body": body}
+        if menu_pair:
+            body = self._menu_pair_answer(menu_pair, events, cur_start, cur_end, cur_label)
+            if body:
+                return {"body": body}
         if menu_name:
             body = self._menu_trend_answer(menu_name, events, cur_start, cur_end, cur_label, prev_start, prev_end)
             if body:
                 return {"body": body}
-        return {"body": self._ranking_answer(events, recipes, prices, cur_start, cur_end, cur_label, prev_start, prev_end)}
+        return {"body": self._ranking_answer(events, recipes, prices, cur_start, cur_end, cur_label, prev_start, prev_end,
+                                             worst=bool(_WORST_RE.search(text)))}
 
     # ---- storage reads ----------------------------------------------------
 
@@ -273,14 +288,55 @@ class MenuInsightsMixin:
                     pass
         return stats, total_revenue, total_portions, revenue_known
 
-    def _ranking_answer(self, events, recipes, prices, cur_start, cur_end, cur_label, prev_start, prev_end):
+    def _two_menu_names(self, text, events, recipes):
+        """Two distinct known menu names mentioned in the text, or None.
+
+        Longest names match first and overlapping spans are skipped, so
+        'mie ayam goreng' wins over 'mie ayam'.
+        """
+        lowered = _normalized(str(text or ""))
+        found, spans = [], []
+        for name in sorted(self._menu_names(events, recipes), key=len, reverse=True):
+            normalized = _normalized(name)
+            if not normalized or normalized not in lowered:
+                continue
+            start = lowered.find(normalized)
+            end = start + len(normalized)
+            if any(start < other_end and other_start < end for other_start, other_end in spans):
+                continue
+            spans.append((start, end))
+            found.append(name)
+            if len(found) >= 2:
+                return found
+        return None
+
+    def _menu_pair_answer(self, menu_names, events, cur_start, cur_end, cur_label):
+        """Head-to-head comparison of two named menus over one window."""
+        lines = [f"Perbandingan penjualan ({cur_label}):"]
+        entries = []
+        for menu_name in menu_names:
+            _, revenue, portions, revenue_known = self._aggregate(events, cur_start, cur_end, menu_name=menu_name)
+            entries.append((menu_name, portions, revenue, revenue_known))
+            sold = f"{portions:g} porsi" if portions else "0 porsi"
+            if revenue_known and revenue:
+                sold += f" · omzet Rp{revenue:,.0f}".replace(",", ".")
+            lines.append(f"• {menu_name}: {sold}")
+        winner = max(entries, key=lambda entry: entry[1])
+        loser = min(entries, key=lambda entry: entry[1])
+        if winner[1] != loser[1]:
+            lines.append(f"Lebih laku: {winner[0]} ({winner[1] - loser[1]:g} porsi lebih banyak).")
+        else:
+            lines.append("Seimbang.")
+        return "\n".join(lines)
+
+    def _ranking_answer(self, events, recipes, prices, cur_start, cur_end, cur_label, prev_start, prev_end, worst=False):
         current, revenue, portions, revenue_known = self._aggregate(events, cur_start, cur_end)
         if not current:
             return (f"Belum ada penjualan tercatat dalam {cur_label}. "
                     f"Catat dulu lewat chat, misalnya 'terjual 4 nasi goreng'.")
         previous, prev_revenue, prev_portions, _ = self._aggregate(events, prev_start, prev_end)
-        ranked = sorted(current.items(), key=lambda kv: (kv[1]["portions"], kv[1]["revenue"]), reverse=True)
-        lines = [f"Penjualan {cur_label}:"]
+        ranked = sorted(current.items(), key=lambda kv: (kv[1]["portions"], kv[1]["revenue"]), reverse=not worst)
+        lines = [f"Menu paling sepi ({cur_label}):" if worst else f"Penjualan {cur_label}:"]
         for index, (name, entry) in enumerate(ranked[:5], start=1):
             portions_text = f"{entry['portions']:g} porsi" if entry["portions"] else f"{entry['events']}x catatan"
             revenue_text = f" · Rp{entry['revenue']:,.0f}".replace(",", ".") if entry["revenue_known"] else ""
