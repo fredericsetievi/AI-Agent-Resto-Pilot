@@ -55,7 +55,7 @@ from .pg import pg_connection, pg_transaction
 from .onboarding import restaurant_selection
 from .whatsapp import (
     FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR,
-    UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply,
+    UNREGISTERED_REPLY, draft_label, draft_reply, is_stock_question, opname_reply,
     parse_payment_followup, parse_remove_request, stock_reply,
     unregistered_reply, weekly_summary_reply,
 )
@@ -1377,7 +1377,7 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                 elif command in REJECT_COMMANDS:
                     draft = self._decide(conn, draft, {"expected_version": draft["version"], "decision": "reject", "received": False}, tenant)
                     thread.update(active_draft_id=None, active_version=None)
-                    reply = f"Draf {draft['id'][:8]} dibatalkan. Pembelian dan stok tidak berubah."
+                    reply = f"Draf '{draft_label(draft, names)}' dibatalkan. Pembelian dan stok tidak berubah."
                     result["action"] = "rejected"
                 elif draft["status"] == "needs_clarification":
                     reply = draft_reply(draft, names)
@@ -1389,7 +1389,7 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                 else:
                     draft = self._decide(conn, draft, {"expected_version": thread["active_version"], "decision": "approve", "received": True}, tenant)
                     thread.update(active_draft_id=None, active_version=None)
-                    confirmation = f"Pembelian {draft['id'][:8]} tercatat. Stok diperbarui."
+                    confirmation = f"Pembelian '{draft_label(draft, names)}' tercatat. Stok diperbarui."
                     names_created = draft.get("new_ingredients") or []
                     if names_created:
                         confirmation += " " + ", ".join(f"'{name}'" for name in names_created) + " ditambahkan sebagai bahan baru."

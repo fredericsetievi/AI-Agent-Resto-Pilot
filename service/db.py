@@ -31,7 +31,7 @@ from .purchase_edits import PurchaseEditsMixin, parse_purchase_edit_command
 from .suppliers import SupplierMixin, parse_supplier_command
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
 from .onboarding import restaurant_selection
-from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
+from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_label, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
 
 
 CATALOG = [
@@ -1384,7 +1384,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 elif command in REJECT_COMMANDS or (intent_hint == "reject" and command not in APPROVE_COMMANDS):
                     draft = self._decide(conn, draft, {"expected_version": draft["version"], "decision": "reject", "received": False}, tenant)
                     thread.update(active_draft_id=None, active_version=None)
-                    reply = f"Draf {draft['id'][:8]} dibatalkan. Pembelian dan stok tidak berubah."
+                    reply = f"Draf '{draft_label(draft, names)}' dibatalkan. Pembelian dan stok tidak berubah."
                     result["action"] = "rejected"
                 elif draft["status"] == "needs_clarification":
                     reply = draft_reply(draft, names)
@@ -1397,7 +1397,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 else:
                     draft = self._decide(conn, draft, {"expected_version": thread["active_version"], "decision": "approve", "received": True}, tenant)
                     thread.update(active_draft_id=None, active_version=None)
-                    confirmation = f"Pembelian {draft['id'][:8]} tercatat. Stok diperbarui."
+                    confirmation = f"Pembelian '{draft_label(draft, names)}' tercatat. Stok diperbarui."
                     names_created = draft.get("new_ingredients") or []
                     if names_created:
                         confirmation += " " + ", ".join(f"'{name}'" for name in names_created) + " ditambahkan sebagai bahan baru."

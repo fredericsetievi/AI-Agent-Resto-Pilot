@@ -18,6 +18,27 @@ The inventory extension now implements confirmed usage/waste, stock-count reconc
 
 Voice, marketing, supplier outreach, payments and POS connectors remain outside the current purchase-loop scope.
 
+## Pilot feedback — Warung Bu Cemong (November 13, 2026)
+
+First live contact with the target users (owner's family) surfaced four items. Items 1–2 are already handled; the rest shape the next milestone.
+
+1. **Hex draft references read as gibberish.** "Draf 72ce40fb dibatalkan" meant nothing to the owner. Fixed: approve/cancel replies now name the items (`Draf 'Bolkus jumbo' dibatalkan`), with long lists collapsed to a count. See PR #52.
+2. **Version gap confusion.** Owners hit V31 parser limits (no `total` keyword, `kg` defaults, the insecure-context link bug). All fixed in the V32 package awaiting publish.
+3. **Cash planning is the core job.** They buy ~50 cakes per market trip across ~5 shops (mostly WhatsApp preorders) and use the list to decide how much cash to bring. Copy-pasting a messy multi-line order into the chat already produces a priced draft whose total is the cash to bring; validate with real preorders.
+4. **Two-app navigation is friction.** The owners do not use Telegram and found the dashboard/Telegram split confusing. The dashboard chat widget moves from backlog into the next milestone.
+
+Rejected directions (with reasons, so they are not re-proposed):
+
+- **WhatsApp channel for this pilot.** The Meta WhatsApp test account cannot send to Indonesian numbers, so the owners' WhatsApp cannot be onboarded on the current account. The channel code stays for other deployments.
+- **Excel/Word order intake.** If the input is a spreadsheet, the product is a spreadsheet. The differentiator is the assistant's reply (cash-to-bring, opname reconciliation, price-spike alerts), not the input format. Catalog import remains the only file flow.
+
+## Next milestone (V33)
+
+1. **Dashboard chat widget.** One web surface where owners read, approve, and type purchases — removes the Telegram-learning barrier for WhatsApp-preorder copy-paste. Phased: chat transcript + draft decisions first, typed purchases second.
+2. **Reminder engine.** Morning/evening nudges (defaults 09:00/21:00, quiet hours 22:00–07:00), silence-aware, adjustable by chat (`pengingat jadi jam 8`).
+3. **Daily cash envelope.** `budget hari ini 2 juta` → evening `uang kembali berapa?` → unrecorded spend = envelope − recorded purchases − leftover cash; folds into the reminder engine and flags forgotten purchases instead of assuming theft.
+4. Validate messy WhatsApp preorder copy-paste against real cake-market order lists and tune the parser aliases.
+
 ## Historical planning context
 
 The October 17, 2026 planning document targeted a midterm on October 29 and a flagship MVP on November 19, 2026. Its original provider-specific schedule and delivery status are historical; the current provider plan is Meta WhatsApp Cloud API as described above. The dates and earlier Twilio/360dialog milestones should not be read as evidence of the current integration status.
