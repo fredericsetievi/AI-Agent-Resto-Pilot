@@ -167,3 +167,8 @@ tbody tr:hover td{background:#fbfcf8}
 button{will-change:auto}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
+
+/* Dashboard chat widget: inline draft decisions inside the conversation. */
+.chat-decision{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.chat-outcome+.chat-decision{margin-top:8px}
+@media(max-width:620px){.chat-decision .button{flex:1 1 auto}}
