@@ -222,7 +222,11 @@ def test_worst_seller_question_ranks_ascending(tmp_path):
 def test_revenue_wordings_reach_the_engine(tmp_path):
     app = create_app(tmp_path / "revenue.sqlite3")
     store = app.state.store
-    seed_events(store, [sale("s1", "Nasi goreng", portions="10", revenue=150000, day=TODAY)])
+    # "hari ini" windows use the restaurant-local date; seed with the local
+    # today so the sale lands inside the window even right after midnight WIB
+    # (when the UTC date is still yesterday).
+    today_local = datetime.now().date().isoformat()
+    seed_events(store, [sale("s1", "Nasi goreng", portions="10", revenue=150000, day=today_local)])
     for question in ("berapa pendapatan hari ini?", "berapa pemasukan minggu ini?"):
         body = store.menu_facts(question, TENANT)["body"]
         assert body and ("150.000" in body or "porsi" in body), question
