@@ -1,4 +1,84 @@
-from service.extraction import extract_purchase, match_catalog_detail, match_catalog_name, normalize_item
+from service.extraction import extract_purchase, is_chatter_item, match_catalog_detail, match_catalog_name, normalize_item
+
+
+# A real pre-order forward from the cake-shop pilot: five shops, ~50 cakes,
+# bullet lines, shop-name headers, and four different price notations in one
+# message. The owner forwards this to know how much cash to bring.
+CAKE_ORDER = "\n".join([
+    "Pre-order bolu buat kamis ya Bu:",
+    "Dari Toko Melati:",
+    "- bolu pandan 2 pcs Rp25.000, bolu coklat 1 pcs 20rb, bolu keju 1 pcs 30000, bolu srikaya 1 pcs 22rb, bolu mawar 1 pcs 25 ribu, bolu mesis 1 pcs 27.500, bolu kukus 1 pcs 18rb, bolu gula 1 pcs 21000, bolu legit 1 pcs 30rb, bolu coklat 1 pcs Rp20.000",
+    "Dari Bu Ratna:",
+    "- bolu coklat 2 pcs 20rb, bolu keju 1 pcs 28rb, bolu pandan 1 pcs 24rb, bolu srikaya 1 pcs 21rb, bolu mawar 1 pcs 26rb, bolu mesis 1 pcs 27.500, bolu kukus 1 pcs 17rb, bolu gula 1 pcs 20rb, bolu legit 1 pcs 29rb, bolu keju 1 pcs Rp28.000",
+    "Dari Hj. Nia:",
+    "- bolu kukus 2 pcs 15000, bolu pandan 1 pcs 23rb, bolu coklat 1 pcs 19rb, bolu keju 1 pcs 27rb, bolu srikaya 1 pcs 20rb, bolu gula 1 pcs 18rb, bolu mesis 1 pcs 26rb, bolu mawar 1 pcs 24rb, bolu legit 1 pcs 28rb, bolu kukus 1 pcs Rp15.000",
+    "Dari Toko Lima:",
+    "- bolu pandan 2 pcs 25rb, bolu keju 1 pcs 30rb, bolu coklat 1 pcs 21rb, bolu srikaya 1 pcs 22rb, bolu mawar 1 pcs 25rb, bolu kukus 1 pcs 16rb, bolu gula 1 pcs 19rb, bolu mesis 1 pcs 28rb, bolu legit 1 pcs 31rb, bolu pandan 1 pcs Rp25.000",
+    "Dari Bu Ani:",
+    "- bolu srikaya 2 pcs 21rb, bolu coklat 1 pcs 20rb, bolu pandan 1 pcs 24rb, bolu keju 1 pcs 29rb, bolu kukus 1 pcs 15rb, bolu mawar 1 pcs 23rb, bolu gula 1 pcs 18rb, bolu mesis 1 pcs 27rb, bolu legit 1 pcs 30rb, bolu srikaya 1 pcs Rp21.000",
+])
+
+
+def test_forwarded_cake_preorder_from_five_shops_parses_every_cake():
+    result = extract_purchase(CAKE_ORDER)
+    chatter = [item for item in result["items"] if is_chatter_item(item)]
+    cakes = [item for item in result["items"] if not is_chatter_item(item)]
+    # The greeting sentence parses as a pseudo-item and is detected as chatter
+    # so the store layer drops it instead of drafting a phantom product.
+    assert [item["raw_name"] for item in chatter] == ["pre-order bolu buat kamis ya bu:"]
+    assert all(warning.startswith("Line 1:") for warning in result["warnings"])
+
+    # All 50 cake clauses across the five shops survive as reviewable items.
+    assert len(cakes) == 50
+    assert sum(int(item["quantity"]) for item in cakes) == 55
+    # Bullet markers never leak into the item name.
+    assert all(item["raw_name"].startswith("bolu") for item in cakes)
+    assert all(item["unit"] == "pcs" and item["line_total_idr"] is not None for item in cakes)
+    # The demo catalog has no bolu flavors: items stay unmapped for the owner
+    # to confirm (auto-created on approval) instead of being force-matched.
+    assert all(item["ingredient_id"] is None for item in cakes)
+    assert all(item.get("matched_from") is None for item in cakes)
+
+    # Rp-prefixed and rb/ribu-suffixed amounts are lot totals; a bare number
+    # after a quantity is a per-piece price (2 × Rp15.000 = Rp30.000).
+    assert cakes[0]["line_total_idr"] == 25000  # 2 pcs Rp25.000
+    assert cakes[1]["line_total_idr"] == 20000  # 1 pcs 20rb
+    assert cakes[20]["line_total_idr"] == 30000  # 2 pcs 15000, per-piece
+
+    # Known limitation: only the first shop header is kept as the supplier.
+    assert result["supplier"] == "Toko Melati"
+
+
+def test_preorder_list_without_prices_still_drafts_the_quantities():
+    # Owners forward order lists before prices exist — they just need the
+    # cake counts for the cash envelope. Quantities draft; totals warn.
+    result = extract_purchase("Dari Bu Ratna:\n- bolu pandan 3 pcs, bolu coklat 2 pcs\n- bolu keju 5 pcs")
+    assert [item["raw_name"] for item in result["items"]] == ["bolu pandan", "bolu coklat", "bolu keju"]
+    assert [item["quantity"] for item in result["items"]] == ["3", "2", "5"]
+    assert all(item["line_total_idr"] is None for item in result["items"])
+    assert result["supplier"] == "Bu Ratna"
+    assert len(result["warnings"]) == 3  # one missing-total warning per line
+
+
+def test_one_item_per_line_order_sheet_exceeds_the_20_line_limit():
+    # A fully formatted order sheet (one line per cake) cannot fit the
+    # 20-line intake; the parser refuses everything instead of truncating
+    # silently, and tells the owner to split it into parts.
+    order = "\n".join(["dari Toko Lima:"] + [f"- bolu pandan {index % 9 + 1} pcs Rp25.000" for index in range(25)])
+    result = extract_purchase(order)
+    assert result["items"] == []
+    assert any("20-item limit" in warning and "split" in warning for warning in result["warnings"])
+
+
+def test_x_quantity_notation_is_not_parsed_and_needs_dashboard_correction():
+    # The "x5" count notation from WhatsApp order forms is unsupported: the
+    # item survives with its name intact but no quantity, so the draft asks
+    # for correction rather than guessing a number.
+    result = extract_purchase("bolu pandan x5")
+    item = result["items"][0]
+    assert item["raw_name"] == "bolu pandan x5"
+    assert item["quantity"] is None
+    assert any("quantity" in warning for warning in result["warnings"])
 
 
 def test_market_names_map_by_prefix_but_prepared_products_stay_unknown():
