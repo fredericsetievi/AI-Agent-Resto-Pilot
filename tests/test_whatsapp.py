@@ -98,6 +98,21 @@ def test_order_with_dari_supplier_prefills_draft_supplier(client):
     assert data(simulate(client, "batal"))["draft"]["status"] == "rejected"
 
 
+def test_cancel_and_confirm_replies_name_items_not_ids(client):
+    # Pilot feedback: "Draf 72ce40fb dibatalkan" read as gibberish — owners
+    # need the item names, not the hex reference.
+    data(simulate(client, "Bolkus jumbo 10 25000, gula 1 kg 20 rb"))
+    cancelled = data(simulate(client, "batal"))
+    assert cancelled["result"]["action"] == "rejected"
+    body = cancelled["messages"][-1]["body"]
+    assert "Bolkus jumbo" in body and cancelled["draft"]["id"][:8] not in body
+    data(simulate(client, "Cabai 2 kg 30000"))
+    approved = data(simulate(client, "ya"))
+    assert approved["result"]["action"] == "approved"
+    confirmation = approved["messages"][-1]["body"]
+    assert "Cabai" in confirmation and approved["draft"]["id"][:8] not in confirmation
+
+
 def test_active_draft_cannot_be_replaced_and_wrong_sender_cannot_approve(client):
     first = data(simulate(client, "Cabai 3 kg 150rb"))
     collision = data(simulate(client, "Beras 10 kg 200rb"))

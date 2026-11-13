@@ -574,6 +574,25 @@ def _draft_total(draft):
     return sum(parts) if parts else None
 
 
+def draft_label(draft, catalog_names=None):
+    # Owner-facing replies reference the draft by item names, not the hex ID:
+    # pilot feedback called "Draf 72ce40fb dibatalkan" gibberish. Long lists
+    # collapse to a count so the cancel/approve lines stay one message.
+    names_list = []
+    for item in draft.get("items") or []:
+        name = (catalog_names or CATALOG_NAMES).get(item.get("ingredient_id"))
+        if not name:
+            raw = str(item.get("raw_name") or "").strip()
+            name = raw.capitalize() if raw else None
+        if name and name not in names_list:
+            names_list.append(name)
+    if not names_list:
+        return str(draft.get("id") or "")[:8] or "pembelian"
+    if len(names_list) > 3:
+        return f"{len(names_list)} item ({', '.join(names_list[:3])}, …)"
+    return ", ".join(names_list)
+
+
 def draft_reply(draft, catalog_names=None):
     # Display names come from the caller's restaurant catalog when given, so
     # custom bahan from other restaurants can never surface in a reply.
