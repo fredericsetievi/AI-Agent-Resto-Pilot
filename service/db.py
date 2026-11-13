@@ -29,6 +29,7 @@ from .extraction import catalog_aliases, extract_purchase, is_chatter_item, norm
 from .notifications import refill_suggestion
 from .purchase_edits import PurchaseEditsMixin, parse_purchase_edit_command
 from .suppliers import SupplierMixin, parse_supplier_command
+from .reminders import ReminderMixin, SQLITE_SCHEMA as REMINDERS_SQLITE_SCHEMA, parse_reminder_command
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
 from .onboarding import restaurant_selection
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, draft_label, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
@@ -298,7 +299,7 @@ def normalize_items_for_catalog(items, catalog):
     return normalized, list(dict.fromkeys(warnings))
 
 
-class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, MenuInsightsMixin, PurchaseEditsMixin, SupplierMixin):
+class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixin, MenuInsightsMixin, PurchaseEditsMixin, SupplierMixin, ReminderMixin):
     def __init__(self, path, seed=True):
         self.path = str(path)
         # Each restaurant owns a catalog: the shared base plus the ingredients
@@ -537,7 +538,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 "CREATE TABLE IF NOT EXISTS stock_counts (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, restaurant_id TEXT NOT NULL REFERENCES restaurants(id), ingredient_id TEXT NOT NULL, estimated_quantity TEXT NOT NULL, counted_quantity TEXT NOT NULL, delta TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, applied_at TEXT)",
             ):
                 conn.execute(statement)
-            for statement in (*SQLITE_SCHEMA, *OPERATIONS_SQLITE_SCHEMA, *PURCHASE_SOURCES_SQLITE_SCHEMA, *PHONE_AUTH_SQLITE_SCHEMA):
+            for statement in (*SQLITE_SCHEMA, *OPERATIONS_SQLITE_SCHEMA, *PURCHASE_SOURCES_SQLITE_SCHEMA, *PHONE_AUTH_SQLITE_SCHEMA, *REMINDERS_SQLITE_SCHEMA):
                 conn.execute(statement)
             movement_columns = {row[1] for row in conn.execute("PRAGMA table_info(movements)")}
             if "inventory_event_id" not in movement_columns:
@@ -1302,6 +1303,11 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 # follow-up merge (the sentence names items in the draft).
                 reply, updated = self.apply_unit_command(tenant, unit_cmd, conn=conn)
                 result["action"] = "units_updated" if updated else "unit_edit_rejected"
+            elif tenant and (reminder_cmd := parse_reminder_command(payload["text"])):
+                # Schedule commands ("pengingat pagi jadi jam 8") are pure
+                # settings: they run even while a purchase draft waits, since
+                # the sentence can never be a purchase line.
+                reply, result = self.apply_reminder_command(conn, tenant, reminder_cmd)
             elif extracted_photo:
                 source_digest, source_result = self._purchase_source_guard(conn, tenant, operation_source)
                 if source_result is not None:
