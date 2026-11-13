@@ -201,9 +201,11 @@ def test_oversized_rp_amount_and_normalization_total_are_rejected_without_except
     assert normalized["warnings"]
 
 
-def test_unprefixed_whole_number_price_is_not_assumed():
-    # Large bare trailing numbers are realistic prices ("cabai 2 kg 30000")
-    # and quantities are never that big, so >= 1000 reads as a total.
+def test_unprefixed_whole_number_price_is_per_unit():
+    # A bare trailing number reads as a per-unit price: owners quote prices
+    # per piece ("banana cake 10 2500" meant ten pieces at Rp2.500 each —
+    # the old total reading produced a nonsensical Rp250 piece, Nov 2026
+    # pilot finding). Quantity 1 is unchanged by the reading.
     priced = extract_purchase("beli cabai 1 kg 25000")
     assert priced["items"][0] == {
         "ingredient_id": "cabai",
@@ -213,6 +215,21 @@ def test_unprefixed_whole_number_price_is_not_assumed():
         "line_total_idr": 25000,
     }
     assert priced["warnings"] == []
+
+    cakes = extract_purchase("banana cake 10 2500")
+    assert cakes["items"][0]["quantity"] == "10"
+    assert cakes["items"][0]["line_total_idr"] == 25000  # 10 × Rp2.500
+
+    # The word "total" before a bare amount flips to a lot price.
+    lot = extract_purchase("beli cabai 2 kg total 30000")
+    assert lot["items"][0]["line_total_idr"] == 30000
+    assert lot["warnings"] == []
+
+    # A bare amount without any quantity never reaches the per-unit reading:
+    # it is flagged as missing price/quantity for the draft to clarify.
+    orphan = extract_purchase("banana cake 2500")
+    assert orphan["items"][0]["line_total_idr"] is None
+    assert orphan["warnings"]
 
     # Small bare numbers stay ambiguous — "5" is more likely another quantity.
     small = extract_purchase("beli cabai 1 kg 5")
