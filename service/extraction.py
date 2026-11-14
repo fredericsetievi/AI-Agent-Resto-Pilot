@@ -82,7 +82,9 @@ _PRICE_SUFFIX = re.compile(
 _RP_INTEGER = re.compile(r"(?ix)\s+rp\s*(?P<amount>\d+(?:\.\d{3})*)\s*$")
 _UNPREFIXED_INTEGER = re.compile(r"(?i)\s+(?P<amount>\d+(?:\.\d{3})*)\s*$")
 _TRAILING_QUANTITY = re.compile(
-    rf"(?ix)\s+(?P<quantity>{_NUMBER})(?:\s+(?P<unit>[a-zA-Z]+))?\s*$"
+    # The unit may be glued to the count ("500pcs", "2kg") — currency scales
+    # never reach this pattern because price parsing strips "150rb" first.
+    rf"(?ix)\s+(?P<quantity>{_NUMBER})\s*(?P<unit>[a-zA-Z]+)?\s*$"
 )
 _SOURCE_ONLY_MODIFIERS = re.compile(
     r"(?i)\b(?:jangan\s+beli|tidak\s+usah\s+beli|rencana(?:nya)?|nanti\s+beli|per\s+(?:kg|kilo|g|gram|l|liter|ml)|diskon|discount|pajak|ppn|ongkir|potongan|termasuk\s+pajak)\b"
@@ -103,6 +105,41 @@ _SUPPLIER_HEADER = re.compile(
 # Split points are commas that are not inside a number (decimal commas such as
 # "Rp7,5" have no following space) and the shared coordinating conjunctions.
 _CLAUSE_SPLIT = re.compile(r"(?i),(?=\s)|\s+(?:dan|lalu|kemudian|serta)\s+")
+# Forwarded supplier POs number their lines ("1. Sedotan plastik 1 pak");
+# like bullet markers the leading index is formatting, not the item name.
+_LIST_MARKER = re.compile(r"^\s*(?:[-*•·](?!\d)\s*|\d{1,3}[.)]\s+)+")
+# Owners open with order verbs and pronouns ("sy PO Sunco 10 dus",
+# "kirim 2 gas, 3 melon"); the verb is intent, not part of the item name.
+_ORDER_PREFIX = re.compile(r"(?i)^(?:tolong|sy|saya|mau|mo|pengen|po|pesan|order|buy|kirim|beli|pembelian)\s+")
+# Messages close with courtesy ("... 10 dus ya 🙏"); trailing emoji and
+# politeness words are chatter, not part of the item name or quantity.
+_SYMBOL_TAIL = re.compile(r"[^\w\s]+\s*$")
+_POLITENESS_TAIL = re.compile(r"(?i)\s+(?:ya|y|bisa|oke|ok|sip|gan|min|makasih|terima\s+kasih|mantap|siap)$")
+# Owners quote a per-unit price with "@" ("Sunco 10 dus @15rb" = ten crates
+# at Rp15.000 each); it multiplies by the quantity like a bare per-unit
+# price, while "@2ltr" size markers never match (no rb/jt scale and no
+# thousand-sized bare amount).
+_AT_PRICE = re.compile(
+    r"(?ix)@\s*(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta)?\s*$"
+)
+# Counts lead the line in delivery notes ("kirim 2 gas"); a leading number
+# followed by a known unit word is a quantity, otherwise the word opens the
+# name ("2 gas" = gas, quantity 2).
+_LEADING_UNIT_ALIASES = {
+    **_UNIT_ALIASES,
+    "slop": "slop",
+    "kodi": "kodi",
+    "bungkus": "pack",
+    "ons": "ons",
+    "ltr": "l",
+    "lt": "l",
+}
+_LEADING_QUANTITY = re.compile(
+    rf"(?i)^\s*(?P<quantity>{_NUMBER})\s*(?P<unit>[a-zA-Z]+)?\s*(?P<rest>.*)$"
+)
+# Package-size qualifiers in front of a trailing number ("teh racik merah
+# kemasan 500gr") mean the number names the packaging, not the count.
+_SIZE_QUALIFIER_TAIL = re.compile(r"(?i)(?:kemasan|isi|@)\s*$")
 
 
 def _decimal_text(value: str) -> Decimal | None:
@@ -145,6 +182,24 @@ def _parse_price(text: str) -> tuple[str, int | None, str | None, bool]:
         if total != total.to_integral_value() or total > _MAX_TOTAL:
             return text[: match.start()].strip(), None, "Price must resolve to a whole IDR amount no greater than 1000000000000.", False
         return text[: match.start()].strip(), int(total), None, False
+
+    # "@15rb" / "@Rp15.000" quotes the per-unit price ("Sunco 10 dus @15rb");
+    # bare_unit multiplication by the quantity happens in _parse_clause.
+    match = _AT_PRICE.search(text)
+    if match:
+        digits = match.group("amount").replace(".", "")
+        if len(digits) > 13:
+            return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000.", False
+        amount = int(digits)
+        scale = (match.group("scale") or "").casefold()
+        multiplier = 1_000 if scale in {"rb", "ribu"} else 1_000_000 if scale in {"jt", "juta"} else 1
+        total = amount * multiplier
+        if not scale and amount < 1000:
+            pass  # "@2"-style size marker, not a price: leave it in the name
+        elif total <= 0 or total > _MAX_TOTAL:
+            return text[: match.start()].strip(), None, "Price must be positive and no greater than 1000000000000 IDR.", False
+        else:
+            return text[: match.start()].strip(), total, None, True
 
     match = _RP_INTEGER.search(text)
     if match:
@@ -191,8 +246,34 @@ def _parse_price(text: str) -> tuple[str, int | None, str | None, bool]:
 
 
 def _parse_quantity(text: str) -> tuple[str, str | None, str | None, str | None]:
+    # Delivery notes lead with the count ("kirim 2 gas, 3 melon"); a leading
+    # number followed by a known unit word is the quantity, otherwise the
+    # word opens the name ("2 gas" = gas, quantity 2).
+    leading = _LEADING_QUANTITY.match(text)
+    if leading:
+        quantity = _decimal_text(leading.group("quantity"))
+        unit_text = leading.group("unit")
+        rest = (leading.group("rest") or "").strip()
+        unit_fold = (unit_text or "").casefold()
+        if quantity is not None and unit_fold not in {"rb", "ribu", "jt", "juta"}:
+            canonical = _LEADING_UNIT_ALIASES.get(unit_fold) if unit_text else None
+            if canonical:
+                if rest:
+                    return rest, _plain_decimal(quantity), canonical, None
+                # A bare "1 ikat" carries a quantity but no item name; the
+                # empty remainder fails name matching and the clause is
+                # rejected instead of drafting a product called "ikat".
+                return "", _plain_decimal(quantity), canonical, None
+            # Not a unit word: it belongs to the item name ("2 gas", "3 telur").
+            name = f"{unit_text} {rest}".strip()
+            if name:
+                return name, _plain_decimal(quantity), None, None
     match = _TRAILING_QUANTITY.search(text)
     if not match:
+        return text.strip(), None, None, None
+    if _SIZE_QUALIFIER_TAIL.search(text[: match.start()]):
+        # "kemasan 500gr", "isi 250ml", and "@2ltr" describe the package
+        # size, not how many packages the owner wants.
         return text.strip(), None, None, None
     quantity = _decimal_text(match.group("quantity"))
     unit_text = match.group("unit")
@@ -264,6 +345,17 @@ def canonical_unit_name(unit: str | None) -> str | None:
     return _UNIT_ALIASES.get(unit.strip().casefold(), unit.strip().casefold())
 
 
+def _strip_politeness_tail(source: str) -> str:
+    """Drop trailing emoji and courtesy words ("... 10 dus ya 🙏")."""
+    for _ in range(4):
+        updated = _SYMBOL_TAIL.sub("", source).rstrip()
+        updated = _POLITENESS_TAIL.sub("", updated).rstrip()
+        if updated == source:
+            break
+        source = updated
+    return source
+
+
 def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None, list[str]]:
     warnings: list[str] = []
     source = clause.strip()
@@ -274,11 +366,19 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
     if _MULTI_CLAUSE.search(source):
         return None, [f"Line {line_number}: multiple item clauses are ambiguous; put one item on each line."]
 
-    # Forwarded preorder lists use bullet markers ("- bolu pandan 2 pcs …");
-    # a bullet is formatting, not part of the item name. A marker directly
+    # Forwarded preorder lists use bullet markers ("- bolu pandan 2 pcs …")
+    # and numbered PO lines ("1. Sedotan plastik 1 pak"); a marker is
+    # formatting, not part of the item name. A dash marker directly
     # followed by a digit stays untouched (negative amounts are not bullets).
-    source = re.sub(r"^\s*(?:[-*•·](?!\d)\s*)+", "", source)
-    source = re.sub(r"(?i)^\s*(?:tolong\s+)?beli\s+", "", source).strip()
+    source = _LIST_MARKER.sub("", source)
+    source = _strip_politeness_tail(source)
+    if not source:
+        return None, [f"Line {line_number}: no item name was found."]
+    for _ in range(4):
+        stripped = _ORDER_PREFIX.sub("", source).strip()
+        if stripped == source:
+            break
+        source = stripped
     if not source:
         return None, [f"Line {line_number}: no item name was found."]
 
@@ -333,13 +433,45 @@ def _parse_line_clauses(line: str, line_number: int) -> tuple[list[dict[str, Any
     """Parse one input line, splitting comma/conjunction lists into items.
 
     Owners write "kembung 25 ekor, mas 6 ekor" in one breath. The line is
-    split on commas followed by whitespace and on "dan/lalu/kemudian/serta",
-    but only when every clause carries a digit (a quantity or price) and
-    yields an item; approval prefixes ("setuju, beli ..."), dish-style names
-    ("bumbu dan rempah 3 kg"), and anything else fall back to the
-    single-clause parse, including its multi-clause ambiguity warning.
+    split on commas followed by whitespace and on "dan/lalu/kemudian/serta".
+    For comma lists (real forwarded POs open with a greeting clause, "Nanti
+    siang, kirim 2 gas, …"), quantified clauses that all parse produce the
+    items and digit-less chatter prefixes are dropped. Conjunction lists
+    keep the strict all-digits rule so dish-style names ("bumbu dan rempah
+    3 kg") stay one item; anything else falls back to the single-clause
+    parse, including its multi-clause ambiguity warning.
     """
     clauses = [clause.strip() for clause in _CLAUSE_SPLIT.split(line) if clause.strip()]
+    has_comma_split = re.search(r",(?=\s)", line) is not None
+    if has_comma_split and len(clauses) > 1:
+        parsed = [(_parse_clause(clause, line_number), bool(re.search(r"\d", clause))) for clause in clauses]
+        digit_parsed = [(item, warnings) for ((item, warnings), has_digit) in parsed if has_digit]
+        # Every quantified clause must parse into a real item — a quantity or
+        # a confident catalog match. A money-bearing clause with neither ("bawa
+        # cash 2 jt" inside a greeting, fuzzy-matched or not) is chat context,
+        # not an order, so the line falls back to the single-clause parse and
+        # its chatter filter.
+        if digit_parsed and all(
+            item is not None
+            and (
+                item.get("quantity") is not None
+                or (item.get("ingredient_id") is not None and "matched_from" not in item)
+            )
+            for item, _ in digit_parsed
+        ):
+            kept: list[dict[str, Any]] = []
+            combined_warnings: list[str] = []
+            for (item, clause_warnings), has_digit in parsed:
+                if item is None:
+                    continue
+                # Keep quantified clauses and real catalog items; a digit-less
+                # clause with neither ("Pagi mas. Selasa ini") is a greeting
+                # prefix, not an item the owner meant to order.
+                if has_digit or item.get("quantity") is not None or item.get("ingredient_id") is not None:
+                    kept.append(item)
+                    combined_warnings.extend(clause_warnings)
+            if kept:
+                return kept, combined_warnings
     if len(clauses) > 1 and all(re.search(r"\d", clause) for clause in clauses):
         parsed: list[tuple[dict[str, Any], list[str]]] = []
         for clause in clauses:
@@ -349,7 +481,7 @@ def _parse_line_clauses(line: str, line_number: int) -> tuple[list[dict[str, Any
                 break
             parsed.append((item, clause_warnings))
         if parsed:
-            combined_warnings: list[str] = []
+            combined_warnings = []
             for _, clause_warnings in parsed:
                 combined_warnings.extend(clause_warnings)
             return [entry[0] for entry in parsed], combined_warnings
