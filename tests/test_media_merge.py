@@ -155,7 +155,7 @@ def test_grouped_photos_without_vision_get_one_safe_reply(tmp_path):
         assert draft is None
         # One reply total — not one per photo.
         assert sum(1 for call in telegram.calls if call.get("url", "").endswith("/sendMessage")) == 1
-        assert "belum diproses" in telegram.calls[0]["json"]["text"] or "Foto" in telegram.calls[0]["json"]["text"]
+        assert "belum diproses" in telegram.calls[-1]["json"]["text"] or "Foto" in telegram.calls[-1]["json"]["text"]
 
 
 def test_single_photo_keeps_the_immediate_flow(tmp_path):

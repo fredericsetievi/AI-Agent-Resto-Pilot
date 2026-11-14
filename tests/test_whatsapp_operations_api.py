@@ -79,6 +79,7 @@ def test_sales_image_classifier_gets_caption_and_no_purchase_extraction(tmp_path
     provider = FakeMetaClient()
     image = b"\xff\xd8\xff\xe0" + b"\x00" * 64
     provider.responses.extend([
+        FakeResponse(),  # read receipt
         FakeResponse(body={"url": "https://lookaside.example/media/report", "mime_type": "image/jpeg"}),
         FakeResponse(content=image),
     ])
@@ -129,6 +130,7 @@ def test_active_clarification_skips_text_purchase_models(tmp_path, monkeypatch):
 def test_sales_photo_date_reply_uses_saved_facts_without_another_model_call(tmp_path, monkeypatch):
     provider = FakeMetaClient()
     provider.responses.extend([
+        FakeResponse(),  # read receipt
         FakeResponse(body={"url": "https://lookaside.example/media/report", "mime_type": "image/jpeg"}),
         FakeResponse(content=b"\xff\xd8\xff\xe0" + b"\x00" * 64),
     ])
@@ -161,7 +163,7 @@ def test_sales_photo_date_reply_uses_saved_facts_without_another_model_call(tmp_
     assert yesterday in reply and "2 × 0.1 = 0.2" in reply
     assert "Balas YA" in reply and "tidak terbaca" not in reply
     assert len(classified) == 1
-    assert [call["method"] for call in provider.calls] == ["GET", "GET", "POST", "POST"]
+    assert [call["method"] for call in provider.calls] == ["POST", "GET", "GET", "POST", "POST", "POST"]
     assert store.inventory_workspace("demo-resto")["events"] == []
 
 
@@ -197,6 +199,7 @@ def test_unsupported_document_asks_without_download_or_purchase(tmp_path, monkey
 def test_voice_operation_uses_same_routing_as_typed_text(tmp_path, monkeypatch):
     provider = FakeMetaClient()
     provider.responses.extend([
+        FakeResponse(),  # read receipt
         FakeResponse(body={"url": "https://lookaside.example/media/audio", "mime_type": "audio/ogg"}),
         FakeResponse(content=b"OggS" + b"\x00" * 32),
     ])

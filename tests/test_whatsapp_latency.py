@@ -57,6 +57,7 @@ def application(tmp_path, **kwargs):
 def responses():
     return {
         30.0: [
+            FakeResponse(),  # read receipt
             FakeResponse(body={"url": "https://lookaside.example/photo", "mime_type": "image/jpeg"}),
             FakeResponse(content=IMAGE), FakeResponse(),
         ],
@@ -92,8 +93,8 @@ def test_photo_uses_one_meta_pool_and_one_vision_pool_and_closes_both(tmp_path, 
     assert len(created) == 2
     meta = next(client for client in created if client.timeout == 30)
     vision = next(client for client in created if client.timeout == 60)
-    assert [call[0] for call in meta.calls] == ["GET", "GET", "POST"]
-    assert [call[2]["timeout"] for call in meta.calls] == [30.0, 30.0, 5.0]
+    assert [call[0] for call in meta.calls] == ["POST", "GET", "GET", "POST"]
+    assert [call[2]["timeout"] for call in meta.calls] == [5.0, 30.0, 30.0, 5.0]
     assert len(vision.calls) == 2  # classification and invoice share the pool
     assert all(client.closes == 1 for client in created)
     timings = [record.getMessage() for record in caplog.records if record.name == "restopilot.api" and record.getMessage().startswith("WhatsApp stage=")]
@@ -132,7 +133,7 @@ def test_owned_clients_close_and_total_is_logged_when_send_fails(tmp_path, monke
 
 
 def test_text_clarification_does_not_allocate_vision_client(tmp_path, monkeypatch):
-    queues = {30.0: [FakeResponse()]}
+    queues = {30.0: [FakeResponse(), FakeResponse()]}
     created = owned_clients(monkeypatch, queues)
     app = application(tmp_path)
     with TestClient(app, base_url="http://127.0.0.1") as client:

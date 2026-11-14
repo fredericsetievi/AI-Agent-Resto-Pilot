@@ -165,7 +165,7 @@ def test_voice_failure_falls_back_to_the_text_summary(tmp_path, monkeypatch):
     monkeypatch.setattr("service.api.synthesize_speech", broken_speech)
     response = post_update(client, weekly_update())
     assert response.status_code == 200, response.text
-    assert [c["url"].rsplit("/", 1)[-1] for c in telegram.calls] == ["sendMessage"]
+    assert [c["url"].rsplit("/", 1)[-1] for c in telegram.calls] == ["sendChatAction", "sendMessage"]
 
 
 def test_weekly_summary_stays_text_without_tts_key(tmp_path):
@@ -173,7 +173,7 @@ def test_weekly_summary_stays_text_without_tts_key(tmp_path):
     client, _ = client_with(tmp_path, telegram=telegram, vision_key=None)
     response = post_update(client, weekly_update())
     assert response.status_code == 200, response.text
-    assert [c["url"].rsplit("/", 1)[-1] for c in telegram.calls] == ["sendMessage"]
+    assert [c["url"].rsplit("/", 1)[-1] for c in telegram.calls] == ["sendChatAction", "sendMessage"]
 
 
 def test_send_voice_rejects_empty_audio():
