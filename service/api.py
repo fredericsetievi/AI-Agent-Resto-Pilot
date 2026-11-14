@@ -520,18 +520,24 @@ def create_app(
     _text_command_words = APPROVE_COMMANDS | REJECT_COMMANDS | set(SUMMARY_COMMANDS) | {"skip", "lewati"}
 
     async def extract_text(text, restaurant_name=None):
-        """Rules first; the model only rescues lines the parser could not read.
+        """Rules first; the model handles messy multi-line forwards.
 
-        With LLM_TEXT_EXTRACTION enabled, a rules result that carries warnings
-        (missing fields, ambiguous clauses) gets one model attempt; a model
-        error or an empty model answer keeps the rules result, so behavior
-        with the feature off is unchanged. The restaurant name rides along so
-        the model prompt carries the tenant rule as defense in depth.
+        With LLM_TEXT_EXTRACTION enabled, two triggers get one model attempt:
+        a rules result that carries warnings (missing fields, ambiguous
+        clauses), and any multi-line forward (PO lists, pasted supplier
+        notes), where the parser can misread a clean-looking line ("Selasa
+        kirim 2 gas") as a wrong item. A model error or an empty model answer
+        keeps the rules result, so behavior with the feature off is
+        unchanged. Short clean single-line messages stay rules-only: a bare
+        "beli cabai 3 kg 150rb" needs no model round trip, and "ya" must stay
+        a zero-cost command. The restaurant name rides along so the model
+        prompt carries the tenant rule as defense in depth.
         """
         extracted = extract_purchase(text)
-        if not text_llm_enabled or not vision_api_key or not extracted["warnings"]:
+        if not text_llm_enabled or not vision_api_key:
             return extracted
-        if text.strip().casefold() in _text_command_words or parse_payment_followup(text):
+        messy = bool(extracted["warnings"]) or len(text.strip().splitlines()) > 1
+        if not messy or text.strip().casefold() in _text_command_words or parse_payment_followup(text):
             return extracted
         try:
             rescued = await extract_message(
