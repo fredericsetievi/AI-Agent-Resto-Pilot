@@ -133,7 +133,8 @@ def test_telegram_pdf_document_creates_one_draft(tmp_path):
               if d["status"] in ("pending_approval", "needs_clarification")]
     assert len(drafts) == 1
     assert [item["ingredient_id"] for item in drafts[0]["items"]] == ["cabai"]
-    assert len(telegram.sends) == 1 and "Cabai merah" in telegram.sends[0]["json"]["text"]
+    assert len(telegram.sends) == 2  # typing hint + the draft reply
+    assert "Cabai merah" in telegram.sends[-1]["json"]["text"]
 
 
 # --- Dashboard endpoint -------------------------------------------------------------

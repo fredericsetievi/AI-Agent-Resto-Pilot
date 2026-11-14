@@ -127,6 +127,7 @@ def test_provider_failure_does_not_register_digest_and_retry_can_be_reviewed(tmp
     provider, vision = FakeMetaClient(), FakeVisionClient()
     image = b"\xff\xd8\xff\xe0" + b"\x00" * 64
     provider.responses.extend([
+        FakeResponse(),  # read receipt
         FakeResponse(body={"url": "https://lookaside.example/media/failure", "mime_type": "image/jpeg"}),
         FakeResponse(content=image),
     ])
@@ -138,6 +139,7 @@ def test_provider_failure_does_not_register_digest_and_retry_can_be_reviewed(tmp
             assert conn.execute("SELECT count(*) FROM whatsapp_purchase_sources").fetchone()[0] == 0
         assert webhook(client, payload("BATAL", event_id="wamid.cancel-unreadable")).status_code == 200
         provider.responses.extend([
+            FakeResponse(),  # read receipt
             FakeResponse(body={"url": "https://lookaside.example/media/retry", "mime_type": "image/jpeg"}),
             FakeResponse(content=image),
         ])

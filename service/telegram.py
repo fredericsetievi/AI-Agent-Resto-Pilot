@@ -161,6 +161,29 @@ async def send_text(token, chat_id, text, *, api_base=DEFAULT_API_BASE, client=N
         raise TelegramError("Telegram reported the reply as failed.")
 
 
+async def send_typing(token, chat_id, *, api_base=DEFAULT_API_BASE, client=None):
+    """Fire a best-effort "typing…" chat action right after an update arrives.
+
+    The chat action is a transient receipt signal while extraction runs; it
+    never raises, so a failed hint can never break message intake or the
+    reply that follows it.
+    """
+    if not token or not token.strip():
+        return
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=10.0, follow_redirects=False)
+    try:
+        await client.post(
+            api_base + f"/bot{token}/sendChatAction",
+            json={"chat_id": chat_id, "action": "typing"},
+        )
+    except httpx.HTTPError:
+        logger.warning("Telegram typing chat action failed; continuing without it.")
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
 async def send_voice(token, chat_id, audio, *, api_base=DEFAULT_API_BASE, client=None, filename="restopilot.ogg"):
     """Send one OGG voice note (multipart upload — no JSON body).
 

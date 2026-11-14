@@ -75,6 +75,7 @@ from .telegram import (
     matches_secret as matches_telegram_secret,
     parse_update as parse_telegram_update,
     send_text as send_telegram_text,
+    send_typing as send_telegram_typing,
     send_voice as send_telegram_voice,
     validate_bot_token as validate_telegram_token,
     validate_secret_token as validate_telegram_secret,
@@ -104,6 +105,7 @@ from .whatsapp import (
     matches_public_host,
     matches_verify_token,
     meta_event_key,
+    mark_read,
     parse_payment_followup,
     parse_webhook,
     stock_reply,
@@ -1510,6 +1512,16 @@ def create_app(
             timing_kind = media_kind or ("unsupported" if payload["num_media"] else "text")
             sender_restaurant = await _timed_whatsapp("sender_lookup", timing_kind, run_in_threadpool(store.restaurant_for_sender, message["sender"]))
             restaurant_id = sender_restaurant["id"] if sender_restaurant else None
+            if sender_restaurant:
+                # Receipt signal: the blue double check lands before extraction
+                # runs. A failed read receipt is logged and never blocks the
+                # reply that follows.
+                try:
+                    await _timed_whatsapp("mark_read", timing_kind, mark_read(
+                        meta_access_token, meta_phone_number_id, meta_graph_api_version,
+                        event_id, client=await get_meta_client()))
+                except MetaWhatsAppError as exc:
+                    logger.warning("WhatsApp read receipt failed: %s", exc)
             if payload["num_media"]:
                 payload["operation_source"] = {
                     "media_id": message.get("media_id") or event_id,
@@ -1677,6 +1689,12 @@ def create_app(
             sender_restaurant = await run_in_threadpool(store.restaurant_for_sender, message["sender"], "telegram")
             restaurant_id = sender_restaurant["id"] if sender_restaurant else None
             payload["_restaurant_id"] = restaurant_id
+            if sender_restaurant:
+                # Receipt signal: show "typing…" while extraction runs. The
+                # chat action is best-effort and never breaks message intake.
+                await send_telegram_typing(
+                    telegram_bot_token, message["sender"],
+                    api_base=telegram_api_base, client=telegram_http_client)
             if message.get("media_kind") is None and payload["text"].strip() and restaurant_id:
                 inquiry_cmd = parse_supplier_command(payload["text"])
                 if inquiry_cmd and inquiry_cmd.get("kind") == "inquiry":
@@ -1923,6 +1941,12 @@ def create_app(
             digests = sorted({part["digest"] for part in extracted_parts if part.get("digest")})
             payload["operation_source"] = {"digest": hashlib.sha256(("|".join(digests) or payload["source_label"]).encode()).hexdigest()}
             payload["source_label"] = f"{len(parts)} foto nota Telegram"
+        if entry.get("restaurant_id"):
+            # The reply only lands after the quiet period; refresh the typing
+            # hint so the owner still sees the bot working right before it.
+            await send_telegram_typing(
+                telegram_bot_token, entry["sender"],
+                api_base=telegram_api_base, client=telegram_http_client)
         try:
             await deliver_telegram(payload, {"sender": entry["sender"]})
         except DomainError as exc:

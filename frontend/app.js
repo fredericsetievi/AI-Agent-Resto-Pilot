@@ -379,7 +379,9 @@ function whatsappPage() {
 function whatsappMessageHTML() {
   if(state.whatsappLoading && !state.whatsappMessages.length)return `<div class="chat-empty">${t('chat_loading')}</div>`;
   if(!state.whatsappMessages.length)return `<div class="chat-empty">${t('chat_empty')}</div>`;
-  return state.whatsappMessages.map(message=>`<article class="chat-message ${message.direction==='inbound'?'inbound':'outbound'}"><div class="chat-bubble"><p>${e(message.body)}</p><small>${e(message.direction==='inbound'?t('w_you'):'RestoPilot')} · ${e(message.status==='received'?t('w_received'):t('w_simulated'))} · ${e(date(message.created_at))}</small></div></article>`).join('') + whatsappOutcomeHTML();
+  return state.whatsappMessages.map(message=>`<article class="chat-message ${message.direction==='inbound'?'inbound':'outbound'}"><div class="chat-bubble"><p>${e(message.body)}</p><small>${e(message.direction==='inbound'?t('w_you'):'RestoPilot')} · ${e(message.status==='received'?t('w_received'):t('w_simulated'))} · ${e(date(message.created_at))}</small></div></article>`).join('')
+    + (state.whatsappSending?`<article class="chat-message outbound"><div class="chat-bubble typing" aria-label="${e(t('chat_processing'))}"><p><span class="typing-dot" aria-hidden="true"></span><span class="typing-dot" aria-hidden="true"></span><span class="typing-dot" aria-hidden="true"></span></p><small>RestoPilot</small></div></article>`:'')
+    + whatsappOutcomeHTML();
 }
 function whatsappOutcomeHTML() {
   const draft=state.whatsappDraft, action=state.whatsappResult?.action;
@@ -412,7 +414,8 @@ async function loadWhatsAppMessages() {
   finally {state.whatsappLoading=false;renderWhatsAppChat();}
 }
 function renderWhatsAppChat() {
-  const messages=$('#whatsapp-messages');if(messages)messages.innerHTML=whatsappMessageHTML();
+  const messages=$('#whatsapp-messages');
+  if(messages){messages.innerHTML=whatsappMessageHTML();messages.scrollTop=messages.scrollHeight;}
   const error=$('#whatsapp-error');if(error){error.textContent=state.whatsappError;error.hidden=!state.whatsappError;}
   const form=$('#whatsapp-form');if(form){$('#whatsapp-text').disabled=state.whatsappSending;form.querySelector('button[type="submit"]').disabled=state.whatsappSending;form.querySelector('button[type="submit"]').textContent=state.whatsappSending?t('wa_sending'):t('btn_send')+' →';}
 }
@@ -421,12 +424,17 @@ async function sendWhatsAppMessage(text) {
   const fingerprint=JSON.stringify({text:clean,sender:WHATSAPP_SENDER});
   if(state.whatsappPending?.fingerprint!==fingerprint)state.whatsappPending={fingerprint,event_id:newId(),key:newId()};
   const pending=state.whatsappPending, body={text:clean,sender:WHATSAPP_SENDER,event_id:pending.event_id};
-  state.whatsappSending=true;state.whatsappError='';renderWhatsAppChat();
+  state.whatsappSending=true;state.whatsappError='';
+  // Optimistic UI: show the sent note and a "Memproses…" bubble immediately;
+  // the server response replaces the thread, and a failure rolls the
+  // optimistic entries back so nothing is shown as recorded that is not.
+  state.whatsappMessages=[...state.whatsappMessages,{direction:'inbound',body:clean,status:'simulated',created_at:new Date().toISOString(),optimistic:true}];
+  renderWhatsAppChat();
   try {
     const result=await api('/v1/whatsapp/simulate',{method:'POST',body,key:pending.key});
     state.whatsappPending=null;state.whatsappMessages=Array.isArray(result.messages)?result.messages:state.whatsappMessages;state.whatsappDraft=result.draft || null;state.whatsappResult=result.result || null;state.whatsappLoaded=true;
     $('#whatsapp-text').value='';
-  } catch(error) {state.whatsappError=error.message;}
+  } catch(error) {state.whatsappError=error.message;state.whatsappMessages=state.whatsappMessages.filter(m=>!m.optimistic);}
   finally {state.whatsappSending=false;renderWhatsAppChat();}
 }
 // Owner decision straight from the chat page. Same contract as the approvals

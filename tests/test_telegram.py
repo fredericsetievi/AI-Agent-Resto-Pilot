@@ -17,6 +17,7 @@ SECRET = "integration-test-secret"
 CHAT_ID = "987654321"  # The owner's Telegram chat id, registered like a number.
 UNREGISTERED = "111222333"
 SEND_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+TYPING_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendChatAction"
 HEADERS = {"X-Telegram-Bot-Api-Secret-Token": SECRET, "Content-Type": "application/json"}
 
 
@@ -122,14 +123,17 @@ def test_registered_purchase_creates_a_draft_and_replies_once(tmp_path):
 
     first = client.post("/webhooks/telegram", headers=HEADERS, content=body(update("beli telur 2 kg 60rb", update_id=501)))
     assert first.status_code == 200, first.text
-    assert [call["url"] for call in fake.calls] == [SEND_URL]
-    sent = fake.calls[0]["json"]
+    # Receipt signal first: a typing chat action precedes the actual reply.
+    assert [call["url"] for call in fake.calls] == [TYPING_URL, SEND_URL]
+    assert fake.calls[0]["json"] == {"chat_id": CHAT_ID, "action": "typing"}
+    sent = fake.calls[1]["json"]
     assert sent["chat_id"] == CHAT_ID and "Draf pembelian" in sent["text"] and "Telur ayam" in sent["text"]
 
-    # Telegram retries the same update_id until a 2xx: never double-send.
+    # Telegram retries the same update_id until a 2xx: the reply is deduped,
+    # so only the (harmless) typing hint fires again, never a second reply.
     replay = client.post("/webhooks/telegram", headers=HEADERS, content=body(update("beli telur 2 kg 60rb", update_id=501)))
     assert replay.status_code == 200
-    assert len(fake.calls) == 1
+    assert [call["url"] for call in fake.calls] == [TYPING_URL, SEND_URL, TYPING_URL]
 
     # A new update flows normally: YA records the draft.
     client.post("/webhooks/telegram", headers=HEADERS, content=body(update("ya", update_id=502)))
@@ -142,7 +146,7 @@ def test_stock_question_answers_from_the_inventory(tmp_path):
     link_chat_to_demo(client)
     response = client.post("/webhooks/telegram", headers=HEADERS, content=body(update("berapa total cabai yang tersisa saat ini?", update_id=601)))
     assert response.status_code == 200, response.text
-    sent = fake.calls[0]["json"]
+    sent = fake.calls[-1]["json"]
     assert "Cabai merah — 3 kg" in sent["text"] and "5 kg" in sent["text"]
 
 
@@ -158,6 +162,8 @@ def test_unregistered_chat_gets_the_rejection_reply(tmp_path):
 
 def test_send_failure_rolls_the_status_back_and_errors(tmp_path):
     fake = FakeTelegramClient()
+    # The typing hint consumes the first (fine) response; the reply send fails.
+    fake.responses.append(FakeResponse())
     fake.responses.append(FakeResponse(status_code=500, body={"ok": False}))
     client = admin_client(tmp_path, fake)
     link_chat_to_demo(client)
@@ -167,6 +173,18 @@ def test_send_failure_rolls_the_status_back_and_errors(tmp_path):
     with client.app.state.store.transaction() as conn:
         row = conn.execute("SELECT status FROM whatsapp_messages WHERE direction='outbound' ORDER BY rowid DESC LIMIT 1").fetchone()
     assert row["status"] == "telegram_send_pending"
+
+
+def test_failed_typing_hint_never_breaks_intake(tmp_path):
+    """The typing chat action is cosmetic: a rejected hint, the reply still lands."""
+    fake = FakeTelegramClient()
+    fake.responses.append(FakeResponse(status_code=500, body={"ok": False}))  # typing hint rejected
+    client = admin_client(tmp_path, fake)
+    link_chat_to_demo(client)
+    response = client.post("/webhooks/telegram", headers=HEADERS, content=body(update("beli telur 2 kg", update_id=851)))
+    assert response.status_code == 200, response.text
+    assert [call["url"] for call in fake.calls] == [TYPING_URL, SEND_URL]
+    assert "Draf pembelian" in fake.calls[-1]["json"]["text"]
 
 
 def test_telegram_webhook_reachable_through_the_public_host(tmp_path):

@@ -341,6 +341,37 @@ async def send_text(access_token, phone_number_id, graph_version, recipient, bod
     return await _send(access_token, phone_number_id, graph_version, recipient, payload, client=client)
 
 
+async def mark_read(access_token, phone_number_id, graph_version, message_id, *, client=None):
+    """Mark one inbound message as read (the blue double check).
+
+    Callers treat this as a best-effort receipt signal: a failure is logged
+    and swallowed in the webhook so the reply still goes out.
+    """
+    if not access_token or not access_token.strip():
+        raise MetaWhatsAppError("Meta WhatsApp Cloud API is not configured.", 503)
+    phone_number_id = validate_meta_id(phone_number_id, "META_PHONE_NUMBER_ID")
+    graph_version = validate_graph_version(graph_version)
+    if not isinstance(message_id, str) or not _MESSAGE_ID.fullmatch(message_id):
+        raise MetaWhatsAppError("Meta WhatsApp Cloud API received an invalid message ID for the read receipt.")
+    url = f"https://graph.facebook.com/{graph_version}/{phone_number_id}/messages"
+    owns_client = client is None
+    client = client or httpx.AsyncClient(timeout=5.0, follow_redirects=False)
+    try:
+        response = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={"messaging_product": "whatsapp", "status": "read", "message_id": message_id},
+        )
+    except httpx.HTTPError:
+        raise MetaWhatsAppError("Meta WhatsApp Cloud API could not be reached.")
+    finally:
+        if owns_client:
+            await client.aclose()
+    if response.status_code != 200:
+        status = 429 if response.status_code == 429 else 502
+        raise MetaWhatsAppError(f"Meta WhatsApp Cloud API rejected the read receipt (HTTP {response.status_code}).", status)
+
+
 async def send_template(access_token, phone_number_id, graph_version, recipient, template_name, template_lang, body_params, *, client=None):
     """Send an approved template message — the only delivery that reaches a
     recipient outside the 24-hour customer-service window. ``body_params``
