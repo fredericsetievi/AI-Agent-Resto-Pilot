@@ -191,7 +191,9 @@ def test_intake_falls_back_to_rules_when_the_model_fails(tmp_path):
 
     draft = intake(client, FLEXIBLE).json()["data"]
     assert draft["status"] == "needs_clarification"
-    assert draft["items"][0]["raw_name"] == FLEXIBLE
+    # The rules fallback keeps the flexible sentence as one unmodelled item;
+    # the "tolong" order-verb prefix is stripped, the rest stays verbatim.
+    assert draft["items"][0]["raw_name"] == FLEXIBLE.removeprefix("tolong ")
     assert any("quantity is missing" in warning for warning in draft["warnings"])
 
 
@@ -202,7 +204,7 @@ def test_intake_falls_back_when_the_model_returns_no_items(tmp_path):
 
     draft = intake(client, FLEXIBLE).json()["data"]
     assert draft["status"] == "needs_clarification"
-    assert draft["items"][0]["raw_name"] == FLEXIBLE
+    assert draft["items"][0]["raw_name"] == FLEXIBLE.removeprefix("tolong ")
 
 
 def test_intake_without_the_flag_never_calls_the_model(tmp_path):

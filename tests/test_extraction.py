@@ -25,7 +25,7 @@ def test_forwarded_cake_preorder_from_five_shops_parses_every_cake():
     cakes = [item for item in result["items"] if not is_chatter_item(item)]
     # The greeting sentence parses as a pseudo-item and is detected as chatter
     # so the store layer drops it instead of drafting a phantom product.
-    assert [item["raw_name"] for item in chatter] == ["pre-order bolu buat kamis ya bu:"]
+    assert [item["raw_name"] for item in chatter] == ["pre-order bolu buat kamis ya bu"]
     assert all(warning.startswith("Line 1:") for warning in result["warnings"])
 
     # All 50 cake clauses across the five shops survive as reviewable items.
@@ -340,3 +340,126 @@ def test_spelling_recoveries_are_marked_for_confirmation():
     assert "matched_from" not in exact
     # The annotation survives normalization so the confirmation reply can show it.
     assert normalize_item(dict(item))["matched_from"] == "bwang putih"
+
+
+# Real supplier messages from the warung pilot (Nov 2026), verbatim except
+# that supplier names are anonymized. Owners forward what they sent to the
+# supplier (and what the supplier quoted) so the draft shows what cash to
+# bring; the bot must eat the jargon, PO grammar, and package sizes as-is.
+SUPPLIER_DELIVERY_NOTE = (
+    "Nanti siang, kirim 2 gas, 3 melon, 8 isul, 2 aqua.\n"
+    "Isul = air isi ulang utk customer"
+)
+SUPPLIER_PO_SUNCO = "Pagi mas. Selasa ini, sy PO Sunco @2ltr 10 dus ya🙏"
+SUPPLIER_PO_TEH = (
+    "Siang mas. Dr warung tetangga, mau PO 10pcs teh racik merah kemasan 500gr, "
+    "20pcs teh sereh 500gr, 5 pcs teh lemon 500 gr. Bisa ya 🙏"
+)
+SUPPLIER_PO_PACKAGING = "\n".join([
+    "Pagi ci. Bisa pesan:",
+    "1. Sedotan plastik bungkus kertas 1 pak",
+    "2. Tusuk gigi bungkus kertas 2 pak",
+    "3. Kantong plastik Tiger no.15, 1 ikat.",
+    "4. Kantong plastik Tiger no.24, 4 ikat",
+    "5. Kantong plastik Tiger no.28, 4 ikat",
+    "6. Kantong plastik Tiger no.35, 1 ikat",
+    "7. ATP 12x25 6 ikat.",
+    "8. Kertas bungkus nasi Suparma pink 2 ikat",
+    "9. Gelas plastik 18oz + tutup cembung, 2 slop",
+    "10. Karet gelang kuning 10 pak",
+    "11. Sendok plastik 500pcs",
+    "12. Plastik sampah Laris 90x120 3 pak",
+    "Kabari ya ci. Usahakan bisa diantar siang/sore nanti y🙏",
+])
+
+
+def test_delivery_note_with_jargon_items_and_inline_definition():
+    result = extract_purchase(SUPPLIER_DELIVERY_NOTE)
+    chatter = [item for item in result["items"] if is_chatter_item(item)]
+    items = [item for item in result["items"] if not is_chatter_item(item)]
+    # The greeting prefix "Nanti siang" is dropped with the comma clauses,
+    # the jargon names survive verbatim, and the inline "Isul = ..." note
+    # is chatter, not a product.
+    assert [item["raw_name"] for item in items] == ["gas", "melon", "isul", "aqua"]
+    assert [item["quantity"] for item in items] == ["2", "3", "8", "2"]
+    assert all(item["unit"] is None and item["line_total_idr"] is None for item in items)
+    assert [item["raw_name"] for item in chatter] == ["isul = air isi ulang utk customer"]
+
+
+def test_po_forward_with_at_size_marker_and_politeness_tail():
+    result = extract_purchase(SUPPLIER_PO_SUNCO)
+    items = result["items"]
+    assert len(items) == 1
+    assert items[0]["raw_name"] == "sunco @2ltr"
+    assert items[0]["quantity"] == "10"
+    assert items[0]["unit"] == "dus"
+    assert items[0]["line_total_idr"] is None
+    assert result["warnings"] == ["Line 1: line total is missing or unsupported."]
+
+
+def test_po_at_price_per_unit_multiplies_quantity():
+    priced = extract_purchase("Sunco 10 dus @15rb")
+    assert priced["items"][0]["raw_name"] == "sunco"
+    assert priced["items"][0]["quantity"] == "10"
+    assert priced["items"][0]["line_total_idr"] == 150000
+    assert priced["warnings"] == []
+    rp = extract_purchase("beli minyak 2 dus @Rp15.000")
+    assert rp["items"][0]["line_total_idr"] == 30000
+    assert rp["warnings"] == []
+    # "10 dus @15rb" order works the same as "@15rb 10 dus".
+    trailing = extract_purchase("beli kardus 5 ikat @2rb")
+    assert trailing["items"][0]["line_total_idr"] == 10000
+
+
+def test_warung_po_list_parses_leading_counts_and_package_sizes():
+    result = extract_purchase(SUPPLIER_PO_TEH)
+    items = result["items"]
+    assert [item["raw_name"] for item in items] == [
+        "teh racik merah kemasan 500gr",
+        "teh sereh 500gr",
+        "teh lemon 500 gr",
+    ]
+    assert [item["quantity"] for item in items] == ["10", "20", "5"]
+    assert all(item["unit"] == "pcs" for item in items)
+
+
+def test_package_size_qualifiers_are_not_quantities():
+    guarded = extract_purchase("beli teh racik merah kemasan 500gr")
+    assert guarded["items"][0]["raw_name"] == "teh racik merah kemasan 500gr"
+    assert guarded["items"][0]["quantity"] is None
+    assert any("quantity is missing" in warning for warning in guarded["warnings"])
+    sized = extract_purchase("beli sunco @2ltr")
+    assert sized["items"][0]["raw_name"] == "sunco @2ltr"
+    assert sized["items"][0]["quantity"] is None
+
+
+def test_numbered_packaging_po_parses_every_line():
+    result = extract_purchase(SUPPLIER_PO_PACKAGING)
+    chatter = [item for item in result["items"] if is_chatter_item(item)]
+    items = [item for item in result["items"] if not is_chatter_item(item)]
+    assert [item["raw_name"] for item in chatter] == [
+        "pagi ci. bisa pesan",
+        "kabari ya ci. usahakan bisa diantar siang/sore nanti",
+    ]
+    assert [item["raw_name"] for item in items] == [
+        "sedotan plastik bungkus kertas",
+        "tusuk gigi bungkus kertas",
+        "kantong plastik tiger no.15",
+        "kantong plastik tiger no.24",
+        "kantong plastik tiger no.28",
+        "kantong plastik tiger no.35",
+        "atp 12x25",
+        "kertas bungkus nasi suparma pink",
+        "gelas plastik 18oz + tutup cembung",
+        "karet gelang kuning",
+        "sendok plastik",
+        "plastik sampah laris 90x120",
+    ]
+    assert [item["quantity"] for item in items] == ["1", "2", "1", "4", "4", "1", "6", "2", "2", "10", "500", "3"]
+
+
+def test_order_verb_prefixes_are_stripped_from_item_names():
+    for line in ["kirim 3 telur", "po 3 telur", "mau pesan 3 telur", "sy pesan 3 telur", "beli 3 telur"]:
+        result = extract_purchase(line)
+        assert result["items"][0]["raw_name"] == "telur", line
+        assert result["items"][0]["quantity"] == "3", line
