@@ -272,3 +272,27 @@ def test_clean_extraction_marks_spelling_recoveries_for_confirmation():
     assert item["ingredient_id"] == "bawang_putih"
     assert item["matched_from"] == "bwang putih"
     assert result["warnings"] == []
+
+
+def test_multi_line_forward_gets_the_model_first(tmp_path):
+    # A forwarded PO whose greeting line parses into a clean-looking but
+    # wrong item ("Selasa kirim 2 gas" -> "selasa") goes to the model even
+    # though the rules result carries no warnings.
+    fake = FakeTextClient()
+    fake.responses.append(completion({"items": [{"raw_name": "gas", "quantity": "2", "unit": None, "line_total_idr": None}]}))
+    client = rescue_app(tmp_path, fake)
+
+    draft = intake(client, "Pagi mas.\nSelasa kirim 2 gas").json()["data"]
+    assert len(fake.calls) == 1
+    assert draft["items"][0]["raw_name"] == "gas"
+    assert draft["items"][0]["quantity"] == "2"
+
+
+def test_single_line_clean_text_stays_rules_only(tmp_path):
+    fake = FakeTextClient()
+    client = rescue_app(tmp_path, fake)
+
+    draft = intake(client, "beli cabai 3 kg 150rb").json()["data"]
+    assert fake.calls == []
+    assert draft["items"][0]["ingredient_id"] == "cabai"
+    assert draft["items"][0]["quantity"] == "3"
