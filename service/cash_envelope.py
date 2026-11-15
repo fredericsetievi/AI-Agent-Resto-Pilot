@@ -38,14 +38,20 @@ MAX_IDR = 1_000_000_000_000  # same bound the dashboards accept for purchase tot
 
 _BUDGET_RE = re.compile(r"(?i)^\s*(budget|anggaran)\b(.*)$")
 _LEFTOVER_RE = re.compile(r"(?i)^\s*(?:uang\s+)?kembali(?:an)?\b(.*)$")
+# "setor 500rb ke amplop" is how owners say the same thing: cash goes into
+# the envelope. The word amplop/envelope must appear so "setor" bank talk or
+# an unrelated "masukkan" line is never hijacked.
+_DEPOSIT_RE = re.compile(r"(?i)^\s*(?:setor|masuk(?:kan|in)?)\s+(?:uang\s+)?(?P<rest>.*)$")
+_ENVELOPE_WORD = re.compile(r"(?i)\bamplop|envelope\b")
 
 
 def parse_envelope_command(text):
     """Detect a cash-envelope command in one message. Returns a dict or None.
 
-    Kinds: set ("budget hari ini 2 juta"), leftover ("uang kembali 500 ribu"),
-    show ("budget", "budget?"), invalid (unusable amount). The leftover
-    command requires an amount — a bare "kembali" sentence is never hijacked.
+    Kinds: set ("budget hari ini 2 juta", "setor 500rb ke amplop"), leftover
+    ("uang kembali 500 ribu"), show ("budget", "budget?", "setor ke amplop"),
+    invalid (unusable amount). The leftover command requires an amount — a
+    bare "kembali" sentence is never hijacked.
     """
     text = str(text or "").strip()
     if len(text) > 200:
@@ -56,6 +62,14 @@ def parse_envelope_command(text):
         if amount is None or amount <= 0 or amount > MAX_IDR:
             return None  # "kembali" alone stays a normal message
         return {"kind": "leftover", "amount": amount}
+    deposit = _DEPOSIT_RE.match(text)
+    if deposit and _ENVELOPE_WORD.search(text):
+        amount = _money_idr(deposit.group("rest"))
+        if amount is None or amount <= 0:
+            return {"kind": "show"}
+        if amount > MAX_IDR:
+            return {"kind": "invalid"}
+        return {"kind": "set", "amount": amount}
     budget = _BUDGET_RE.match(text)
     if not budget:
         return None
@@ -76,7 +90,7 @@ def _rp(amount):
 def cash_envelope_status_text(status):
     """The chat answer to "budget": today's envelope, recorded spend, gap."""
     if not status["envelope_idr"]:
-        return ("Belum ada budget kas hari ini. Kirim 'budget hari ini 2 juta' untuk mulai, "
+        return ("Belum ada budget kas hari ini. Kirim 'budget hari ini 2 juta' atau 'setor 500rb ke amplop' untuk mulai, "
                 "lalu habis belanja kirim 'uang kembali <jumlah>'.")
     lines = [f"💰 Kas hari ini:",
              f"- Budget: {_rp(status['envelope_idr'])}",

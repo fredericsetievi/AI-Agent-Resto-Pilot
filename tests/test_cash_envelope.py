@@ -224,3 +224,12 @@ def test_morning_flags_yesterdays_unrecorded_spend(tmp_path):
     result = client.post("/v1/reminders/check").json()["data"]
     assert result["slot"] == "morning" and result["sent"][0]["ok"] is True
     assert "Kemarin" in result["body"] and "Rp1.500.000" in result["body"]
+
+
+def test_setor_ke_amplop_is_the_same_budget_command():
+    assert parse_envelope_command("setor 500rb ke amplop") == {"kind": "set", "amount": 500000}
+    assert parse_envelope_command("masukkan uang 1jt ke amplop") == {"kind": "set", "amount": 1000000}
+    assert parse_envelope_command("setor ke amplop") == {"kind": "show"}
+    # Without the amplop word it is not an envelope command ("setor bank").
+    assert parse_envelope_command("setor 500rb") is None
+    assert parse_envelope_command("masuk 3 kg cabai") is None

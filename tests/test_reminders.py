@@ -191,3 +191,14 @@ def test_quiet_hours_never_send(tmp_path):
     store.set_reminder_settings(resto, morning_hour=23)  # rejected by chat, forced here
     result = client.post("/v1/reminders/check").json()["data"]
     assert result["slot"] is None  # the engine refuses a schedule row inside the quiet band
+
+
+def test_ingatkan_saya_alias_schedules_like_pengingat():
+    # Natural phrasing from the pilot replay ("ingatkan saya tiap jam 8 pagi
+    # cek stok") sets the same morning slot; trailing content is ignored.
+    assert parse_reminder_command("ingatkan saya tiap jam 8 pagi cek stok") == {"kind": "set", "slot": "morning", "hour": 8}
+    assert parse_reminder_command("ingatkan saya jam 8 pagi") == {"kind": "set", "slot": "morning", "hour": 8}
+    assert parse_reminder_command("ingatkan saya matikan pengingat") == {"kind": "off"}
+    # Without scheduling content it is chat, never a reminder command.
+    assert parse_reminder_command("ingatkan saya beli telur besok") is None
+    assert parse_reminder_command("ingatkan saya beli telur 2 kg 30000") is None
