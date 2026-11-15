@@ -79,6 +79,29 @@ _NUMBER = r"[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)"
 _PRICE_SUFFIX = re.compile(
     rf"(?ix)\s+(?:rp\s*)?(?P<amount>{_NUMBER})\s*(?P<scale>rb|ribu|jt|juta)\s*$"
 )
+# An "x" multiplier quotes a per-unit price ("minyak 2L x 38rb" = two liters
+# at Rp38.000 each). The x must be a standalone token after whitespace or a
+# digit, so "box 3000" keeps its name.
+_X_PRICE = re.compile(
+    r"(?ix)(?<=[\s\d])(?:x|×)\s*(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta)?\s*$"
+)
+# A trailing "bayar/total <amount>" is a payment statement for the clause; on
+# a multi-item line the store treats it as the order total, not the last item's
+# price. Handled before the generic price suffix so "bayar" never joins a name.
+_PAYMENT_TOTAL = re.compile(
+    r"(?ix)\s+(?P<word>total|bayar)\s+(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta)?\s*$"
+)
+# A clause that is only a price annotation ("total 66rb", "bayar 250rb",
+# "harga 150000") carries no item; the amount belongs to the other items.
+_KEYWORD_AMOUNT = re.compile(
+    r"(?ix)^(?P<word>total|bayar|harga)\s+(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta)?\s*$"
+)
+# A trailing "per kg"/"/kg" restates that the price is per unit ("telur 1 kg
+# 30000 per kg"); it is an annotation, not instruction language, so strip it
+# before the source-only modifier check instead of rejecting the line.
+_PER_UNIT_TAIL = re.compile(
+    r"(?ix)\s*(?:/|\bper\b)\s*(?:kg|kilo|g|gr|gram|l|ltr|liter|ml|pcs|buah|ekor|ikat|pack|pak|dus)\s*$"
+)
 _RP_INTEGER = re.compile(r"(?ix)\s+rp\s*(?P<amount>\d+(?:\.\d{3})*)\s*$")
 _UNPREFIXED_INTEGER = re.compile(r"(?i)\s+(?P<amount>\d+(?:\.\d{3})*)\s*$")
 _TRAILING_QUANTITY = re.compile(
@@ -168,20 +191,58 @@ def _plain_decimal(value: Decimal) -> str:
     return text or "0"
 
 
-def _parse_price(text: str) -> tuple[str, int | None, str | None, bool]:
-    """Return remaining text, integer IDR amount, an optional problem, and a
-    flag telling whether the amount is a per-unit price from a bare number."""
+def _scaled_amount(amount: str, scale: str | None) -> int | None:
+    """Resolve "38", "38rb", "38.000" style amounts to a whole IDR value."""
+    digits = amount.replace(".", "")
+    if len(digits) > 13:
+        return None
+    value = int(digits)
+    scale_fold = (scale or "").casefold()
+    multiplier = 1_000 if scale_fold in {"rb", "ribu"} else 1_000_000 if scale_fold in {"jt", "juta"} else 1
+    total = value * multiplier
+    if total <= 0 or total > _MAX_TOTAL:
+        return None
+    return total
+
+
+def _parse_price(text: str) -> tuple[str, int | None, str | None, bool, str | None]:
+    """Return remaining text, integer IDR amount, an optional problem, a flag
+    telling whether the amount is a per-unit price, and the payment-marker word
+    ("total"/"bayar") when the amount was announced as a payment statement."""
+    # "minyak 2L x 38rb" quotes a per-unit price through an x multiplier; the
+    # amount multiplies by the quantity like an "@" price would. Without an
+    # rb/rp-style scale the amount must still read as a price (>= 1000), so
+    # the "x5" count notation from order forms is never mistaken for one.
+    match = _X_PRICE.search(text)
+    if match:
+        digits = match.group("amount").replace(".", "")
+        scale = (match.group("scale") or "").casefold()
+        if len(digits) <= 13 and (scale or int(digits) >= 1000):
+            total = _scaled_amount(match.group("amount"), match.group("scale"))
+            if total is None:
+                return text[: match.start()].strip(), None, "Price must be positive and no greater than 1000000000000 IDR.", True, None
+            return text[: match.start()].strip(), total, None, True, None
+
+    # "gula merah 3kg bayar 250rb" announces a payment for the clause; the
+    # marker word lets multi-item lines treat it as the order total.
+    match = _PAYMENT_TOTAL.search(text)
+    if match:
+        total = _scaled_amount(match.group("amount"), match.group("scale"))
+        if total is None:
+            return text[: match.start()].strip(), None, "Price must be positive and no greater than 1000000000000 IDR.", False, None
+        return text[: match.start()].strip(), total, None, False, match.group("word").casefold()
+
     match = _PRICE_SUFFIX.search(text)
     if match:
         amount = _decimal_text(match.group("amount"))
         if amount is None:
-            return text[: match.start()].strip(), None, "Invalid or out-of-range price; enter a positive amount.", False
+            return text[: match.start()].strip(), None, "Invalid or out-of-range price; enter a positive amount.", False, None
         scale = match.group("scale").casefold()
         multiplier = Decimal(1_000 if scale in {"rb", "ribu"} else 1_000_000)
         total = amount * multiplier
         if total != total.to_integral_value() or total > _MAX_TOTAL:
-            return text[: match.start()].strip(), None, "Price must resolve to a whole IDR amount no greater than 1000000000000.", False
-        return text[: match.start()].strip(), int(total), None, False
+            return text[: match.start()].strip(), None, "Price must resolve to a whole IDR amount no greater than 1000000000000.", False, None
+        return text[: match.start()].strip(), int(total), None, False, None
 
     # "@15rb" / "@Rp15.000" quotes the per-unit price ("Sunco 10 dus @15rb");
     # bare_unit multiplication by the quantity happens in _parse_clause.
@@ -189,7 +250,7 @@ def _parse_price(text: str) -> tuple[str, int | None, str | None, bool]:
     if match:
         digits = match.group("amount").replace(".", "")
         if len(digits) > 13:
-            return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000.", False
+            return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000.", False, None
         amount = int(digits)
         scale = (match.group("scale") or "").casefold()
         multiplier = 1_000 if scale in {"rb", "ribu"} else 1_000_000 if scale in {"jt", "juta"} else 1
@@ -197,52 +258,42 @@ def _parse_price(text: str) -> tuple[str, int | None, str | None, bool]:
         if not scale and amount < 1000:
             pass  # "@2"-style size marker, not a price: leave it in the name
         elif total <= 0 or total > _MAX_TOTAL:
-            return text[: match.start()].strip(), None, "Price must be positive and no greater than 1000000000000 IDR.", False
+            return text[: match.start()].strip(), None, "Price must be positive and no greater than 1000000000000 IDR.", False, None
         else:
-            return text[: match.start()].strip(), total, None, True
+            return text[: match.start()].strip(), total, None, True, None
 
     match = _RP_INTEGER.search(text)
     if match:
         digits = match.group("amount").replace(".", "")
         if len(digits) > 13:
-            return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000.", False
+            return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000.", False, None
         total = int(digits)
         if total <= 0 or total > _MAX_TOTAL:
-            return text[: match.start()].strip(), None, "Price must be positive and no greater than 1000000000000 IDR.", False
+            return text[: match.start()].strip(), None, "Price must be positive and no greater than 1000000000000 IDR.", False, None
         # An Rp-prefixed amount is always a lot total (per-piece prices with
         # the Rp marker would be written "Rp2.500/pcs" — unsupported nuance).
-        return text[: match.start()].strip(), total, None, False
+        return text[: match.start()].strip(), total, None, False, None
 
     # A bare integer after an explicit quantity reads as a per-unit price —
     # owners quote prices per piece ("banana cake 10 2500" means Rp2.500
-    # each, not a Rp250 piece; Nov 2026 pilot finding). The marker-free
-    # form avoids confusing a total with another quantity: real quantities
-    # are small, so a bare trailing whole number of at least 1000 is the
-    # price. Write "total" before the number for a lot price instead.
+    # each, not a Rp250 piece; Nov 2026 pilot finding). Lot totals go through
+    # the "total"/"bayar"/Rp/rb markers handled above.
     match = _UNPREFIXED_INTEGER.search(text)
     if match:
         prefix = text[: match.start()]
-        # "total" before the amount flips the reading: "cabai 2 kg total
-        # 30000" is Rp30.000 for the lot even without Rp/rb markers. The
-        # marker word must not break the quantity anchor, so quantity
-        # detection runs on the prefix with "total" removed.
-        lot_total = bool(re.search(r"(?i)\btotal\b", prefix))
-        if lot_total:
-            prefix = re.sub(r"(?i)\s*\btotal\b\s*", " ", prefix)
         if _TRAILING_QUANTITY.search(prefix):
             digits = match.group("amount").replace(".", "")
             if len(digits) > 13:
-                return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000.", False
+                return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000.", False, None
             bare = int(digits)
             if bare >= 1000:
-                remainder = re.sub(r"(?i)\s*\btotal\b\s*$", "", text[: match.start()]).strip()
-                return remainder, bare, None, not lot_total
-            return text[: match.start()].strip(), None, "Unprefixed whole-number price is unsupported; use Rp or an rb/ribu/jt/juta suffix.", False
+                return prefix.strip(), bare, None, True, None
+            return text[: match.start()].strip(), None, "Unprefixed whole-number price is unsupported; use Rp or an rb/ribu/jt/juta suffix.", False, None
 
     # A malformed currency token is not silently treated as part of an item name.
     if _CURRENCY_MARKER.search(text):
-        return re.sub(r"(?i)\s+rp\s*[\d.,]+\s*$", "", text).strip(), None, "Could not safely read the Rp price. Use Rp followed by an integer amount.", False
-    return text.strip(), None, None, False
+        return re.sub(r"(?i)\s+rp\s*[\d.,]+\s*$", "", text).strip(), None, "Could not safely read the Rp price. Use Rp followed by an integer amount.", False, None
+    return text.strip(), None, None, False, None
 
 
 def _parse_quantity(text: str) -> tuple[str, str | None, str | None, str | None]:
@@ -361,6 +412,24 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
     source = clause.strip()
     if not source:
         return None, warnings
+    # A trailing "per kg"/"/kg" restates the per-unit price basis; strip it so
+    # it is not mistaken for instruction language and the line still parses.
+    for _ in range(2):
+        stripped = _PER_UNIT_TAIL.sub("", source).rstrip()
+        if stripped == source:
+            break
+        source = stripped
+    if not source:
+        return None, [f"Line {line_number}: no item name was found."]
+    # A clause that is only a price annotation ("total 66rb", "bayar 250rb",
+    # "harga 150000") carries no item: return the amount so the line parser
+    # can attach it to the other items or flag a shared total.
+    keyword = _KEYWORD_AMOUNT.match(source)
+    if keyword:
+        amount = _scaled_amount(keyword.group("amount"), keyword.group("scale"))
+        if amount is None:
+            return None, [f"Line {line_number}: {keyword.group('word')} amount must be a positive whole IDR amount."]
+        return {"price_marker": keyword.group("word").casefold(), "raw_name": keyword.group("word").casefold(), "line_total_idr": amount}, warnings
     if _SOURCE_ONLY_MODIFIERS.search(source):
         return None, [f"Line {line_number}: instruction, per-unit price, tax, or discount language needs manual correction."]
     if _MULTI_CLAUSE.search(source):
@@ -383,7 +452,7 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
         return None, [f"Line {line_number}: no item name was found."]
 
     # Price is parsed first so its numeric amount can never become a quantity.
-    remainder, price_value, price_problem, bare_unit = _parse_price(source)
+    remainder, price_value, price_problem, bare_unit, price_marker = _parse_price(source)
     remainder, quantity, unit, quantity_problem = _parse_quantity(remainder)
     line_total = price_value
     if bare_unit and price_value is not None:
@@ -425,8 +494,60 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
         "quantity": quantity,
         "unit": unit,
         "line_total_idr": line_total,
+        **({"price_marker": price_marker} if price_marker else {}),
         **({"matched_from": raw_name} if fuzzy and ingredient_id else {}),
     }, warnings
+
+
+_PRICE_MARKER_WORDS = {"total", "bayar", "harga"}
+
+
+def _is_price_marker_item(item: dict[str, Any]) -> bool:
+    """A keyword-only clause ("total 66rb") is an annotation, not an item."""
+    return (
+        item.get("price_marker") is not None
+        and item.get("quantity") is None
+        and (item.get("raw_name") or "").casefold() in _PRICE_MARKER_WORDS
+    )
+
+
+def _resolve_price_markers(items: list[dict[str, Any]], warnings: list[str]) -> list[dict[str, Any]]:
+    """Resolve price-annotation clauses on a multi-clause line.
+
+    A keyword-only clause ("... kecombrang, total 66rb") or a trailing
+    "bayar" amount belongs to the order, not to the item it happens to
+    follow. With exactly one real item the amount becomes that item's lot
+    total; with several items the amount is dropped and flagged instead of
+    being misattributed to the last line (Nov 2026 pilot finding).
+    """
+    has_markers = any(_is_price_marker_item(item) for item in items) or any(
+        item.get("price_marker") == "bayar" and item.get("line_total_idr") is not None for item in items
+    )
+    if not has_markers:
+        return items
+    kept: list[dict[str, Any]] = []
+    amount: int | None = None
+    for item in items:
+        if _is_price_marker_item(item):
+            amount = item.get("line_total_idr") or amount
+            continue
+        if item.get("price_marker") == "bayar" and item.get("line_total_idr") is not None:
+            amount = item.get("line_total_idr")
+            item = {**item, "line_total_idr": None, "price_marker": None}
+        kept.append(item)
+    if amount is None or not kept:
+        if amount is not None:
+            warnings.append(f"Rp{amount} has no item line to attach to; write the item line first.")
+        return kept
+    if len(kept) == 1 and kept[0].get("line_total_idr") is None:
+        # The lone item's "line total is missing" warning is now moot: the
+        # keyword clause supplied the amount.
+        warnings[:] = [w for w in warnings if "line total is missing" not in w.casefold()]
+        return [{**kept[0], "line_total_idr": amount}]
+    warnings.append(
+        f"Rp{amount} is the total for several items; enter per-item prices on the dashboard before approving."
+    )
+    return kept
 
 
 def _parse_line_clauses(line: str, line_number: int) -> tuple[list[dict[str, Any]], list[str]]:
@@ -455,6 +576,7 @@ def _parse_line_clauses(line: str, line_number: int) -> tuple[list[dict[str, Any
             item is not None
             and (
                 item.get("quantity") is not None
+                or item.get("price_marker") is not None
                 or (item.get("ingredient_id") is not None and "matched_from" not in item)
             )
             for item, _ in digit_parsed
@@ -464,14 +586,14 @@ def _parse_line_clauses(line: str, line_number: int) -> tuple[list[dict[str, Any
             for (item, clause_warnings), has_digit in parsed:
                 if item is None:
                     continue
-                # Keep quantified clauses and real catalog items; a digit-less
-                # clause with neither ("Pagi mas. Selasa ini") is a greeting
-                # prefix, not an item the owner meant to order.
-                if has_digit or item.get("quantity") is not None or item.get("ingredient_id") is not None:
+                # Keep quantified clauses, real catalog items, and price
+                # annotations; a digit-less clause with neither ("Pagi mas.
+                # Selasa ini") is a greeting prefix, not an item.
+                if has_digit or item.get("quantity") is not None or item.get("ingredient_id") is not None or item.get("price_marker") is not None:
                     kept.append(item)
                     combined_warnings.extend(clause_warnings)
             if kept:
-                return kept, combined_warnings
+                return _resolve_price_markers(kept, combined_warnings), combined_warnings
     if len(clauses) > 1 and all(re.search(r"\d", clause) for clause in clauses):
         parsed: list[tuple[dict[str, Any], list[str]]] = []
         for clause in clauses:
@@ -484,9 +606,12 @@ def _parse_line_clauses(line: str, line_number: int) -> tuple[list[dict[str, Any
             combined_warnings = []
             for _, clause_warnings in parsed:
                 combined_warnings.extend(clause_warnings)
-            return [entry[0] for entry in parsed], combined_warnings
+            return _resolve_price_markers([entry[0] for entry in parsed], combined_warnings), combined_warnings
     item, line_warnings = _parse_clause(line, line_number)
-    return ([] if item is None else [item]), line_warnings
+    if item is None:
+        return [], line_warnings
+    resolved = _resolve_price_markers([item], line_warnings)
+    return resolved, line_warnings
 
 
 def extract_purchase(text: str) -> dict[str, Any]:

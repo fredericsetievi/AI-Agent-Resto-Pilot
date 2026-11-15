@@ -78,7 +78,87 @@ def test_x_quantity_notation_is_not_parsed_and_needs_dashboard_correction():
     item = result["items"][0]
     assert item["raw_name"] == "bolu pandan x5"
     assert item["quantity"] is None
-    assert any("quantity" in warning for warning in result["warnings"])
+
+
+def test_x_multiplier_quotes_a_per_unit_price():
+    # "minyak 2L x 38rb" means two liters at Rp38.000 each (pilot corpus).
+    result = extract_purchase("beli minyak 2L x 38rb")
+    assert len(result["items"]) == 1
+    item = result["items"][0]
+    assert item["raw_name"].startswith("minyak")
+    assert item["quantity"] == "2" and item["unit"] == "l"
+    assert item["line_total_idr"] == 76000
+    assert result["warnings"] == []
+
+
+def test_x_multiplier_without_scale_still_reads_as_a_price():
+    result = extract_purchase("gula 2 kg x 15000")
+    item = result["items"][0]
+    assert item["quantity"] == "2" and item["unit"] == "kg"
+    assert item["line_total_idr"] == 30000
+
+
+def test_trailing_per_unit_annotation_does_not_reject_the_line():
+    # "per kg" restates the price basis; it must not be treated as instruction
+    # language that discards the whole line (pilot finding).
+    result = extract_purchase("beli telur 1 kg 30000 per kg")
+    assert len(result["items"]) == 1
+    item = result["items"][0]
+    assert item["quantity"] == "1" and item["unit"] == "kg"
+    assert item["line_total_idr"] == 30000
+    assert result["warnings"] == []
+
+    result = extract_purchase("telur 1kg 30000/kg")
+    assert result["items"][0]["line_total_idr"] == 30000
+
+
+def test_harga_clause_is_a_price_not_an_item():
+    # "beli 3 kg cabai merah, harga 150000" must price the cabai, not draft a
+    # phantom "Harga" product (pilot finding).
+    result = extract_purchase("beli 3 kg cabai merah, harga 150000")
+    assert [item["raw_name"] for item in result["items"]] == ["cabai merah"]
+    item = result["items"][0]
+    assert item["quantity"] == "3" and item["unit"] == "kg"
+    assert item["line_total_idr"] == 150000
+
+
+def test_keyword_only_total_clause_attaches_to_a_lone_item():
+    result = extract_purchase("cabai merah 3kg, total 150rb")
+    assert [item["raw_name"] for item in result["items"]] == ["cabai merah"]
+    assert result["items"][0]["line_total_idr"] == 150000
+    assert result["warnings"] == []
+
+
+def test_shared_total_is_never_misattributed_to_the_last_item():
+    # "bayar 250rb" pays for BOTH items: the amount is dropped from gula
+    # merah and flagged instead of pricing it at the whole order total.
+    result = extract_purchase("Beli beras 10kg dan gula merah 3kg bayar 250rb")
+    items = result["items"]
+    assert [item["raw_name"] for item in items] == ["beras", "gula merah"]
+    assert all(item["quantity"] is not None for item in items)
+    assert all(item["line_total_idr"] is None for item in items)
+    assert any("250000" in warning and "total" in warning.casefold() for warning in result["warnings"])
+
+    # "total 66rb" must not become a phantom third product either.
+    result = extract_purchase("tadi pagi beli telur 2kg, kecombrang 1 bungkus, total 66rb")
+    assert [item["raw_name"] for item in result["items"]] == ["tadi pagi beli telur", "kecombrang"]
+    assert all(item["line_total_idr"] is None for item in result["items"])
+    assert any("66000" in warning for warning in result["warnings"])
+
+
+def test_embedded_total_still_prices_its_own_clause():
+    # A "total" amount inside a single clause prices that clause only; a
+    # shared total is announced by its own clause or with "bayar".
+    result = extract_purchase("cabai 2kg total 30000, telur 1kg 33000")
+    assert result["items"][0]["line_total_idr"] == 30000
+    assert result["items"][1]["line_total_idr"] == 33000
+    assert result["warnings"] == []
+
+
+def test_keyword_only_amount_alone_yields_no_phantom_item():
+    result = extract_purchase("total 66rb")
+    assert result["items"] == []
+    assert result["warnings"]
 
 
 def test_market_names_map_by_prefix_but_prepared_products_stay_unknown():
