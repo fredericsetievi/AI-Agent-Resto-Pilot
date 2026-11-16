@@ -135,6 +135,10 @@ _LIST_MARKER = re.compile(r"^\s*(?:[-*•·](?!\d)\s*|\d{1,3}[.)]\s+)+")
 # Owners open with order verbs and pronouns ("sy PO Sunco 10 dus",
 # "kirim 2 gas, 3 melon"); the verb is intent, not part of the item name.
 _ORDER_PREFIX = re.compile(r"(?i)^(?:tolong|sy|saya|mau|mo|pengen|po|pesan|order|buy|kirim|beli|pembelian)\s+")
+# Time openers before the order verb ("tadi pagi beli telur 2kg", "kemarin
+# beli gula 1 kg") are chat, not the item name; strip them so the name
+# matches and the owner does not get a phantom "tadi pagi beli telur" row.
+_TIME_PREFIX = re.compile(r"(?i)^(?:tadi\s+(?:pagi|siang|sore|malam)|kemarin|nanti(?:\s+(?:pagi|siang|sore|malam))?|barusan)\s+")
 # Messages close with courtesy ("... 10 dus ya 🙏"); trailing emoji and
 # politeness words are chatter, not part of the item name or quantity.
 _SYMBOL_TAIL = re.compile(r"[^\w\s]+\s*$")
@@ -533,6 +537,11 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
     source = _strip_politeness_tail(source)
     if not source:
         return None, [f"Line {line_number}: no item name was found."]
+    for _ in range(4):
+        stripped = _TIME_PREFIX.sub("", source).strip()
+        if stripped == source:
+            break
+        source = stripped
     for _ in range(4):
         stripped = _ORDER_PREFIX.sub("", source).strip()
         if stripped == source:

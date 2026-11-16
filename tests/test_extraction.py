@@ -141,7 +141,9 @@ def test_shared_total_is_never_misattributed_to_the_last_item():
 
     # "total 66rb" must not become a phantom third product either.
     result = extract_purchase("tadi pagi beli telur 2kg, kecombrang 1 bungkus, total 66rb")
-    assert [item["raw_name"] for item in result["items"]] == ["tadi pagi beli telur", "kecombrang"]
+    # V34.4 strips the "tadi pagi beli" chat opener so the item matches the
+    # catalog instead of drafting a phantom product with a chat name.
+    assert [item["raw_name"] for item in result["items"]] == ["telur", "kecombrang"]
     assert all(item["line_total_idr"] is None for item in result["items"])
     assert any("66000" in warning for warning in result["warnings"])
 
@@ -658,3 +660,16 @@ def test_new_ingredient_announcement_is_a_clean_purchase_line():
     assert priced["items"][0]["raw_name"] == "saos sambal"
     assert priced["items"][0]["line_total_idr"] == 45000
     assert priced["warnings"] == []
+
+
+def test_time_prefix_does_not_pollute_the_item_name():
+    result = extract_purchase("tadi pagi beli telur 2kg, 1 bungkus kecombrang, total 66rb")
+    names = [item["raw_name"] for item in result["items"]]
+    assert "tadi pagi beli telur" not in names
+    assert names[0] == "telur"
+    assert result["items"][0]["ingredient_id"] == "telur"
+    assert result["items"][0]["quantity"] == "2"
+    assert names[1] == "kecombrang"
+    yesterday = extract_purchase("kemarin beli telur 1 kg 33rb")
+    assert yesterday["items"][0]["ingredient_id"] == "telur"
+    assert yesterday["items"][0]["line_total_idr"] == 33000
