@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from conftest import login_owner
+from conftest import freeze_api_clock, login_owner
 from service.api import create_app
 from service.cash_envelope import cash_envelope_status_text, parse_envelope_command
 from service.db import RESTAURANT_TIMEZONE
@@ -27,11 +27,6 @@ def owner_client(tmp_path, **kwargs):
     return client
 
 
-def hour_in_band(hour):
-    """The reminder engine refuses hours outside 7–21; clamp the test clock."""
-    return hour if 7 <= hour <= 21 else 9
-
-
 def inbound_hours_ago(store, hours=8.0):
     """An inbound message 8h back: inside WhatsApp's 24-hour window (free-form
     send works) yet outside the 6-hour silence window (the nudge may fire)."""
@@ -42,10 +37,14 @@ def inbound_hours_ago(store, hours=8.0):
             ((datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(),))
 
 
-def set_slot_to_now(client, slot):
+def set_slot_to_now(client, slot, *, hour=9):
+    """Schedule the slot inside the frozen clock's hour (see freeze_api_clock).
+
+    The engine fires only when its (frozen) hour equals the slot hour, so the
+    caller freezes service.api's clock first and passes the matching hour.
+    """
     store = client.app.state.store
     resto = store.list_restaurants()[0]["id"]
-    hour = hour_in_band(datetime.now(RESTAURANT_TIMEZONE).hour)
     store.set_reminder_settings(resto, **{f"{slot}_hour": hour})
     return store, resto
 
@@ -180,20 +179,22 @@ def test_cash_envelope_route(tmp_path):
 
 # ---- envelope-aware reminder bodies ------------------------------------------
 
-def test_evening_without_envelope_stays_the_plain_nudge(tmp_path):
+def test_evening_without_envelope_stays_the_plain_nudge(tmp_path, monkeypatch):
     fake = FakeGraphClient(content_json=None)
     client = owner_client(tmp_path, **META, meta_http_client=fake)
-    store, resto = set_slot_to_now(client, "evening")
+    freeze_api_clock(monkeypatch, hour=21)
+    store, resto = set_slot_to_now(client, "evening", hour=21)
     inbound_hours_ago(store)
     result = client.post("/v1/reminders/check").json()["data"]
     assert result["slot"] == "evening" and result["sent"][0]["ok"] is True
     assert "💰" not in result["body"]
 
 
-def test_evening_asks_for_the_leftover(tmp_path):
+def test_evening_asks_for_the_leftover(tmp_path, monkeypatch):
     fake = FakeGraphClient(content_json=None)
     client = owner_client(tmp_path, **META, meta_http_client=fake)
-    store, resto = set_slot_to_now(client, "evening")
+    freeze_api_clock(monkeypatch, hour=21)
+    store, resto = set_slot_to_now(client, "evening", hour=21)
     store.whatsapp_ingest(uuid4().hex, {"sender": SENDER, "text": "budget hari ini 2 juta"})
     inbound_hours_ago(store)
     result = client.post("/v1/reminders/check").json()["data"]
@@ -201,10 +202,11 @@ def test_evening_asks_for_the_leftover(tmp_path):
     assert "uang kembali" in result["body"] and "Rp2.000.000" in result["body"]
 
 
-def test_evening_recaps_the_day_when_leftover_is_recorded(tmp_path):
+def test_evening_recaps_the_day_when_leftover_is_recorded(tmp_path, monkeypatch):
     fake = FakeGraphClient(content_json=None)
     client = owner_client(tmp_path, **META, meta_http_client=fake)
-    store, resto = set_slot_to_now(client, "evening")
+    freeze_api_clock(monkeypatch, hour=21)
+    store, resto = set_slot_to_now(client, "evening", hour=21)
     record_purchase(store)
     store.whatsapp_ingest(uuid4().hex, {"sender": SENDER, "text": "budget hari ini 2 juta"})
     store.whatsapp_ingest(uuid4().hex, {"sender": SENDER, "text": "uang kembali 500 ribu"})
@@ -214,11 +216,12 @@ def test_evening_recaps_the_day_when_leftover_is_recorded(tmp_path):
     assert "Rekap kas" in body and "Rp1.250.000" in body  # 2jt − 250rb − 500rb
 
 
-def test_morning_flags_yesterdays_unrecorded_spend(tmp_path):
+def test_morning_flags_yesterdays_unrecorded_spend(tmp_path, monkeypatch):
     fake = FakeGraphClient(content_json=None)
     client = owner_client(tmp_path, **META, meta_http_client=fake)
-    store, resto = set_slot_to_now(client, "morning")
-    yesterday = (datetime.now(RESTAURANT_TIMEZONE) - timedelta(days=1)).date().isoformat()
+    frozen = freeze_api_clock(monkeypatch, hour=9)
+    store, resto = set_slot_to_now(client, "morning", hour=9)
+    yesterday = (frozen - timedelta(days=1)).date().isoformat()
     store.set_cash_envelope(resto, yesterday, envelope_idr=2_000_000, leftover_idr=500_000)
     inbound_hours_ago(store)
     result = client.post("/v1/reminders/check").json()["data"]
