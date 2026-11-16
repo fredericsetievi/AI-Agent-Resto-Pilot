@@ -296,3 +296,57 @@ def test_single_line_clean_text_stays_rules_only(tmp_path):
     assert fake.calls == []
     assert draft["items"][0]["ingredient_id"] == "cabai"
     assert draft["items"][0]["quantity"] == "3"
+
+
+def test_fully_priced_rules_draft_skips_the_model(tmp_path):
+    # V34.4 rules read the estimated range as the lower bound with a warning;
+    # the model trip used to replace it with a weaker answer that dropped the
+    # count. A complete rules draft is never rescued.
+    fake = FakeTextClient()
+    client = rescue_app(tmp_path, fake)
+
+    draft = intake(client, "beli cabai sekitar 3-4 kg 150rb").json()["data"]
+    assert fake.calls == []
+    assert draft["items"][0]["ingredient_id"] == "cabai"
+    assert draft["items"][0]["quantity"] == "3"
+    assert draft["items"][0]["line_total_idr"] == 150000
+
+
+def test_pack_size_draft_skips_the_model(tmp_path):
+    # The owner-quoted pack conversion ("@2ltr") is information the model
+    # schema cannot express; the rules draft carries it, so no rescue.
+    fake = FakeTextClient()
+    client = rescue_app(tmp_path, fake)
+
+    draft = intake(client, "PO Sunco @2ltr 10 dus ya🙏").json()["data"]
+    assert fake.calls == []
+    assert draft["items"][0]["pack_size"] == "2"
+    assert draft["items"][0]["pack_unit"] == "l"
+
+
+def test_model_tie_keeps_the_rules_result(tmp_path):
+    # A supplier price quote ("cabai minggu ini 52rb/kg") — the rules read a
+    # priced but unquantified line; a model answer with no more information
+    # must not replace it (no phantom drafts on ties).
+    fake = FakeTextClient()
+    fake.responses.append(completion({"items": [{"raw_name": "cabai", "quantity": None, "unit": None, "line_total_idr": None}]}))
+    client = rescue_app(tmp_path, fake)
+
+    draft = intake(client, "cabai minggu ini 52rb/kg").json()["data"]
+    assert len(fake.calls) == 1
+    assert draft["items"][0]["ingredient_id"] == "cabai"
+    assert draft["items"][0]["line_total_idr"] == 52000
+    assert draft["items"][0]["quantity"] is None
+
+
+def test_strictly_stronger_model_answer_still_wins(tmp_path):
+    # Rules read a price-only fragment with no count; the model adds the
+    # quantity, which is strictly stronger and replaces the rules result.
+    fake = FakeTextClient()
+    fake.responses.append(completion({"items": [CABAI_ITEM]}))
+    client = rescue_app(tmp_path, fake)
+
+    draft = intake(client, FLEXIBLE).json()["data"]
+    assert len(fake.calls) == 1
+    assert draft["items"][0]["quantity"] == "3"
+    assert draft["items"][0]["line_total_idr"] == 150000
