@@ -472,6 +472,21 @@ HELP_REPLY = (
 # a deterministic reply carries the configured public origin, no model needed.
 DASHBOARD_LINK_KEYWORDS = {"dashboard", "website", "web", "situs", "link"}
 
+# The extractor refuses inputs over 20 non-empty lines. Without this reply the
+# owner only sees the generic help text with no explanation why nothing happened.
+TOO_MANY_LINES_REPLY = (
+    "Terlalu banyak baris sekaligus (maksimal 20) 📝\n\n"
+    "Pecah jadi beberapa pesan, misalnya: bahan kering dulu, lalu sayuran, "
+    "lalu protein. Kirim satu bagian, tunggu drafnya, lalu lanjut bagian berikutnya."
+)
+
+_LIMIT_WARNING_MARKER = "20-item limit"
+
+
+def input_over_line_limit(warnings):
+    """True when the extractor refused the input for its 20-item cap."""
+    return any(_LIMIT_WARNING_MARKER in str(w) for w in warnings or ())
+
 
 def _dashboard_url(public_base_url):
     if not public_base_url:

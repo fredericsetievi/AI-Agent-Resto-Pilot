@@ -33,7 +33,7 @@ from .reminders import ReminderMixin, SQLITE_SCHEMA as REMINDERS_SQLITE_SCHEMA, 
 from .cash_envelope import CashEnvelopeMixin, SQLITE_SCHEMA as ENVELOPE_SQLITE_SCHEMA, parse_envelope_command
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
 from .onboarding import restaurant_selection
-from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, UNREGISTERED_REPLY, dashboard_link_line, dashboard_link_reply, draft_label, draft_reply, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
+from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, TOO_MANY_LINES_REPLY, UNREGISTERED_REPLY, dashboard_link_line, dashboard_link_reply, draft_label, draft_reply, input_over_line_limit, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
 
 
 CATALOG = [
@@ -1594,14 +1594,20 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 if all(item.get("ingredient_id") is None and item.get("quantity") is None and item.get("line_total_idr") is None for item in extracted_items) or (
                     extracted_items and all(is_chatter_item(item) for item in extracted_items)
                 ):
-                    link_reply = dashboard_link_reply(payload.get("text"), self.public_base_url)
-                    if link_reply:
-                        reply = link_reply
-                        result["action"] = "dashboard_link"
+                    if input_over_line_limit(extracted.get("warnings")):
+                        # The extractor refused the input outright; explain the
+                        # cap instead of the generic help text.
+                        reply = TOO_MANY_LINES_REPLY
+                        result["action"] = "too_many_lines"
                     else:
-                        link_line = dashboard_link_line(self.public_base_url)
-                        reply = HELP_REPLY + (f"\n\n{link_line}" if link_line else "")
-                        result["action"] = "help_reply"
+                        link_reply = dashboard_link_reply(payload.get("text"), self.public_base_url)
+                        if link_reply:
+                            reply = link_reply
+                            result["action"] = "dashboard_link"
+                        else:
+                            link_line = dashboard_link_line(self.public_base_url)
+                            reply = HELP_REPLY + (f"\n\n{link_line}" if link_line else "")
+                            result["action"] = "help_reply"
                     # Mine real phrasings later: record what the agents could
                     # not understand (bounded, never the full unbound text).
                     if result["action"] == "help_reply":

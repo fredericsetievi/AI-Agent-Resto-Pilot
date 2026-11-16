@@ -469,6 +469,21 @@ def test_purchase_lines_are_never_hijacked_by_dashboard_keywords(client, linked_
         result = data(simulate(target, "beli link 2 pcs 10000"))
         assert result["result"]["action"] in {"draft_created", "review_required", "clarification_required", "draft_updated"}
         assert data(simulate(target, "batal"))["result"]["action"] in {"rejected", "cancelled", "no_active_draft", "help_reply"}
+
+
+def test_over_limit_list_gets_an_explanation_not_silence(client):
+    """A 24-line market list hits the extractor's 20-item cap; the owner must
+    be told to split it, not receive the generic help text (pilot finding)."""
+    lines = [f"beli bahan uji {i} 5kg {10 + i}rb" for i in range(1, 25)]
+    result = data(simulate(client, "\n".join(lines)))
+    assert result["result"]["action"] == "too_many_lines"
+    assert result["thread"]["active_draft_id"] is None
+    reply = result["messages"][-1]["body"]
+    assert "maksimal 20" in reply and "Pecah jadi beberapa pesan" in reply
+    # 20 lines stay under the cap and still draft normally.
+    result = data(simulate(client, "\n".join(lines[:20])))
+    assert result["result"]["action"] in {"draft_created", "review_required", "clarification_required"}
+    assert data(simulate(client, "batal"))["result"]["action"] in {"rejected", "cancelled"}
     created = data(simulate(client, "Beli bawang 2 kg 80 rb"))
     assert created["result"]["action"] == "draft_created"
     assert created["draft"]["items"][0]["raw_name"] == "bawang"
