@@ -57,6 +57,7 @@ _UNIT_ALIASES = {
     "gram": "g",
     "l": "l",
     "lt": "l",
+    "ltr": "l",
     "liter": "l",
     "litre": "l",
     "ml": "ml",
@@ -77,24 +78,24 @@ _MAX_VALUE = Decimal("1000000")
 _MAX_TOTAL = 1_000_000_000_000
 _NUMBER = r"[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)"
 _PRICE_SUFFIX = re.compile(
-    rf"(?ix)\s+(?:rp\s*)?(?P<amount>{_NUMBER})\s*(?P<scale>rb|ribu|jt|juta)\s*$"
+    rf"(?ix)\s+(?:rp\s*)?(?P<amount>{_NUMBER})\s*(?P<scale>rb|ribu|jt|juta|k)\s*$"
 )
 # An "x" multiplier quotes a per-unit price ("minyak 2L x 38rb" = two liters
 # at Rp38.000 each). The x must be a standalone token after whitespace or a
 # digit, so "box 3000" keeps its name.
 _X_PRICE = re.compile(
-    r"(?ix)(?<=[\s\d])(?:x|×)\s*(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta)?\s*$"
+    r"(?ix)(?<=[\s\d])(?:x|×)\s*(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta|k)?\s*$"
 )
 # A trailing "bayar/total <amount>" is a payment statement for the clause; on
 # a multi-item line the store treats it as the order total, not the last item's
 # price. Handled before the generic price suffix so "bayar" never joins a name.
 _PAYMENT_TOTAL = re.compile(
-    r"(?ix)\s+(?P<word>total|bayar)\s+(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta)?\s*$"
+    r"(?ix)\s+(?P<word>total|bayar)\s+(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta|k)?\s*$"
 )
 # A clause that is only a price annotation ("total 66rb", "bayar 250rb",
 # "harga 150000") carries no item; the amount belongs to the other items.
 _KEYWORD_AMOUNT = re.compile(
-    r"(?ix)^(?P<word>total|bayar|harga)\s+(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta)?\s*$"
+    r"(?ix)^(?P<word>total|bayar|harga)\s+(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta|k)?\s*$"
 )
 # A trailing "per kg"/"/kg" restates that the price is per unit ("telur 1 kg
 # 30000 per kg"); it is an annotation, not instruction language, so strip it
@@ -134,6 +135,10 @@ _LIST_MARKER = re.compile(r"^\s*(?:[-*•·](?!\d)\s*|\d{1,3}[.)]\s+)+")
 # Owners open with order verbs and pronouns ("sy PO Sunco 10 dus",
 # "kirim 2 gas, 3 melon"); the verb is intent, not part of the item name.
 _ORDER_PREFIX = re.compile(r"(?i)^(?:tolong|sy|saya|mau|mo|pengen|po|pesan|order|buy|kirim|beli|pembelian)\s+")
+# Time openers before the order verb ("tadi pagi beli telur 2kg", "kemarin
+# beli gula 1 kg") are chat, not the item name; strip them so the name
+# matches and the owner does not get a phantom "tadi pagi beli telur" row.
+_TIME_PREFIX = re.compile(r"(?i)^(?:tadi\s+(?:pagi|siang|sore|malam)|kemarin|nanti(?:\s+(?:pagi|siang|sore|malam))?|barusan)\s+")
 # Messages close with courtesy ("... 10 dus ya 🙏"); trailing emoji and
 # politeness words are chatter, not part of the item name or quantity.
 _SYMBOL_TAIL = re.compile(r"[^\w\s]+\s*$")
@@ -143,7 +148,7 @@ _POLITENESS_TAIL = re.compile(r"(?i)\s+(?:ya|y|bisa|oke|ok|sip|gan|min|makasih|t
 # price, while "@2ltr" size markers never match (no rb/jt scale and no
 # thousand-sized bare amount).
 _AT_PRICE = re.compile(
-    r"(?ix)@\s*(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta)?\s*$"
+    r"(?ix)@\s*(?:rp\s*)?(?P<amount>\d+(?:\.\d{3})*)\s*(?P<scale>rb|ribu|jt|juta|k)?\s*$"
 )
 # Counts lead the line in delivery notes ("kirim 2 gas"); a leading number
 # followed by a known unit word is a quantity, otherwise the word opens the
@@ -163,6 +168,49 @@ _LEADING_QUANTITY = re.compile(
 # Package-size qualifiers in front of a trailing number ("teh racik merah
 # kemasan 500gr") mean the number names the packaging, not the count.
 _SIZE_QUALIFIER_TAIL = re.compile(r"(?i)(?:kemasan|isi|@)\s*$")
+# Owners glue the count onto the name in one word ("telur2kg", "beras10kg");
+# the trailing digits+unit tail is a quantity, not part of the ingredient
+# name. The unit must be a known unit word so "kopi25rb" (a price scale, not
+# a quantity) and "b12vitamin" are never split.
+_GLUED_QUANTITY = re.compile(
+    rf"(?i)(?P<name>[a-z]{{2,}})(?P<quantity>{_NUMBER})(?P<unit>[a-zA-Z]+)\s*$"
+)
+# An "@<size><unit>" marker ("Sunco @2ltr 10 dus") names the package contents;
+# it is not a per-unit price (that needs an rb/rp-style scale) and not part
+# of the ingredient name. Volume/mass units only.
+_PACK_SIZE_MARKER = re.compile(
+    r"(?i)@\s*(?P<size>" + _NUMBER + r")\s*(?P<unit>ltr|liter|litre|lt|kg|gr|ml|g|l)\b"
+)
+# A quantity range ("cabai 3-4 kg", "3 s/d 4 kg", "2 sampai 3 dus") is an
+# estimate; the lower bound is used and the owner is asked to confirm.
+_RANGE_SEP = r"(?:-|–|—|s/?d|sampai)"
+_RANGE_QUANTITY_END = re.compile(
+    rf"(?i)(?P<lo>{_NUMBER})\s*{_RANGE_SEP}\s*(?P<hi>{_NUMBER})\s*(?P<unit>[a-zA-Z]+)?\s*$"
+)
+_RANGE_QUANTITY_START = re.compile(
+    rf"(?i)^(?P<lo>{_NUMBER})\s*{_RANGE_SEP}\s*(?P<hi>{_NUMBER})\s*(?P<unit>[a-zA-Z]+)\s+(?P<rest>.+)$"
+)
+# Junk lines in forwarded messages: banners, contact lines, bon headers, and
+# "= gloss" definitions carry no item and must never draft a phantom product.
+# A gloss with digits ("telur 2 kg = 30rb") stays: the digits may be the
+# quantity and price of a real line.
+_JUNK_LINE = re.compile(
+    r"(?ix)"
+    r"^\s*fwd?\s*[:：]"                                  # "Fwd: pesanan"
+    r"|(?:^|\s)(?:hubungi|kontak|whatsapp|wa\s*[:：]).*\d"  # contact line with a number
+    r"|^\s*bon\b[^\d]*$"                                 # "Bon jika barang tersedia"
+    r"|^[^\d]*=[^\d]*$"                                  # "Isul = air isi ulang ..." (no digits)
+    r"|\b\d{9,}\b"                                       # bare phone number
+)
+# A purchase sentence with a tacked-on question ("... 25rb. btw stok beras
+# masih berapa?") loses the price when the question tail rides along; the
+# tail is chat, not part of the order line.
+_QUESTION_TAIL = re.compile(r"(?i)[,.;:]?\s+(?:btw|oh\s+ya|oia)\b.*$")
+# Owners announcing a new catalog item lead with the intent ("pengen nambah
+# bahan baru: kecap manis 500ml"); the prefix is intent, not the item name.
+_NEW_INGREDIENT_PREFIX = re.compile(
+    r"(?i)^(?:nambahin|nambah|masukin|masukkan|tambahin|tambah(?:kan)?)?\s*bahan\s+baru\s*[:：]?\s*"
+)
 
 
 def _decimal_text(value: str) -> Decimal | None:
@@ -198,7 +246,7 @@ def _scaled_amount(amount: str, scale: str | None) -> int | None:
         return None
     value = int(digits)
     scale_fold = (scale or "").casefold()
-    multiplier = 1_000 if scale_fold in {"rb", "ribu"} else 1_000_000 if scale_fold in {"jt", "juta"} else 1
+    multiplier = 1_000 if scale_fold in {"rb", "ribu", "k"} else 1_000_000 if scale_fold in {"jt", "juta"} else 1
     total = value * multiplier
     if total <= 0 or total > _MAX_TOTAL:
         return None
@@ -238,7 +286,7 @@ def _parse_price(text: str) -> tuple[str, int | None, str | None, bool, str | No
         if amount is None:
             return text[: match.start()].strip(), None, "Invalid or out-of-range price; enter a positive amount.", False, None
         scale = match.group("scale").casefold()
-        multiplier = Decimal(1_000 if scale in {"rb", "ribu"} else 1_000_000)
+        multiplier = Decimal(1_000 if scale in {"rb", "ribu", "k"} else 1_000_000)
         total = amount * multiplier
         if total != total.to_integral_value() or total > _MAX_TOTAL:
             return text[: match.start()].strip(), None, "Price must resolve to a whole IDR amount no greater than 1000000000000.", False, None
@@ -253,7 +301,7 @@ def _parse_price(text: str) -> tuple[str, int | None, str | None, bool, str | No
             return text[: match.start()].strip(), None, "Price is too long; enter a whole IDR amount no greater than 1000000000000.", False, None
         amount = int(digits)
         scale = (match.group("scale") or "").casefold()
-        multiplier = 1_000 if scale in {"rb", "ribu"} else 1_000_000 if scale in {"jt", "juta"} else 1
+        multiplier = 1_000 if scale in {"rb", "ribu", "k"} else 1_000_000 if scale in {"jt", "juta"} else 1
         total = amount * multiplier
         if not scale and amount < 1000:
             pass  # "@2"-style size marker, not a price: leave it in the name
@@ -296,7 +344,43 @@ def _parse_price(text: str) -> tuple[str, int | None, str | None, bool, str | No
     return text.strip(), None, None, False, None
 
 
+def _collapse_quantity_range(text: str) -> tuple[str, str | None]:
+    """Replace an estimated quantity range with its lower bound, plus a note.
+
+    "cabai 3-4 kg" and "3 s/d 4 kg cabai" are market estimates: the owner
+    writes the span before buying. The lower bound is a safe draft amount and
+    the returned problem text asks the owner to confirm the real figure.
+    """
+    match = _RANGE_QUANTITY_END.search(text)
+    if match:
+        lo = _decimal_text(match.group("lo"))
+        unit = _UNIT_ALIASES.get((match.group("unit") or "").casefold())
+        if lo is None or (match.group("unit") and unit is None):
+            return text, None
+        hi = _plain_decimal(_decimal_text(match.group("hi")) or Decimal(0))
+        replacement = f"{_plain_decimal(lo)} {unit or ''}".strip()
+        return (
+            text[: match.start()].rstrip() + " " + replacement,
+            f"quantity range {_plain_decimal(lo)}-{hi}{(' ' + unit) if unit else ''} was estimated; the lower bound is used — confirm the real amount.",
+        )
+    match = _RANGE_QUANTITY_START.match(text)
+    if match:
+        lo = _decimal_text(match.group("lo"))
+        unit = _UNIT_ALIASES.get(match.group("unit").casefold())
+        if lo is None or unit is None:
+            return text, None
+        rest = match.group("rest").strip()
+        replacement = f"{_plain_decimal(lo)} {unit}".strip()
+        return (
+            f"{replacement} {rest}".strip(),
+            f"quantity range {_plain_decimal(lo)}-{_plain_decimal(_decimal_text(match.group('hi')) or Decimal(0))} {unit} was estimated; the lower bound is used — confirm the real amount.",
+        )
+    return text, None
+
+
 def _parse_quantity(text: str) -> tuple[str, str | None, str | None, str | None]:
+    # An estimated range ("3-4 kg") collapses to its lower bound with a note.
+    text, range_problem = _collapse_quantity_range(text)
     # Delivery notes lead with the count ("kirim 2 gas, 3 melon"); a leading
     # number followed by a known unit word is the quantity, otherwise the
     # word opens the name ("2 gas" = gas, quantity 2).
@@ -306,26 +390,36 @@ def _parse_quantity(text: str) -> tuple[str, str | None, str | None, str | None]
         unit_text = leading.group("unit")
         rest = (leading.group("rest") or "").strip()
         unit_fold = (unit_text or "").casefold()
-        if quantity is not None and unit_fold not in {"rb", "ribu", "jt", "juta"}:
+        if quantity is not None and unit_fold not in {"rb", "ribu", "jt", "juta", "k"}:
             canonical = _LEADING_UNIT_ALIASES.get(unit_fold) if unit_text else None
             if canonical:
                 if rest:
-                    return rest, _plain_decimal(quantity), canonical, None
+                    return rest, _plain_decimal(quantity), canonical, range_problem
                 # A bare "1 ikat" carries a quantity but no item name; the
                 # empty remainder fails name matching and the clause is
                 # rejected instead of drafting a product called "ikat".
-                return "", _plain_decimal(quantity), canonical, None
+                return "", _plain_decimal(quantity), canonical, range_problem
             # Not a unit word: it belongs to the item name ("2 gas", "3 telur").
-            name = f"{unit_text} {rest}".strip()
+            name = (f"{unit_text} {rest}" if unit_text else rest).strip()
             if name:
-                return name, _plain_decimal(quantity), None, None
+                return name, _plain_decimal(quantity), None, range_problem
     match = _TRAILING_QUANTITY.search(text)
     if not match:
-        return text.strip(), None, None, None
+        # No whitespace-separated count either: owners glue the count onto
+        # the name ("telur2kg", "beras10kg"); the digit+unit tail is a
+        # quantity, not part of the ingredient name.
+        glued = _GLUED_QUANTITY.search(text)
+        if glued:
+            glued_quantity = _decimal_text(glued.group("quantity"))
+            glued_unit = _UNIT_ALIASES.get(glued.group("unit").casefold())
+            if glued_quantity is not None and glued_unit and not _SIZE_QUALIFIER_TAIL.search(text[: glued.start()]):
+                name = (text[: glued.start()] + glued.group("name")).strip()
+                return name, _plain_decimal(glued_quantity), glued_unit, range_problem
+        return text.strip(), None, None, range_problem
     if _SIZE_QUALIFIER_TAIL.search(text[: match.start()]):
         # "kemasan 500gr", "isi 250ml", and "@2ltr" describe the package
         # size, not how many packages the owner wants.
-        return text.strip(), None, None, None
+        return text.strip(), None, None, range_problem
     quantity = _decimal_text(match.group("quantity"))
     unit_text = match.group("unit")
     if quantity is None:
@@ -333,7 +427,7 @@ def _parse_quantity(text: str) -> tuple[str, str | None, str | None, str | None]
     unit = None
     if unit_text:
         unit = _UNIT_ALIASES.get(unit_text.casefold(), unit_text.casefold())
-    return text[: match.start()].strip(), _plain_decimal(quantity), unit, None
+    return text[: match.start()].strip(), _plain_decimal(quantity), unit, range_problem
 
 
 def _match_name(name: str) -> tuple[str, str | None, bool]:
@@ -444,10 +538,35 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
     if not source:
         return None, [f"Line {line_number}: no item name was found."]
     for _ in range(4):
+        stripped = _TIME_PREFIX.sub("", source).strip()
+        if stripped == source:
+            break
+        source = stripped
+    for _ in range(4):
         stripped = _ORDER_PREFIX.sub("", source).strip()
         if stripped == source:
             break
         source = stripped
+    if not source:
+        return None, [f"Line {line_number}: no item name was found."]
+    for _ in range(2):
+        stripped = _NEW_INGREDIENT_PREFIX.sub("", source).strip()
+        if stripped == source:
+            break
+        source = stripped
+    if not source:
+        return None, [f"Line {line_number}: no item name was found."]
+    # An "@<size><unit>" marker ("Sunco @2ltr 10 dus") quotes the package
+    # contents; it must be lifted out before price parsing so it never lands
+    # in the item name, and the store multiplies it into the stock movement.
+    pack_size = pack_unit = None
+    pack_match = _PACK_SIZE_MARKER.search(source)
+    if pack_match:
+        pack_size = _decimal_text(pack_match.group("size"))
+        pack_unit = _UNIT_ALIASES.get(pack_match.group("unit").casefold())
+        source = re.sub(r"\s{2,}", " ", (source[: pack_match.start()] + " " + source[pack_match.end():])).strip()
+        if pack_size is None or pack_unit is None:
+            pack_size = pack_unit = None
     if not source:
         return None, [f"Line {line_number}: no item name was found."]
 
@@ -496,6 +615,7 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
         "line_total_idr": line_total,
         **({"price_marker": price_marker} if price_marker else {}),
         **({"matched_from": raw_name} if fuzzy and ingredient_id else {}),
+        **({"pack_size": _plain_decimal(pack_size), "pack_unit": pack_unit} if pack_size is not None and pack_unit else {}),
     }, warnings
 
 
@@ -627,6 +747,18 @@ def extract_purchase(text: str) -> dict[str, Any]:
     items = []
     supplier = None
     for line_number, line in nonempty:
+        # A purchase sentence with a tacked-on question ("... 25rb. btw stok
+        # beras masih berapa?") loses its price to the question tail; cut the
+        # chat tail before parsing. A message that is only the question (no
+        # digits before it) is left alone for the stock-question matcher.
+        tail_match = _QUESTION_TAIL.search(line)
+        if tail_match and re.search(r"\d", line[: tail_match.start()]):
+            line = line[: tail_match.start()].rstrip(" ,.;:")
+        # Junk lines — forwarded banners, contact lines, bon headers, "= "
+        # glosses — are chat formatting, not items; drop them instead of
+        # drafting phantom products.
+        if _JUNK_LINE.search(line):
+            continue
         # A supplier header line ("dari Dika:", "beli dari Pasar Pagi") names
         # the supplier for the following items and parses no item itself.
         header_match = _SUPPLIER_HEADER.match(line)
@@ -675,6 +807,15 @@ def is_chatter_item(item: dict[str, Any]) -> bool:
     return len(words) >= 4
 
 
+def _pack_conversion(item: dict[str, Any]) -> tuple[Decimal | None, str | None]:
+    """Validate an owner-quoted pack size ("pack_size": "2", "pack_unit": "l")."""
+    size = item.get("pack_size")
+    pack_unit = item.get("pack_unit")
+    if isinstance(size, bool) or not isinstance(size, (str, int, Decimal)) or not isinstance(pack_unit, str):
+        return None, None
+    return _decimal_text(str(size)), canonical_unit_name(pack_unit)
+
+
 def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
     """Validate and normalize one parsed item using exact decimal arithmetic."""
     matched_from = item.get("matched_from")
@@ -706,6 +847,13 @@ def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
     if unit_raw is None:
         warnings.append("Unit is missing.")
 
+    # An owner-quoted package contents ("Sunco @2ltr 10 dus") rides through
+    # normalization so the draft shows what the pack conversion means.
+    pack_size, pack_unit = _pack_conversion(item)
+    if pack_size is not None and pack_unit:
+        result["pack_size"] = _plain_decimal(pack_size)
+        result["pack_unit"] = pack_unit
+
     ingredient_id = item.get("ingredient_id")
     expected_unit = _EXPECTED_UNIT.get(ingredient_id)
     dimension = "mass" if unit in {"kg", "g"} else "volume" if unit in {"l", "ml"} else None
@@ -725,7 +873,21 @@ def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
         result["canonical_quantity"] = _plain_decimal(qty)
         result["canonical_unit"] = unit
     elif unit is not None and unit not in {"kg", "g", "l", "ml", "pcs", "buah"}:
-        warnings.append(f"Unit '{unit_raw}' is not supported for automatic normalization; choose a catalog pack conversion.")
+        # Pack units (dus, box, karung...) need a conversion. An owner-quoted
+        # pack size ("@2ltr") carries it: multiply the package count by the
+        # pack contents when the pack unit is mass/volume and matches the
+        # catalog dimension; otherwise the conversion warning stands.
+        base = pack_unit if pack_unit in {"kg", "g", "l", "ml"} else None
+        expected = _EXPECTED_UNIT.get(ingredient_id)
+        dimension = "mass" if base in {"kg", "g"} else "volume" if base in {"l", "ml"} else None
+        expected_dimension = "mass" if expected == "kg" else "volume" if expected == "l" else None
+        if base and qty is not None and pack_size is not None and (expected is None or expected_dimension == dimension):
+            factor = Decimal(1000) if base in {"g", "ml"} else Decimal(1)
+            total = Decimal(qty) * pack_size / factor
+            result["canonical_quantity"] = _plain_decimal(total)
+            result["canonical_unit"] = "kg" if base in {"kg", "g"} else "l"
+        else:
+            warnings.append(f"Unit '{unit_raw}' is not supported for automatic normalization; choose a catalog pack conversion.")
 
     if ingredient_id not in _EXPECTED_UNIT and not str(item.get("raw_name") or "").strip():
         # With a raw name the store can auto-create the ingredient on approval;

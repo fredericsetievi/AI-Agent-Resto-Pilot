@@ -541,6 +541,8 @@ def create_app(
         messy = bool(extracted["warnings"]) or len(text.strip().splitlines()) > 1
         if not messy or text.strip().casefold() in _text_command_words or parse_payment_followup(text):
             return extracted
+        if _rules_draft_complete(extracted):
+            return extracted
         try:
             rescued = await extract_message(
                 text,
@@ -553,11 +555,44 @@ def create_app(
         except (StepFunTextError, ValueError) as exc:
             logger.warning("StepFun text rescue failed; keeping the rules result: %s", exc)
             return extracted
-        if rescued["items"]:
-            if extracted.get("supplier") and not rescued.get("supplier"):
-                rescued["supplier"] = extracted["supplier"]
-            return rescued
-        return extracted
+        if not rescued["items"]:
+            return extracted
+        rules_strength = _draft_strength(extracted)
+        if rules_strength > _draft_strength(rescued):
+            return extracted
+        if rules_strength == _draft_strength(rescued) and _catalog_matched(extracted):
+            return extracted
+        if extracted.get("supplier") and not rescued.get("supplier"):
+            rescued["supplier"] = extracted["supplier"]
+        return rescued
+
+    def _rules_draft_complete(extracted):
+        """True when every rules item carries a count and a price (or an
+        owner-quoted pack size). Such a draft is already stronger than
+        anything the model returns — in replay the rescue dropped the
+        estimated count on ranged quantities and the pack fields on "@2ltr"
+        lines — so the model trip is skipped entirely."""
+        items = extracted.get("items") or []
+        return bool(items) and all(
+            item.get("quantity") is not None
+            and (item.get("line_total_idr") is not None or item.get("pack_size") is not None)
+            for item in items
+        )
+
+    def _draft_strength(extracted):
+        """(priced lines, quantified lines) — the model only replaces the
+        rules result when it is strictly stronger, or when it ties on a
+        rules read that matched no catalog ingredient (the model may have
+        fixed a misread like "Selasa kirim 2 gas"); a tie on a catalog
+        matched rules read keeps the deterministic result, so a confused
+        model answer cannot turn a price quote into a phantom draft."""
+        items = extracted.get("items") or []
+        priced = sum(1 for item in items if item.get("line_total_idr") is not None or item.get("pack_size") is not None)
+        quantified = sum(1 for item in items if item.get("quantity") is not None)
+        return priced, quantified
+
+    def _catalog_matched(extracted):
+        return any(item.get("ingredient_id") for item in extracted.get("items") or [])
 
     def _no_purchase_signal(extracted):
         """True when extraction read no usable purchase line from the message."""

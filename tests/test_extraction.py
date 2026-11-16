@@ -141,7 +141,9 @@ def test_shared_total_is_never_misattributed_to_the_last_item():
 
     # "total 66rb" must not become a phantom third product either.
     result = extract_purchase("tadi pagi beli telur 2kg, kecombrang 1 bungkus, total 66rb")
-    assert [item["raw_name"] for item in result["items"]] == ["tadi pagi beli telur", "kecombrang"]
+    # V34.4 strips the "tadi pagi beli" chat opener so the item matches the
+    # catalog instead of drafting a phantom product with a chat name.
+    assert [item["raw_name"] for item in result["items"]] == ["telur", "kecombrang"]
     assert all(item["line_total_idr"] is None for item in result["items"])
     assert any("66000" in warning for warning in result["warnings"])
 
@@ -458,21 +460,24 @@ def test_delivery_note_with_jargon_items_and_inline_definition():
     chatter = [item for item in result["items"] if is_chatter_item(item)]
     items = [item for item in result["items"] if not is_chatter_item(item)]
     # The greeting prefix "Nanti siang" is dropped with the comma clauses,
-    # the jargon names survive verbatim, and the inline "Isul = ..." note
-    # is chatter, not a product.
+    # the jargon names survive verbatim, and the inline "Isul = ..." gloss is
+    # junk chat: it drafts no phantom product (V34.4).
     assert [item["raw_name"] for item in items] == ["gas", "melon", "isul", "aqua"]
     assert [item["quantity"] for item in items] == ["2", "3", "8", "2"]
     assert all(item["unit"] is None and item["line_total_idr"] is None for item in items)
-    assert [item["raw_name"] for item in chatter] == ["isul = air isi ulang utk customer"]
+    assert chatter == []
 
 
 def test_po_forward_with_at_size_marker_and_politeness_tail():
     result = extract_purchase(SUPPLIER_PO_SUNCO)
     items = result["items"]
     assert len(items) == 1
-    assert items[0]["raw_name"] == "sunco @2ltr"
+    # The "@2ltr" pack size is lifted out of the name into pack fields (V34.4).
+    assert items[0]["raw_name"] == "sunco"
     assert items[0]["quantity"] == "10"
     assert items[0]["unit"] == "dus"
+    assert items[0]["pack_size"] == "2"
+    assert items[0]["pack_unit"] == "l"
     assert items[0]["line_total_idr"] is None
     assert result["warnings"] == ["Line 1: line total is missing or unsupported."]
 
@@ -508,9 +513,13 @@ def test_package_size_qualifiers_are_not_quantities():
     assert guarded["items"][0]["raw_name"] == "teh racik merah kemasan 500gr"
     assert guarded["items"][0]["quantity"] is None
     assert any("quantity is missing" in warning for warning in guarded["warnings"])
+    # A lone "@2ltr" is the package contents, not a count: the name stays
+    # clean and the pack size rides into its own fields.
     sized = extract_purchase("beli sunco @2ltr")
-    assert sized["items"][0]["raw_name"] == "sunco @2ltr"
+    assert sized["items"][0]["raw_name"] == "sunco"
     assert sized["items"][0]["quantity"] is None
+    assert sized["items"][0]["pack_size"] == "2"
+    assert sized["items"][0]["pack_unit"] == "l"
 
 
 def test_numbered_packaging_po_parses_every_line():
@@ -543,3 +552,124 @@ def test_order_verb_prefixes_are_stripped_from_item_names():
         result = extract_purchase(line)
         assert result["items"][0]["raw_name"] == "telur", line
         assert result["items"][0]["quantity"] == "3", line
+
+
+# ---- V34.4: glued quantities, k-scale prices, junk lines, question tails,
+# pack-size markers, and estimated quantity ranges (owner replay findings).
+
+def test_glued_quantity_splits_from_the_name():
+    for line, name, qty, unit in [
+        ("telur2kg", "telur", "2", "kg"),
+        ("beli telur2kg", "telur", "2", "kg"),
+        ("beli beras10kg 120rb", "beras", "10", "kg"),
+        ("telur2,5kg", "telur", "2.5", "kg"),
+        ("minyak goreng2l", "minyak goreng", "2", "l"),
+    ]:
+        result = extract_purchase(line)
+        assert result["items"][0]["raw_name"] == name, line
+        assert result["items"][0]["quantity"] == qty, line
+        assert result["items"][0]["unit"] == unit, line
+    # A price scale glued to the name is not a quantity unit.
+    assert extract_purchase("kopi25rb")["items"][0]["raw_name"] == "kopi25rb"
+
+
+def test_k_suffix_reads_as_a_price():
+    priced = extract_purchase("buy 2 kg sugar 25k")
+    assert priced["items"][0]["raw_name"] == "sugar"
+    assert priced["items"][0]["quantity"] == "2"
+    assert priced["items"][0]["line_total_idr"] == 25000
+    assert priced["warnings"] == []
+    bare = extract_purchase("gula 25k")
+    assert bare["items"][0]["raw_name"] == "gula"
+    assert bare["items"][0]["line_total_idr"] == 25000
+
+
+def test_junk_lines_never_become_phantom_items():
+    for line in [
+        "Bon jika barang tersedia",
+        "Fwd: pesanan",
+        "FWD: pesanan",
+        "hubungi agus 0812xx",
+        "wa: 081234567890",
+        "agus 081234567890",
+        "Isul = air isi ulang utk customer",
+    ]:
+        assert extract_purchase(line)["items"] == [], line
+
+
+def test_question_tail_after_a_purchase_is_dropped():
+    result = extract_purchase("beli kecombrang 1 kg 25rb. btw stok beras masih berapa?")
+    assert result["items"][0]["raw_name"] == "kecombrang"
+    assert result["items"][0]["quantity"] == "1"
+    assert result["items"][0]["unit"] == "kg"
+    assert result["items"][0]["line_total_idr"] == 25000
+    assert result["warnings"] == []
+
+
+def test_pack_size_marker_lands_in_pack_fields_and_multiplies():
+    result = extract_purchase("PO Sunco @2ltr 10 dus ya🙏")
+    item = result["items"][0]
+    assert item["raw_name"] == "sunco"
+    assert item["quantity"] == "10"
+    assert item["unit"] == "dus"
+    assert item["pack_size"] == "2"
+    assert item["pack_unit"] == "l"
+    # Normalization multiplies the pack contents into the stock movement.
+    normalized = normalize_item(dict(item))
+    assert normalized["canonical_quantity"] == "20"
+    assert normalized["canonical_unit"] == "l"
+    # A known volume ingredient still converts cleanly.
+    minyak = normalize_item({**item, "ingredient_id": "minyak", "raw_name": "minyak", "line_total_idr": 380000})
+    assert minyak["canonical_quantity"] == "20"
+    assert minyak["warnings"] == []
+    # A dimension mismatch (ltr pack on a kg ingredient) keeps the warning.
+    mismatch = normalize_item({**item, "ingredient_id": "beras", "raw_name": "beras"})
+    assert mismatch["canonical_quantity"] is None
+    assert mismatch["warnings"]
+    # "@15rb" is a per-unit price, never a pack size.
+    priced = extract_purchase("Sunco 10 dus @15rb")
+    assert priced["items"][0].get("pack_size") is None
+    assert priced["items"][0]["line_total_idr"] == 150000
+
+
+def test_quantity_range_uses_the_lower_bound_with_a_note():
+    result = extract_purchase("beli cabai sekitar 3-4 kg 150rb")
+    item = result["items"][0]
+    assert item["raw_name"] == "cabai sekitar"
+    assert item["quantity"] == "3"
+    assert item["unit"] == "kg"
+    assert item["line_total_idr"] == 150000
+    assert any("quantity range 3-4 kg" in warning for warning in result["warnings"])
+    leading = extract_purchase("beli 3-4 kg cabai")
+    assert leading["items"][0]["quantity"] == "3"
+    assert leading["items"][0]["unit"] == "kg"
+    spaced = extract_purchase("3 s/d 4 kg cabai")
+    assert spaced["items"][0]["quantity"] == "3"
+    assert spaced["items"][0]["unit"] == "kg"
+    kata = extract_purchase("2 sampai 3 dus telur")
+    assert kata["items"][0]["quantity"] == "2"
+    assert kata["items"][0]["unit"] == "dus"
+
+
+def test_new_ingredient_announcement_is_a_clean_purchase_line():
+    result = extract_purchase("pengen nambah bahan baru: kecap manis 500ml")
+    assert result["items"][0]["raw_name"] == "kecap manis"
+    assert result["items"][0]["quantity"] == "500"
+    assert result["items"][0]["unit"] == "ml"
+    priced = extract_purchase("tambah bahan baru: saos sambal 3 botol 45rb")
+    assert priced["items"][0]["raw_name"] == "saos sambal"
+    assert priced["items"][0]["line_total_idr"] == 45000
+    assert priced["warnings"] == []
+
+
+def test_time_prefix_does_not_pollute_the_item_name():
+    result = extract_purchase("tadi pagi beli telur 2kg, 1 bungkus kecombrang, total 66rb")
+    names = [item["raw_name"] for item in result["items"]]
+    assert "tadi pagi beli telur" not in names
+    assert names[0] == "telur"
+    assert result["items"][0]["ingredient_id"] == "telur"
+    assert result["items"][0]["quantity"] == "2"
+    assert names[1] == "kecombrang"
+    yesterday = extract_purchase("kemarin beli telur 1 kg 33rb")
+    assert yesterday["items"][0]["ingredient_id"] == "telur"
+    assert yesterday["items"][0]["line_total_idr"] == 33000

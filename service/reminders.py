@@ -52,10 +52,10 @@ REMINDER_SILENCE_HOURS = 6
 # 60s tick sends within the first minute of the configured hour.
 REMINDER_LOOP_SECONDS = 60
 
-_REMINDER_RE = re.compile(r"(?i)^\s*pengingat\b(.*)$")
+_REMINDER_RE = re.compile(r"(?i)^\s*(?:pengingat|ingatkan(?:\s+saya)?)\b(.*)$")
 _SET_RE = re.compile(r"(?i)\b(?:jadi\s*)?jam\s*(\d{1,2})\b")
 _SLOT_RE = re.compile(r"(?i)\b(pagi|siang|sore|malam)\b")
-_OFF_RE = re.compile(r"(?i)\b(mati|berhenti|stop|non\s?aktif|off)\b")
+_OFF_RE = re.compile(r"(?i)\b(mati(?:kan)?|berhenti|stop|non\s?aktif|off)\b")
 _ON_RE = re.compile(r"(?i)\b(nyala|aktif|hidup|on)\b")
 
 _SLOT_NAMES = {"morning": "pagi", "evening": "malam"}
@@ -67,10 +67,16 @@ def parse_reminder_command(text):
     Kinds: set (slot + hour), off, on, show, clarify (bare "pengingat jadi
     jam 8" — which slot?), quiet (hour inside quiet hours), invalid (hour
     outside 0–23). Deterministic rules only; never a purchase sentence.
+
+    The "ingatkan saya ..." alias ("ingatkan saya tiap jam 8 pagi cek stok")
+    only fires when the message carries scheduling content (a jam, pagi/
+    malam, or off/on word); anything else ("ingatkan saya beli telur") is
+    chat and stays with the purchase parser.
     """
     text = str(text or "").strip()
     if len(text) > 200:
         return None
+    alias = bool(re.match(r"(?i)^\s*ingatkan\b", text))
     match = _REMINDER_RE.match(text)
     if not match:
         return None
@@ -81,6 +87,8 @@ def parse_reminder_command(text):
             return {"kind": "off"}
         if _ON_RE.search(remainder):
             return {"kind": "on"}
+        if alias:
+            return None  # "ingatkan saya beli telur" is not scheduling
         return {"kind": "show"}
     if _OFF_RE.search(remainder):
         return {"kind": "off"}
