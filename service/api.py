@@ -487,7 +487,7 @@ def create_app(
                         "Environment keys absent at boot (the launcher did not export them?): "
                         + ", ".join(missing)
                     )
-                store = PostgresStore(seed=False, read_only_startup=True)
+                store = PostgresStore(seed=False, read_only_startup=True, public_base_url=public_base_url)
             storage = "supabase"
         except Exception as exc:  # noqa: BLE001 - any config/connect/schema failure fails closed
             logger.error("Hosted storage unavailable; failing closed: %s: %s", type(exc).__name__, exc)
@@ -499,12 +499,12 @@ def create_app(
         # file stays as an offline/demo fallback so the app still boots without it.
         if not _test_sqlite_fallback():
             try:
-                store = PostgresStore(seed=seed)
+                store = PostgresStore(seed=seed, public_base_url=public_base_url)
                 storage = "supabase"
             except RuntimeError:
                 store = None
         if store is None:
-            store = Store(db_path, seed=seed)
+            store = Store(db_path, seed=seed, public_base_url=public_base_url)
             storage = "sqlite"
     app.state.storage = storage
     default_credentials = {(user["username"].casefold(), user["password"]) for user in DEMO_USERS}

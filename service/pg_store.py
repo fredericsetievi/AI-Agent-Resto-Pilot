@@ -57,9 +57,9 @@ from .pg import pg_connection, pg_transaction
 from .onboarding import restaurant_selection
 from .whatsapp import (
     FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR,
-    UNREGISTERED_REPLY, draft_label, draft_reply, is_stock_question, opname_reply,
-    parse_payment_followup, parse_remove_request, stock_reply,
-    unregistered_reply, weekly_summary_reply,
+    UNREGISTERED_REPLY, dashboard_link_line, dashboard_link_reply, draft_label,
+    draft_reply, is_stock_question, opname_reply, parse_payment_followup,
+    parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply,
 )
 
 
@@ -96,8 +96,9 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         "cash_envelopes": {"slug", "day", "envelope_idr", "leftover_idr", "recorded_at"},
     }
 
-    def __init__(self, path=None, seed=True, read_only_startup=False):
+    def __init__(self, path=None, seed=True, read_only_startup=False, public_base_url=None):
         # `path` is accepted and ignored so call sites stay identical.
+        self.public_base_url = public_base_url
         self._catalogs = {}
         # Short-TTL overview cache: each Supabase round trip costs 0.1-0.9s,
         # and the dashboard polls every 5s — serve repeats from memory.
@@ -1568,8 +1569,14 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                 if all(item.get("ingredient_id") is None and item.get("quantity") is None and item.get("line_total_idr") is None for item in extracted_items) or (
                     extracted_items and all(is_chatter_item(item) for item in extracted_items)
                 ):
-                    reply = HELP_REPLY
-                    result["action"] = "help_reply"
+                    link_reply = dashboard_link_reply(payload.get("text"), self.public_base_url)
+                    if link_reply:
+                        reply = link_reply
+                        result["action"] = "dashboard_link"
+                    else:
+                        link_line = dashboard_link_line(self.public_base_url)
+                        reply = HELP_REPLY + (f"\n\n{link_line}" if link_line else "")
+                        result["action"] = "help_reply"
                 else:
                     draft = self._new_draft(conn, payload["text"], extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=tenant)
                     thread.update(active_draft_id=draft["id"], active_version=draft["version"])

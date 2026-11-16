@@ -20,6 +20,21 @@ def app(tmp_path):
 
 
 @pytest.fixture
+def linked_app(tmp_path):
+    return create_app(
+        tmp_path / "whatsapp-linked.sqlite3",
+        public_base_url="https://restopilot-dashboard.pub.atoms.world",
+    )
+
+
+@pytest.fixture
+def linked_client(linked_app):
+    with TestClient(linked_app, base_url="http://127.0.0.1", raise_server_exceptions=False) as value:
+        login_owner(value)
+        yield value
+
+
+@pytest.fixture
 def client(app):
     with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as value:
         login_owner(value)
@@ -423,7 +438,37 @@ def test_greeting_text_gets_help_instead_of_an_empty_draft(client):
     assert len(overview(client)["drafts"]) == before
     # Texts carrying purchase signal still draft, even when incomplete.
     assert data(simulate(client, "beli beras"))["result"]["action"] == "review_required"
-    assert data(simulate(client, "batal"))["result"]["action"] == "rejected"
+
+
+def test_dashboard_request_gets_link_when_origin_configured(linked_client):
+    result = data(simulate(linked_client, "dashboard nya mana ya?"))
+    assert result["result"]["action"] == "dashboard_link"
+    assert result["thread"]["active_draft_id"] is None
+    reply = result["messages"][-1]["body"]
+    assert "https://restopilot-dashboard.pub.atoms.world/app.html" in reply
+    assert "Login pakai akun owner resto" in reply
+    # Case and punctuation variations hit the same deterministic reply.
+    assert data(simulate(linked_client, "LINK"))["result"]["action"] == "dashboard_link"
+    assert data(simulate(linked_client, "buka website"))["result"]["action"] == "dashboard_link"
+
+
+def test_dashboard_request_without_origin_falls_back_to_help(client):
+    result = data(simulate(client, "dashboard nya mana ya?"))
+    assert result["result"]["action"] == "help_reply"
+    assert "/app.html" not in result["messages"][-1]["body"]
+
+
+def test_help_reply_carries_dashboard_line_when_origin_configured(linked_client):
+    reply = data(simulate(linked_client, "hello"))["messages"][-1]["body"]
+    assert "asisten pembelian RestoPilot" in reply
+    assert "Dashboard: https://restopilot-dashboard.pub.atoms.world/app.html" in reply
+
+
+def test_purchase_lines_are_never_hijacked_by_dashboard_keywords(client, linked_client):
+    for target in (client, linked_client):
+        result = data(simulate(target, "beli link 2 pcs 10000"))
+        assert result["result"]["action"] in {"draft_created", "review_required", "clarification_required", "draft_updated"}
+        assert data(simulate(target, "batal"))["result"]["action"] in {"rejected", "cancelled", "no_active_draft", "help_reply"}
     created = data(simulate(client, "Beli bawang 2 kg 80 rb"))
     assert created["result"]["action"] == "draft_created"
     assert created["draft"]["items"][0]["raw_name"] == "bawang"
