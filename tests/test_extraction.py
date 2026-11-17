@@ -373,6 +373,23 @@ def test_has_itemized_purchase_signal_needs_digit_lines():
     assert not has_itemized_purchase_signal(None)
 
 
+def test_has_uncontextual_quantity_items():
+    from service.extraction import extract_purchase, has_uncontextual_quantity_items
+
+    # The escape hatch: a sentence plus a time-of-day number parses as a
+    # quantity-only row and slips past every chatter guard.
+    assert has_uncontextual_quantity_items(extract_purchase("Tolong kirim reminder ke saya setiap malam jam 8"))
+    assert has_uncontextual_quantity_items(extract_purchase("besok tutup toko jam 8 ya"))
+    # Real purchase lines never gate, even without prices.
+    assert not has_uncontextual_quantity_items(extract_purchase("beli kecap manis 2 botol"))
+    assert not has_uncontextual_quantity_items(extract_purchase("cabai 3 kg 150000"))
+    # A priced draft is a purchase by definition.
+    priced = extract_purchase("halo lagi ke pasar bawa cash 2 jt")
+    assert not has_uncontextual_quantity_items(priced)
+    assert not has_uncontextual_quantity_items({"items": [], "warnings": []})
+    assert not has_uncontextual_quantity_items(None)
+
+
 def test_oversized_rp_amount_and_normalization_total_are_rejected_without_exception():
     huge = "9" * 10000
     extracted = extract_purchase(f"beli cabai 1 kg Rp{huge}")

@@ -95,6 +95,22 @@ def matches_verify_token(candidate, configured):
     return bool(candidate and configured) and hmac.compare_digest(candidate, configured)
 
 
+def chat_note_reply(intent, summary=None):
+    """Indonesian follow-up for a message the context gate understood as
+    not-a-purchase. Appended to the help reply so the owner sees what the
+    agent understood and what to send next, instead of a pseudo-purchase
+    draft filed from a number that was a time, not a quantity."""
+    tail = f" ({summary})" if summary else ""
+    if intent == "reminder":
+        return ("Aku mengerti ini permintaan pengingat, bukan catatan pembelian" + tail + ". "
+                "Untuk jadwal, kirim 'pengingat pagi jadi jam 8' atau 'pengingat malam jadi jam 9'.")
+    if intent == "question":
+        return ("Aku mengerti ini pertanyaan, bukan catatan pembelian" + tail + ". "
+                "Cek stok dengan 'stok <nama bahan>' atau buka dashboard.")
+    return ("Aku mengerti ini bukan catatan pembelian" + tail + ", jadi tidak ada draf dibuat. "
+            "Kirim rincian pembelian kalau mau mencatat.")
+
+
 def validate_webhook_signature(app_secret, raw, signature):
     if not app_secret or not signature or not signature.startswith("sha256="):
         return False

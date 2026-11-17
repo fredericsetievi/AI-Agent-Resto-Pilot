@@ -873,6 +873,33 @@ def has_itemized_purchase_signal(text: str, min_lines: int = 3) -> bool:
     return sum(1 for line in lines if re.search(r"\d", line)) >= min_lines
 
 
+def has_uncontextual_quantity_items(extracted: dict[str, Any]) -> bool:
+    """True when the parser turned chat into pseudo-purchase rows.
+
+    The escape hatch past is_chatter_item: a sentence ("reminder ke saya
+    setiap malam jam") plus a number that is really a time or label ("jam 8")
+    parses as one row with a quantity but no price. Every chatter guard
+    requires quantity to be None, so the row passes and a garbage draft is
+    filed. Real purchase lines are short names or catalog matches; only when
+    EVERY row is a sentence-length name without any price in the whole draft
+    does the message deserve a context-gate re-read.
+    """
+    items = (extracted or {}).get("items") or []
+    if not items or any(item.get("line_total_idr") is not None for item in items):
+        return False
+    if not any(item.get("quantity") is not None or item.get("unit") is not None for item in items):
+        return False
+    for item in items:
+        if item.get("ingredient_id") is not None:
+            return False
+        name = str(item.get("raw_name") or "").strip()
+        # A short name plus a count reads as a real line, even a brand-new
+        # one ("beli kecap manis 2 botol"); only sentence-length rows gate.
+        if len(name.split()) <= 3:
+            return False
+    return True
+
+
 def _pack_conversion(item: dict[str, Any]) -> tuple[Decimal | None, str | None]:
     """Validate an owner-quoted pack size ("pack_size": "2", "pack_unit": "l")."""
     size = item.get("pack_size")

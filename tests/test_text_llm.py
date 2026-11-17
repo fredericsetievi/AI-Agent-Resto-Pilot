@@ -498,3 +498,114 @@ def test_dads_single_line_supplier_list_drafts_flagged(tmp_path):
     assert draft["items"][2]["quantity"] == "5"
     assert all(item["line_total_idr"] is None for item in draft["items"])
     assert draft["status"] == "needs_clarification"
+
+
+# ---- context gate (LLM_CONTEXT_GATE) -----------------------------------------
+
+CHAT_TIMER = "besok tutup toko jam 8 ya"  # parses as "besok tutup toko jam — 8 pcs"
+
+
+def gate_app(tmp_path, fake_client, **kwargs):
+    kwargs.setdefault("vision_api_key", "synthetic-stepfun-key")
+    app = create_app(
+        tmp_path / "demo.sqlite3",
+        text_llm_enabled=True,
+        text_llm_http_client=fake_client,
+        context_gate_enabled=True,
+        **kwargs,
+    )
+    client = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    from conftest import login_owner, SENDER_NUMBER
+    login_owner(client)
+    return client
+
+
+def sim(client, text):
+    from conftest import SENDER_NUMBER
+    return client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
+                       json={"sender": SENDER_NUMBER, "text": text}).json()["data"]
+
+
+def test_context_gate_drops_a_chat_draft_and_explains(tmp_path):
+    from service.extraction import extract_purchase, has_uncontextual_quantity_items
+    assert has_uncontextual_quantity_items(extract_purchase(CHAT_TIMER))  # fixture sanity
+
+    fake = FakeTextClient()
+    fake.responses.append(completion({"is_purchase": False, "intent": "reminder", "summary": "pengingat tutup toko"}))
+    client = gate_app(tmp_path, fake)
+
+    data = sim(client, CHAT_TIMER)
+    assert len(fake.calls) == 1  # the gate ran; no rescue followed, no draft
+    assert data["result"]["action"] == "help_reply"
+    reply = data["messages"][-1]["body"]
+    assert "bukan catatan pembelian" in reply
+    assert "pengingat tutup toko" in reply
+    assert "pengingat pagi jadi jam 8" in reply  # the deterministic next step
+    assert not data.get("draft")
+
+
+def test_context_gate_passes_real_purchases_through(tmp_path):
+    fake = FakeTextClient()
+    fake.responses.append(completion({"is_purchase": True, "intent": "purchase", "summary": "beli bahan masak"}))
+    fake.responses.append(completion({"items": [CABAI_ITEM]}))
+    client = gate_app(tmp_path, fake)
+
+    data = sim(client, "besok saya mau ke pasar beli bahan jam 7 pagi")
+    assert len(fake.calls) == 2  # gate said purchase, the rescue ran as usual
+    assert data["draft"]["items"]
+
+
+def test_context_gate_failure_keeps_the_rules_behavior(tmp_path):
+    # Fail-open: a provider error must never change what the parser did.
+    # The gate call and the later rescue both fail; the rules draft stands.
+    fake = FakeTextClient()
+    fake.responses.append(FakeResponse(status_code=503, body={"error": {"message": "overloaded"}}))
+    fake.responses.append(FakeResponse(status_code=503, body={"error": {"message": "overloaded"}}))
+    client = gate_app(tmp_path, fake)
+
+    data = sim(client, CHAT_TIMER)
+    assert len(fake.calls) == 2
+    assert data["draft"]["items"][0]["raw_name"] == "besok tutup toko jam"
+    assert data["draft"]["items"][0]["quantity"] == "8"
+
+
+def test_context_gate_off_never_calls_the_model(tmp_path):
+    fake = FakeTextClient()
+    fake.responses.append(completion({"items": []}))  # only the rescue may call
+    app = create_app(tmp_path / "demo.sqlite3", vision_api_key="synthetic-stepfun-key", text_llm_enabled=True, text_llm_http_client=fake)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    from conftest import login_owner, SENDER_NUMBER
+    login_owner(client)
+
+    client.post("/v1/whatsapp/simulate", headers={"Idempotency-Key": uuid4().hex},
+                json={"sender": SENDER_NUMBER, "text": CHAT_TIMER})
+    assert len(fake.calls) == 1  # the rescue ran; the gate never fired
+
+
+def test_classify_context_verdicts():
+    import asyncio
+
+    from service.intent_llm import classify_context
+    from service.stock_llm import StepFunTextError
+
+    fake = FakeTextClient()
+    fake.responses.append(completion({"is_purchase": False, "intent": "question", "summary": "tanya tutup toko"}))
+    verdict = asyncio.run(classify_context("tanya", api_key="k", client=fake))
+    assert verdict == {"is_purchase": False, "intent": "question", "summary": "tanya tutup toko"}
+
+    fake = FakeTextClient()
+    fake.responses.append(completion({"intent": "question"}))  # no is_purchase
+    try:
+        asyncio.run(classify_context("tanya", api_key="k", client=fake))
+        raise AssertionError("missing is_purchase must fail")
+    except StepFunTextError:
+        pass
+
+
+def test_context_note_reply_covers_all_intents():
+    from service.whatsapp import chat_note_reply
+
+    assert "pengingat pagi jadi jam 8" in chat_note_reply("reminder")
+    assert "stok" in chat_note_reply("question")
+    assert "bukan catatan pembelian" in chat_note_reply("chat")
+    assert "(cek pasar)" in chat_note_reply("other", "cek pasar")

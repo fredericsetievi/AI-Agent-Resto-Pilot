@@ -84,9 +84,11 @@ def _restopilot_app():
             text_llm_model=env("STEPFUN_TEXT_MODEL"),
             stock_llm_enabled=bool(env("STEPFUN_API_KEY")) and (env("LLM_STOCK_ANSWER", "1").strip().casefold() not in _LLM_OFF),
             intent_llm_enabled=bool(env("STEPFUN_API_KEY")) and (env("LLM_INTENT", "1").strip().casefold() not in _LLM_OFF),
-            # Forwarded-supplier-list router defaults OFF; enable via the
-            # LLM_FORWARDED_ROUTER server setting when the pilot opts in.
+            # Forwarded-supplier-list router and context gate default OFF;
+            # enable via the LLM_FORWARDED_ROUTER / LLM_CONTEXT_GATE server
+            # settings when the pilot opts in.
             forwarded_router_enabled=bool(env("STEPFUN_API_KEY")) and (env("LLM_FORWARDED_ROUTER", "0").strip().casefold() not in _LLM_OFF),
+            context_gate_enabled=bool(env("STEPFUN_API_KEY")) and (env("LLM_CONTEXT_GATE", "0").strip().casefold() not in _LLM_OFF),
             telegram_bot_token=env("TELEGRAM_BOT_TOKEN"),
             telegram_webhook_secret=env("TELEGRAM_WEBHOOK_SECRET"),
             telegram_api_base=env("TELEGRAM_API_BASE") or None,
