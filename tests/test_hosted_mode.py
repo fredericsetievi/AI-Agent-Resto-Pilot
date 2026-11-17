@@ -243,6 +243,7 @@ def test_fail_closed_error_shows_cause_and_boot_env(hosted_env, tmp_path):
     with anon(app) as client:
         body = client.get("/health/ready").json()["error"]["message"]
     assert "cause=auth_rejected" in body
+    assert " at " in body and ".py:" in body, "failure origin (file:line in function) must be present"
     assert "boot env:" in body and "SUPABASE_URL" in body
     assert "password authentication failed" not in body, "raw exception text must never leak"
     assert PLACEHOLDER_PASSWORD not in body
