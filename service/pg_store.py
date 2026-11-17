@@ -2143,9 +2143,71 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         return self._idempotent(key, "admin:create_restaurant", stored, action)
 
     def list_restaurants(self):
+        """Batched admin list: 6 queries total instead of 6 per restaurant.
+
+        The per-restaurant detail path costs ~6 roundtrips per tenant, which
+        pushed the admin page past the platform timeout once the deployment
+        grew past a few dozen tenants (36s for 45). Same output shape as
+        _restaurant_detail; tenants without a restaurants row are skipped
+        instead of failing the whole list.
+        """
         with pg_transaction() as conn:
-            cur = self._execute(conn, "SELECT slug FROM tenants ORDER BY created_at, slug")
-            return [self._restaurant_detail(conn, row[0]) for row in cur.fetchall()]
+            cur = self._execute(conn, "SELECT slug, created_at FROM tenants ORDER BY created_at, slug")
+            tenants = [(row[0], row[1]) for row in cur.fetchall()]
+            cur = self._execute(
+                conn,
+                "SELECT t.slug, r.name, r.address FROM tenants t JOIN restaurants r ON r.id=t.restaurant_id",
+            )
+            identities = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+            cur = self._execute(
+                conn,
+                "SELECT slug, phone, platform, label, created_at FROM whatsapp_links ORDER BY created_at, id",
+            )
+            numbers = {}
+            for slug, phone, platform, label, created_at in cur.fetchall():
+                if isinstance(created_at, datetime):
+                    created_at = created_at.isoformat()
+                numbers.setdefault(slug, []).append(
+                    {"phone": phone, "platform": platform, "label": label, "created_at": created_at})
+            cur = self._execute(
+                conn,
+                "SELECT slug, username, display_name, role, created_at FROM app_users ORDER BY created_at, id",
+            )
+            users = {}
+            for slug, username, display_name, role, created_at in cur.fetchall():
+                if isinstance(created_at, datetime):
+                    created_at = created_at.isoformat()
+                users.setdefault(slug, []).append(
+                    {"username": username, "display_name": display_name, "role": role, "created_at": created_at})
+            cur = self._execute(
+                conn,
+                "SELECT slug, COUNT(*) FROM drafts WHERE status IN ('pending_approval','needs_clarification') GROUP BY slug",
+            )
+            pending_drafts = {row[0]: row[1] for row in cur.fetchall()}
+            cur = self._execute(
+                conn,
+                "SELECT slug, COUNT(*) FROM purchases WHERE voided_at IS NULL GROUP BY slug",
+            )
+            recorded_purchases = {row[0]: row[1] for row in cur.fetchall()}
+
+            restaurants = []
+            for slug, created_at in tenants:
+                identity = identities.get(slug)
+                if not identity:
+                    continue  # dangling tenant without a restaurants row
+                if isinstance(created_at, datetime):
+                    created_at = created_at.isoformat()
+                restaurants.append({
+                    "id": slug,
+                    "name": identity[0],
+                    "address": identity[1],
+                    "created_at": created_at,
+                    "whatsapp_numbers": numbers.get(slug, []),
+                    "users": users.get(slug, []),
+                    "pending_drafts": pending_drafts.get(slug, 0),
+                    "recorded_purchases": recorded_purchases.get(slug, 0),
+                })
+            return restaurants
 
     def restaurant_detail(self, restaurant_id):
         with pg_transaction() as conn:
