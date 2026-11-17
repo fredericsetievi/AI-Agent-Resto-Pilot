@@ -363,6 +363,48 @@ def error(code, message, status):
     return JSONResponse({"error": {"code": code, "message": message}}, status_code=status)
 
 
+_STORAGE_CAUSE_RULES = (
+    ("absent at boot", "config_missing"),
+    ("not configured", "config_missing"),
+    ("password authentication", "auth_rejected"),
+    ("authentication failed", "auth_rejected"),
+    ("name or service not known", "dns_failure"),
+    ("temporary failure in name resolution", "dns_failure"),
+    ("getaddrinfo", "dns_failure"),
+    ("could not translate host name", "dns_failure"),
+    ("connection refused", "connection_refused"),
+    ("timed out", "timeout"),
+    ("timeout expired", "timeout"),
+    ("unreachable", "network_unreachable"),
+    ("no route to host", "network_unreachable"),
+    ("server closed the connection", "connection_dropped"),
+    ("ssl is not enabled", "tls_failure"),
+    ("missing required key", "schema_mismatch"),
+)
+
+
+def _storage_cause(exc):
+    """Sanitized failure cause for the public fail-closed error: a fixed
+    token derived from the exception, never its text, so no credential or
+    infrastructure detail can leak (2026-11-17 Atoms outage diagnostics)."""
+    text = str(exc).lower()
+    for needle, cause in _STORAGE_CAUSE_RULES:
+        if needle in text:
+            return cause
+    return type(exc).__name__
+
+
+def _boot_env_presence():
+    """Names-only diagnostic: which authority keys reached this runtime.
+    Presence booleans land in the public fail-closed error so a dropped key
+    is obvious without log access; values are never read here."""
+    import os
+    names = ("SUPABASE_URL", "SUPABASE_DB_HOST", "SUPABASE_DB_PORT", "SUPABASE_DB_USER",
+             "SUPABASE_DB_PASSWORD", "RESTOPILOT_DB_HOST", "RESTOPILOT_DB_PORT",
+             "RESTOPILOT_DB_USER", "RESTOPILOT_DB_PASSWORD")
+    return {name: bool((os.environ.get(name) or "").strip()) for name in names}
+
+
 def _is_loopback_host(host):
     try:
         parsed = urlsplit("http://" + host)
@@ -486,6 +528,7 @@ def create_app(
     secure_cookies = hosted if secure_cookies is None else secure_cookies
     store = None
     storage_error = None
+    boot_env = _boot_env_presence() if hosted else None
     if hosted:
         try:
             if store_factory is not None:
@@ -495,8 +538,8 @@ def create_app(
                 # unreachable" — the Atoms log line must say which keys are
                 # missing so a rebooted-without-env worker is obvious instantly.
                 missing = [
-                    name for name in ("SUPABASE_URL", "SUPABASE_DB_PASSWORD")
-                    if not (os.environ.get(name) or "").strip()
+                    name for name, alt in (("SUPABASE_URL", None), ("SUPABASE_DB_PASSWORD", "RESTOPILOT_DB_PASSWORD"))
+                    if not (os.environ.get(name) or "").strip() and not (alt and (os.environ.get(alt) or "").strip())
                 ]
                 if missing:
                     raise RuntimeError(
@@ -509,7 +552,9 @@ def create_app(
             logger.error("Hosted storage unavailable; failing closed: %s: %s", type(exc).__name__, exc)
             store = None
             storage = "unavailable"
-            storage_error = str(exc) if isinstance(exc, RuntimeError) else "The database could not be reached."
+            base = str(exc) if isinstance(exc, RuntimeError) else "The database could not be reached."
+            env_note = " ".join(f"{name}={'set' if ok else 'MISSING'}" for name, ok in boot_env.items())
+            storage_error = f"{base} [cause={_storage_cause(exc)}; boot env: {env_note}]"
     else:
         # The authority is Supabase Postgres when configured; the local SQLite
         # file stays as an offline/demo fallback so the app still boots without it.
