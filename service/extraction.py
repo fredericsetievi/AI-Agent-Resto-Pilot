@@ -842,6 +842,37 @@ def is_chat_line_item(item: dict[str, Any]) -> bool:
     return bool(name) and bool(_CHAT_LINE.search(name))
 
 
+# Forwarded supplier messages (PO lists, pasted notas) regularly exceed the
+# 20-line input cap. The flag-gated LLM router reads them chunk by chunk; the
+# bound below limits one merged draft so a runaway forward cannot produce an
+# unusable wall of rows.
+FORWARDED_MAX_ITEMS = 50
+
+
+def split_message_chunks(text: str, max_lines: int = 20) -> list[str]:
+    """Split a long multi-line message into cap-sized chunks of non-empty lines.
+
+    Uses the same line separators as extract_purchase, so a chunk that fits
+    here also fits the parsers' 20-line cap.
+    """
+    if not isinstance(text, str):
+        return []
+    lines = [line.strip() for line in re.split(r"[\r\n;]+", text) if line.strip()]
+    return ["\n".join(lines[index:index + max_lines]) for index in range(0, len(lines), max_lines)]
+
+
+def has_itemized_purchase_signal(text: str, min_lines: int = 3) -> bool:
+    """True when enough lines carry digits to look like an itemized list.
+
+    A long forward without numbers (chat log, article) never triggers a model
+    trip; an itemized supplier list always quotes quantities or prices.
+    """
+    if not isinstance(text, str):
+        return False
+    lines = [line for line in re.split(r"[\r\n;]+", text) if line.strip()]
+    return sum(1 for line in lines if re.search(r"\d", line)) >= min_lines
+
+
 def _pack_conversion(item: dict[str, Any]) -> tuple[Decimal | None, str | None]:
     """Validate an owner-quoted pack size ("pack_size": "2", "pack_unit": "l")."""
     size = item.get("pack_size")

@@ -350,3 +350,151 @@ def test_strictly_stronger_model_answer_still_wins(tmp_path):
     assert len(fake.calls) == 1
     assert draft["items"][0]["quantity"] == "3"
     assert draft["items"][0]["line_total_idr"] == 150000
+
+
+# A real forwarded supplier list (pilot fixture): 25 non-empty lines, one over
+# the deterministic 20-line cap, no prices anywhere.
+DAD_LIST_2 = "\n".join([
+    "#2 Sayuran & protein:",
+    "2kg daun bawang",
+    "5kg terong ungu",
+    "4 labu acar",
+    "4 labu besar yg muda",
+    "5kg wortel",
+    "2kg kacang panjang",
+    "2kg buncis",
+    "6kg kol",
+    "2kg sawi putih",
+    "1kg caisim",
+    "2kg cuciwis",
+    "2kg brokoli",
+    "2kg kembang kol",
+    "10 kg jagung",
+    "10kg madu",
+    "10kg kentang",
+    "5kg cabe merah",
+    "10kg bawang merah",
+    "2kg daging sapi",
+    "10 ikan cue keranjang",
+    "30 potong tongkol asap",
+    "30 potong paha ayam boiler",
+    "2 kg fillet dada ayam boiler",
+    "15 ayam pejantan",
+])
+
+
+def _chunk_items(count, offset):
+    return [
+        {"raw_name": f"bahan {offset + index}", "quantity": "2", "unit": "kg", "line_total_idr": None}
+        for index in range(1, count + 1)
+    ]
+
+
+def router_app(tmp_path, fake_client, **kwargs):
+    kwargs.setdefault("vision_api_key", "synthetic-stepfun-key")
+    app = create_app(
+        tmp_path / "demo.sqlite3",
+        text_llm_enabled=True,
+        text_llm_http_client=fake_client,
+        forwarded_router_enabled=True,
+        **kwargs,
+    )
+    client = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    from conftest import login_owner
+    login_owner(client)
+    return client
+
+
+def test_forwarded_router_reads_a_long_list_in_chunks(tmp_path):
+    # LLM_FORWARDED_ROUTER on: the 25-line forward is split into cap-sized
+    # chunks, read through the same rescue, and merged into one flagged draft.
+    fake = FakeTextClient()
+    fake.responses.append(completion({"items": _chunk_items(20, 0)}))
+    fake.responses.append(completion({"items": _chunk_items(5, 20)}))
+    client = router_app(tmp_path, fake)
+
+    draft = intake(client, DAD_LIST_2).json()["data"]
+    assert len(fake.calls) == 2
+    assert len(draft["items"]) == 25
+    # The rescue never invents values: no prices were stated, so every row
+    # stays empty on money and the whole draft waits flagged for confirmation.
+    assert all(item["line_total_idr"] is None for item in draft["items"])
+    assert draft["status"] == "needs_clarification"
+    first, second = fake.calls
+    assert "2kg daun bawang" in first["json"]["messages"][0]["content"]
+    assert "15 ayam pejantan" not in first["json"]["messages"][0]["content"]
+    assert "15 ayam pejantan" in second["json"]["messages"][0]["content"]
+    # The tenant rule rides along on every chunk.
+    assert "Warung Bu Sari" in second["json"]["messages"][0]["content"]
+
+
+def test_forwarded_router_failure_keeps_the_rules_refusal(tmp_path):
+    # A provider error must never turn a refusal into a partial draft.
+    fake = FakeTextClient()
+    fake.responses.append(FakeResponse(status_code=503, body={"error": {"message": "overloaded"}}))
+    client = router_app(tmp_path, fake)
+
+    draft = intake(client, DAD_LIST_2).json()["data"]
+    assert len(fake.calls) == 1
+    assert draft["items"] == []
+    assert any("20-item limit" in warning for warning in draft["warnings"])
+
+
+def test_forwarded_router_disabled_keeps_the_refusal_and_skips_the_model(tmp_path):
+    fake = FakeTextClient()
+    app = create_app(tmp_path / "demo.sqlite3", vision_api_key="synthetic-stepfun-key", text_llm_enabled=True, text_llm_http_client=fake)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    from conftest import login_owner
+    login_owner(client)
+
+    draft = intake(client, DAD_LIST_2).json()["data"]
+    assert fake.calls == []
+    assert draft["items"] == []
+    assert any("20-item limit" in warning for warning in draft["warnings"])
+
+
+def test_forwarded_router_ignores_a_long_chatty_message(tmp_path):
+    # A long forward without numbers (chat log, article) is not an itemized
+    # list; no model trip, the refusal stands.
+    fake = FakeTextClient()
+    client = router_app(tmp_path, fake)
+
+    chat = "\n".join(f"baris cerita tanpa angka nomor {word}" for word in ["satu", "dua", "tiga", "empat", "lima"] * 5)
+    draft = intake(client, chat).json()["data"]
+    assert fake.calls == []
+    assert draft["items"] == []
+
+
+def test_forwarded_router_caps_one_merged_draft(tmp_path):
+    # A runaway forward cannot produce an unusable wall of rows: the merged
+    # draft stops at the forwarded cap and says so.
+    fake = FakeTextClient()
+    for offset in (0, 20, 40):
+        fake.responses.append(completion({"items": _chunk_items(20, offset)}))
+    client = router_app(tmp_path, fake)
+
+    long_list = "\n".join(f"{index}kg bahan nomor {index}" for index in range(1, 61))
+    draft = intake(client, long_list).json()["data"]
+    assert len(fake.calls) == 3
+    assert len(draft["items"]) == 50
+    assert any("more than 50 items" in warning for warning in draft["warnings"])
+
+
+def test_dads_single_line_supplier_list_drafts_flagged(tmp_path):
+    # The first pilot fixture: one slash-separated line, no prices. The rules
+    # parser reads fragments; the rescue turns it into item rows whose money
+    # fields stay empty for the owner to fill.
+    fake = FakeTextClient()
+    fake.responses.append(completion({"items": [
+        {"raw_name": "telor ayam", "quantity": "2", "unit": None, "line_total_idr": None},
+        {"raw_name": "gula merah", "quantity": "2", "unit": None, "line_total_idr": None},
+        {"raw_name": "kemiri", "quantity": "5", "unit": "kg", "line_total_idr": None},
+    ]}))
+    client = rescue_app(tmp_path, fake)
+
+    draft = intake(client, "#1 Raw materials: 2 telor ayam / 2 gula merah / 5kg kemiri").json()["data"]
+    assert len(fake.calls) == 1
+    assert [item["raw_name"] for item in draft["items"]] == ["telor ayam", "gula merah", "kemiri"]
+    assert draft["items"][2]["quantity"] == "5"
+    assert all(item["line_total_idr"] is None for item in draft["items"])
+    assert draft["status"] == "needs_clarification"
