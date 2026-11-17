@@ -43,7 +43,8 @@ restaurant. Return one JSON object and nothing else, with this exact shape:
             "unit": string|null,
             "line_total_idr": integer|null,
             "confidence": "high"|"low"}],
- "unreadable": [string]}
+ "unreadable": [string],
+ "stated_total_idr": integer|null}
 
 Rules, in priority order:
 1. Copy numbers exactly as printed on that line. Never compute, convert,
@@ -52,21 +53,32 @@ Rules, in priority order:
 2. One item per printed line. At most %d items. Ignore store headers,
    addresses, dates, invoice numbers, subtotals, totals, tax, discounts, and
    payment notes.
-3. quantity is a plain decimal string ("2", "0.5", "1.25"). unit is one of
+3. Many vendors use a pre-printed order form whose catalog rows (name, empty
+   "banyaknya" and "jumlah" columns) are the vendor's blank template, not this
+   order. A row is a purchase ONLY when someone wrote a quantity or an amount
+   into it. Rows with both columns empty are template rows: never put them in
+   "items".
+4. Read every filled row, including short handwritten entries ("isi ulang",
+   "galon", refill water) and partly smudged ones. A hard-to-read filled row
+   goes in "items" with low confidence rather than being dropped.
+5. quantity is a plain decimal string ("2", "0.5", "1.25"). unit is one of
    kg, g, l, ml, ikat, karung, tray, pack, dus, pcs, buah. If the printed unit
    is different or absent, use null.
-4. line_total_idr is the printed rupiah amount for that whole line, as a whole
+6. line_total_idr is the printed rupiah amount for that whole line, as a whole
    number without separators ("31000"). Ignore "Rp", dots, and spaces.
-5. raw_name is the printed item name, lowercase, without the quantity or price.
-6. Use "low" confidence when handwriting, glare, or a fold made the line hard
+7. stated_total_idr is the grand total printed on the photo ("JUMLAH",
+   "Total"), copied exactly as a whole number without separators; null when
+   the photo shows none. Never compute it from the lines.
+8. raw_name is the printed item name, lowercase, without the quantity or price.
+9. Use "low" confidence when handwriting, glare, or a fold made the line hard
    to read, and add a short note to "unreadable".
-7. The nota may also list goods unrelated to the restaurant. The "items"
-   array must contain ONLY items used for restaurant or kitchen operations:
-   food ingredients, seasonings, beverages for the menu, and cooking or
-   packaging supplies. Never put a skipped item in "items". For every other
-   good — snacks, cigarettes, personal care, household goods, medicine —
-   add its name to "unreadable" prefixed with "skip:". When unsure whether
-   an item is kitchen-related, keep it in "items".
+10. The nota may also list goods unrelated to the restaurant. The "items"
+    array must contain ONLY items used for restaurant or kitchen operations:
+    food ingredients, seasonings, beverages for the menu, and cooking or
+    packaging supplies. Never put a skipped item in "items". For every other
+    good — snacks, cigarettes, personal care, household goods, medicine —
+    add its name to "unreadable" prefixed with "skip:". When unsure whether
+    an item is kitchen-related, keep it in "items".
 """ % MAX_ITEMS
 
 # Defense in depth for the tenant guard: every caller passes its restaurant
@@ -254,6 +266,21 @@ def clean_extraction(data):
     for note in data.get("unreadable") or []:
         if isinstance(note, str) and note.strip():
             warnings.append(f"Photo note: {note.strip()[:200]}")
+    # Cross-check the grand total the photo prints against the priced lines.
+    # A mismatch means a filled row was missed (template-form invoices hide
+    # filled rows between blank catalog rows) or a line was misread. The
+    # check only flags — it never fixes or invents values; the draft already
+    # waits for owner confirmation.
+    stated_total = _idr_amount(data.get("stated_total_idr"))
+    priced_sum = sum(
+        item["line_total_idr"] for item in items
+        if isinstance(item["line_total_idr"], int) and not isinstance(item["line_total_idr"], bool)
+    )
+    if stated_total and priced_sum and stated_total != priced_sum:
+        warnings.append(
+            f"The photo's printed total (Rp{stated_total:,}) does not match the sum of the priced lines "
+            f"(Rp{priced_sum:,}); a filled row may be missed or misread — check the draft."
+        )
     return {"supplier": supplier, "items": items, "warnings": warnings}
 
 

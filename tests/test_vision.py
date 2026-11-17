@@ -101,6 +101,65 @@ def test_extract_invoice_strips_a_code_fence():
     assert result == {"supplier": None, "items": [], "warnings": []}
 
 
+def test_extract_invoice_flags_a_stated_total_mismatch():
+    # Pilot regression (Warung Urang bon gas, 2026-11-17): a pre-printed
+    # order form. The model dropped the handwritten "isi ulang 8 = 48000"
+    # row, so the priced lines summed to 472000 while the photo printed a
+    # 520000 JUMLAH. The cross-check must flag that gap for the owner.
+    client = FakeVisionClient()
+    client.responses.append(completion({
+        "supplier": "WARUNG URANG",
+        "items": [
+            {"raw_name": "gas 12 kg", "quantity": "2", "unit": "pcs", "line_total_idr": 380000, "confidence": "high"},
+            {"raw_name": "gas 3 kg", "quantity": "4", "unit": "pcs", "line_total_idr": 92000, "confidence": "high"},
+        ],
+        "unreadable": [],
+        "stated_total_idr": 520000,
+    }))
+    result = run(client=client)
+
+    assert len(result["items"]) == 2
+    assert any("520,000" in warning and "472,000" in warning and "missed or misread" in warning
+               for warning in result["warnings"])
+
+
+def test_extract_invoice_passes_when_the_stated_total_matches():
+    client = FakeVisionClient()
+    client.responses.append(completion({
+        "supplier": "Petik Segar",
+        "items": [
+            {"raw_name": "cabai merah", "quantity": "3", "unit": "kg", "line_total_idr": 150000, "confidence": "high"},
+        ],
+        "unreadable": [],
+        "stated_total_idr": 150000,
+    }))
+    result = run(client=client)
+    assert result["warnings"] == []
+
+
+def test_extract_invoice_skips_the_total_check_without_a_stated_total():
+    # No printed grand total, or only unpriced lines: nothing to cross-check.
+    client = FakeVisionClient()
+    client.responses.append(completion({
+        "supplier": None,
+        "items": [{"raw_name": "gas 12 kg", "quantity": "2", "unit": None, "line_total_idr": None, "confidence": "high"}],
+        "unreadable": [],
+        "stated_total_idr": None,
+    }))
+    result = run(client=client)
+    assert not any("printed total" in warning for warning in result["warnings"])
+
+
+def test_vision_prompt_rejects_preprinted_template_rows():
+    # The Warung Urang form drafted ten empty catalog rows (Aqua/Vit price
+    # list) because nothing told the model they were the vendor's blank
+    # template. The prompt rule and the total field must stay in the prompt.
+    from service.vision import PROMPT
+    assert "template" in PROMPT and "banyaknya" in PROMPT
+    assert "stated_total_idr" in PROMPT
+    assert "isi ulang" in PROMPT
+
+
 def test_extract_invoice_rejects_more_than_twenty_lines():
     client = FakeVisionClient()
     client.responses.append(completion({
