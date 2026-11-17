@@ -25,7 +25,7 @@ from .operations import OperationsMixin, SQLITE_SCHEMA as OPERATIONS_SQLITE_SCHE
 from .purchase_sources import PurchaseSourcesMixin, SQLITE_SCHEMA as PURCHASE_SOURCES_SQLITE_SCHEMA
 from .purchase_idempotency import purchase_idempotent
 from .phone_auth import PhoneAuthMixin, SQLITE_SCHEMA as PHONE_AUTH_SQLITE_SCHEMA
-from .extraction import catalog_aliases, extract_purchase, is_chatter_item, normalize_item
+from .extraction import catalog_aliases, extract_purchase, is_chat_line_item, is_chatter_item, normalize_item
 from .notifications import refill_suggestion
 from .purchase_edits import PurchaseEditsMixin, parse_purchase_edit_command
 from .suppliers import SupplierMixin, parse_supplier_command
@@ -738,6 +738,13 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
     def _new_draft(self, conn, text, supplier, items, warnings, created_at=None, restaurant_id=None):
         if not restaurant_id:
             raise DomainError("restaurant_required", "A draft needs a restaurant.", 500)
+        # Greeting/question lines mixed into a purchase message never become
+        # draft rows: approving such a draft would file them as catalog
+        # ingredients ("Papa pagi ini beli" as an item). An all-chat text
+        # drafts empty and waits for real lines. The four-word sentence rule
+        # is not applied here so the LLM-rescue fallback keeps flexible
+        # sentences as unmodelled rows. Must stay in sync with pg_store.
+        items = [item for item in items if not is_chat_line_item(item)]
         items, field_warnings = self._normalize(items, self._catalog_for(restaurant_id))
         all_warnings = list(dict.fromkeys(list(warnings) + field_warnings))
         draft = {

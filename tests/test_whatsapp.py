@@ -425,6 +425,16 @@ def test_chatter_with_money_gets_help_not_a_draft(client):
     assert data(simulate(client, "batal"))["result"]["action"] == "rejected"
 
 
+def test_mixed_purchase_and_chat_message_drafts_only_real_items(client):
+    # Pilot owner pattern: a greeting and a question ride along with real
+    # purchase lines. The chatter classifies out of the draft entirely —
+    # approving never files "Papa pagi ini beli" as a catalog ingredient.
+    result = data(simulate(client, "Papa pagi ini beli\n3 gas 12kg\n4 gas 3kg\n8 galon air isi ulang\nbagaimana isinya, ci?"))
+    draft = result["draft"]
+    assert [item["raw_name"] for item in draft["items"]] == ["gas 12kg", "gas 3kg", "galon air isi ulang"]
+    assert data(simulate(client, "batal"))["result"]["action"] == "rejected"
+
+
 def test_greeting_text_gets_help_instead_of_an_empty_draft(client):
     before = len(overview(client)["drafts"])
     result = data(simulate(client, "hello"))
