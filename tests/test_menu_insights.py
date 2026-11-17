@@ -251,3 +251,20 @@ def test_question_with_numbers_is_still_a_question(tmp_path):
     seed_events(store, [sale("s1", "Nasi goreng", portions="10", revenue=150000, day=TODAY)])
     body = store.menu_facts("berapa terjual nasi goreng 4 hari terakhir?", TENANT)["body"]
     assert body and "4 hari terakhir" in body
+
+
+def test_sales_insights_returns_structured_ranking(tmp_path):
+    app = create_app(tmp_path / "insights-api.sqlite3")
+    store = app.state.store
+    seed_events(store, [
+        sale("s1", "Nasi goreng", portions="10", revenue=150000, day=TODAY),
+        sale("s2", "Mie ayam", portions="4", revenue=60000, day=TODAY),
+        sale("s3", "Nasi goreng", portions="8", revenue=120000, day=(datetime.now(timezone.utc) - timedelta(days=10)).date().isoformat()),
+    ])
+    data = store.sales_insights(TENANT, 7)
+    assert data["days"] == 7
+    assert data["menus"][0]["name"] == "Nasi goreng" and data["menus"][0]["portions"] == 10.0
+    assert data["menus"][1]["name"] == "Mie ayam"
+    assert data["total_portions"] == 14.0 and data["total_revenue"] == 210000
+    assert data["previous_total_portions"] == 8.0
+    assert data["delta_percent"] is not None

@@ -1522,6 +1522,15 @@ def create_app(
     def suppliers_list(actor=Depends(owner_actor)):
         return {"data": {"suppliers": store.suppliers_list(actor["restaurant_id"])}}
 
+    @app.get("/v1/suppliers/overview")
+    def suppliers_overview(actor=Depends(owner_actor)):
+        return {"data": store.supplier_overview(actor["restaurant_id"])}
+
+    @app.get("/v1/insights/sales")
+    def insights_sales(days: int = 7, actor=Depends(owner_actor)):
+        window = max(1, min(int(days), 90))
+        return {"data": store.sales_insights(actor["restaurant_id"], window)}
+
     @app.post("/v1/suppliers", status_code=201)
     def suppliers_add(body: Annotated[SupplierContact, Body()], actor=Depends(owner_actor), idempotency_key=Depends(key)):
         return {"data": store.supplier_add(idempotency_key, body.model_dump(), actor["restaurant_id"])}
