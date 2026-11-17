@@ -609,3 +609,20 @@ def test_context_note_reply_covers_all_intents():
     assert "stok" in chat_note_reply("question")
     assert "bukan catatan pembelian" in chat_note_reply("chat")
     assert "(cek pasar)" in chat_note_reply("other", "cek pasar")
+
+
+def test_an_unset_text_model_falls_back_to_the_default(tmp_path):
+    # Live regression risk: STEPFUN_TEXT_MODEL unset sent "model": null to
+    # StepFun, which answers 404, and every text-LLM path silently failed
+    # open to the deterministic parser. The app must fall back to the
+    # documented default model instead.
+    fake = FakeTextClient()
+    fake.responses.append(completion({"items": [CABAI_ITEM]}))
+    app = create_app(tmp_path / "demo.sqlite3", vision_api_key="synthetic-stepfun-key",
+                     text_llm_enabled=True, text_llm_http_client=fake, text_llm_model=None)
+    client = TestClient(app, base_url="http://127.0.0.1")
+    from conftest import login_owner
+    login_owner(client)
+    intake(client, "cabai 3 kg, ada peringatan")
+    from service.text_llm import DEFAULT_MODEL
+    assert fake.calls[0]["json"]["model"] == DEFAULT_MODEL
