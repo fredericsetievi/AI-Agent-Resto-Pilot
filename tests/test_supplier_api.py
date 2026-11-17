@@ -71,3 +71,26 @@ def record_purchase(client, text):
     approved = client.post("/v1/whatsapp/simulate", headers=headers(), json={"sender": "628123456789", "text": "ya"})
     assert approved.status_code == 200, approved.text
     return approved.json()["data"]["messages"][-1]
+
+
+def test_supplier_overview_returns_quotes_and_suppliers(tmp_path):
+    app, client, _ = fresh_app(tmp_path)
+    client.post("/v1/suppliers", headers=headers(), json={"name": "Pak Budi", "contact_phone": "628888000777"})
+    quote_recorded = client.post("/v1/whatsapp/simulate", headers=headers(),
+                                 json={"sender": "628123456789", "text": "catat harga cabai pak budi 35rb"})
+    assert quote_recorded.status_code == 200, quote_recorded.text
+
+    overview = client.get("/v1/suppliers/overview").json()["data"]
+    assert "Pak Budi" in [s["name"] for s in overview["suppliers"]]
+    assert overview["quotes"], "the recorded quote must appear in the overview"
+    quote = overview["quotes"][0]
+    assert quote["supplier_name"] == "Pak Budi" and quote["ingredient_name"] == "Cabai merah"
+    assert quote["unit_price_idr"] == 35000
+    assert {"supplier_name", "ingredient_name", "unit_price_idr", "created_at"} <= set(quote)
+
+
+def test_supplier_overview_is_owner_only(tmp_path):
+    app, client, admin = fresh_app(tmp_path)
+    anon = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    assert anon.get("/v1/suppliers/overview").status_code == 401
+    assert client.get("/v1/suppliers/overview").status_code == 200

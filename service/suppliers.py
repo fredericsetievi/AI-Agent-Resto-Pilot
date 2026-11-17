@@ -14,6 +14,7 @@ numbers in both directions.
 
 import json
 import re
+from datetime import datetime
 import uuid
 from decimal import Decimal, InvalidOperation
 
@@ -1036,6 +1037,29 @@ class SupplierMixin:
         return {"stored": stored, "unparsed": unparsed}
 
 
+    def supplier_overview(self, restaurant_id, quote_limit=60):
+        """Structured data for the dashboard supplier page: suppliers, recent
+        quotes across suppliers, and the last recorded purchase price per
+        ingredient (comparison baseline). Read-only, tenant-scoped."""
+        suppliers = self.suppliers_list(restaurant_id)
+        tc = self._tenant_col()
+        quotes = []
+        with self.transaction() as conn:
+            rows = self._inventory_query(
+                conn,
+                "SELECT q.supplier_id, s.name, q.ingredient_id, q.ingredient_name, "
+                "q.unit_price_idr, q.note, q.created_at "
+                "FROM supplier_price_quotes q JOIN suppliers s ON s.id=q.supplier_id "
+                f"WHERE q.{tc}=? ORDER BY q.created_at DESC, q.id DESC LIMIT {int(quote_limit)}",
+                (restaurant_id,)).fetchall()
+        for supplier_id, supplier_name, ingredient_id, ingredient_name, price, note, created_at in rows:
+            if isinstance(created_at, datetime):
+                created_at = created_at.isoformat()
+            quotes.append({"supplier_id": supplier_id, "supplier_name": supplier_name,
+                           "ingredient_id": ingredient_id, "ingredient_name": ingredient_name,
+                           "unit_price_idr": price, "note": note, "created_at": created_at})
+        return {"suppliers": suppliers, "quotes": quotes}
+
 def _MONEY_IDR(line):
     match = _MONEY.search(str(line or ""))
     if not match:
@@ -1087,6 +1111,7 @@ def _inquiry_request_text_module(text):
 
 
 
+
 def supplier_alert_hint(store, restaurant_id, candidates):
     """One line naming the cheapest known source per low-stock ingredient.
 
@@ -1109,3 +1134,5 @@ def supplier_alert_hint(store, restaurant_id, candidates):
                 price = f"Rp{purchase['unit_price_idr']:,}".replace(",", ".")
                 hints.append(f"{name}: harga beli terakhir {price} ({purchase.get('supplier') or 'tanpa pemasok'})")
     return ("Harga termurah yang tercatat: " + "; ".join(hints) + ".") if hints else None
+
+

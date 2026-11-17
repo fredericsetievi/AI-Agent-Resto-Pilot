@@ -434,3 +434,50 @@ class MenuInsightsMixin:
             lines.append("• Omzet per porsi belum tercatat — catat penjualan dengan omzetnya, misalnya 'terjual 4 nasi goreng, omzet 60rb'.")
         lines.append("Biaya memakai harga pembelian terakhir 30 hari; angka adalah estimasi.")
         return "\n".join(lines)
+    def sales_insights(self, restaurant_id, days=7, conn=None):
+        """Structured sales facts for the dashboard insights panel.
+
+        Same evidence as the chat ranking, shaped for rendering: per-menu
+        portions and revenue for the window, the equal-length previous
+        window, and the totals delta. Read-only.
+        """
+        start, end, prev_start = _insights_window(days)
+        if conn is None:
+            with self.transaction() as conn:
+                events = self._menu_sale_events(conn, restaurant_id)
+        else:
+            events = self._menu_sale_events(conn, restaurant_id)
+        current, revenue, portions, revenue_known = self._aggregate(events, start, end)
+        prev, prev_revenue, prev_portions, _ = self._aggregate(events, prev_start, start)
+        menus = [
+            {"name": name,
+             "portions": float(entry["portions"]),
+             "revenue": int(entry["revenue"]) if entry["revenue_known"] else None,
+             "events": entry["events"]}
+            for name, entry in sorted(current.items(), key=lambda kv: (kv[1]["portions"], kv[1]["revenue"]), reverse=True)
+        ]
+        delta = _percent_change(portions, prev_portions)
+        return {"days": days,
+                "start": start.isoformat(), "end": end.isoformat(),
+                "menus": menus,
+                "total_portions": float(portions),
+                "total_revenue": int(revenue) if revenue_known else None,
+                "previous_total_portions": float(prev_portions),
+                "previous_total_revenue": int(prev_revenue) if _prev_known(prev) else None,
+                "delta_percent": delta}
+
+
+def _insights_window(days):
+    """Date bounds for the dashboard insights: the last `days` days including
+    today (local restaurant date, matching the chat windows), plus the
+    equal-length window immediately before it."""
+    from datetime import date as _date, timedelta as _timedelta
+    today = _date.today()
+    start = today - _timedelta(days=days - 1)
+    end = today + _timedelta(days=1)
+    prev_start = start - _timedelta(days=days)
+    return (start, end, prev_start)
+
+
+def _prev_known(prev_stats):
+    return any(entry["revenue_known"] for entry in prev_stats.values())
