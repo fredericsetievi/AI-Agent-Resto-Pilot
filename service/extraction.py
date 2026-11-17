@@ -139,6 +139,12 @@ _ORDER_PREFIX = re.compile(r"(?i)^(?:tolong|sy|saya|mau|mo|pengen|po|pesan|order
 # beli gula 1 kg") are chat, not the item name; strip them so the name
 # matches and the owner does not get a phantom "tadi pagi beli telur" row.
 _TIME_PREFIX = re.compile(r"(?i)^(?:tadi\s+(?:pagi|siang|sore|malam)|kemarin|nanti(?:\s+(?:pagi|siang|sore|malam))?|barusan)\s+")
+# Payment statements lead follow-ups ("sudah bayar telur 30000"); the "bayar"
+# word is about money already spent, not the item name. Strip the prefix so
+# "telur 30000" parses as a flagged item row instead of a pseudo-item called
+# "sudah bayar telur" with quantity 30000. Requires a letter after it so a
+# payment-only clause ("bayar 30000") keeps its payment handling.
+_PAYMENT_STATEMENT_PREFIX = re.compile(r"(?i)^(?:sudah|udah|udh)?\s*bayar(?:an)?\s+(?=[a-z])")
 # Messages close with courtesy ("... 10 dus ya 🙏"); trailing emoji and
 # politeness words are chatter, not part of the item name or quantity.
 _SYMBOL_TAIL = re.compile(r"[^\w\s]+\s*$")
@@ -561,6 +567,11 @@ def _parse_clause(clause: str, line_number: int) -> tuple[dict[str, Any] | None,
             break
         source = stripped
     for _ in range(4):
+        stripped = _PAYMENT_STATEMENT_PREFIX.sub("", source).strip()
+        if stripped == source:
+            break
+        source = stripped
+    for _ in range(4):
         stripped = _ORDER_PREFIX.sub("", source).strip()
         if stripped == source:
             break
@@ -939,6 +950,17 @@ def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
         warnings.append("Quantity is missing.")
     elif qty is None:
         warnings.append("Quantity is invalid or outside the supported bounds.")
+    elif qty >= 1000:
+        # A real warung purchase is never 1,000+ of a unit; a value that big
+        # is a misread count ("jam 8", a price read as quantity) or a typo.
+        # Flag it so it needs clarification instead of looking legitimate.
+        warnings.append("Quantity is unusually large (1,000 or more); double-check it.")
+
+    raw_name = item.get("raw_name")
+    if isinstance(raw_name, str) and len(raw_name.strip()) > 60:
+        # A sentence pasted as an item name ("sudah bayar telur", a copy of a
+        # message) would create a garbage catalog ingredient on approval.
+        warnings.append("Item name is unusually long; verify this row.")
 
     unit_raw = item.get("unit")
     unit = _UNIT_ALIASES.get(unit_raw.casefold(), unit_raw.casefold()) if isinstance(unit_raw, str) else None
@@ -1005,8 +1027,12 @@ def normalize_item(item: dict[str, Any]) -> dict[str, Any]:
         warnings.append("Line total is missing.")
 
     canonical_quantity = result["canonical_quantity"]
-    if total is not None and canonical_quantity is not None and not warnings:
+    if total is not None and canonical_quantity is not None:
+        # Computed whenever both sides are valid, even with other warnings —
+        # an absurd-quantity row still shows its implied unit price. Quantized
+        # to cents: "beras 999999 kg 1000rb" must not render as
+        # "Rp1,000001000001..." (division precision garbage).
         normalized_quantity = Decimal(canonical_quantity)
-        price = Decimal(total) / normalized_quantity
+        price = (Decimal(total) / normalized_quantity).quantize(Decimal("0.01"))
         result["unit_price_idr"] = _plain_decimal(price)
     return result
