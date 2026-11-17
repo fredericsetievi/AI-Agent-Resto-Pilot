@@ -468,6 +468,55 @@ HELP_REPLY = (
     "Halo! 👋 Saya asisten pembelian RestoPilot. Kirim catatan belanja seperti "
     "'Beli bawang 2 kg 80 rb', foto nota, atau voice note — saya langsung buatkan drafnya."
 )
+# Owners ask for the dashboard link by name ("dashboard", "link", "situs") —
+# a deterministic reply carries the configured public origin, no model needed.
+DASHBOARD_LINK_KEYWORDS = {"dashboard", "website", "web", "situs", "link"}
+
+# The extractor refuses inputs over 20 non-empty lines. Without this reply the
+# owner only sees the generic help text with no explanation why nothing happened.
+TOO_MANY_LINES_REPLY = (
+    "Terlalu banyak baris sekaligus (maksimal 20) 📝\n\n"
+    "Pecah jadi beberapa pesan, misalnya: bahan kering dulu, lalu sayuran, "
+    "lalu protein. Kirim satu bagian, tunggu drafnya, lalu lanjut bagian berikutnya."
+)
+
+_LIMIT_WARNING_MARKER = "20-item limit"
+
+
+def input_over_line_limit(warnings):
+    """True when the extractor refused the input for its 20-item cap."""
+    return any(_LIMIT_WARNING_MARKER in str(w) for w in warnings or ())
+
+
+def _dashboard_url(public_base_url):
+    if not public_base_url:
+        return None
+    return str(public_base_url).strip().rstrip("/") + "/app.html"
+
+
+def dashboard_link_line(public_base_url):
+    """One-line dashboard pointer appended to the help reply, or None when the
+    public origin is not configured (local/offline deployments)."""
+    url = _dashboard_url(public_base_url)
+    return f"Dashboard: {url}" if url else None
+
+
+def dashboard_link_reply(text, public_base_url):
+    """Full reply when the owner asks for the dashboard link. Returns None when
+    the origin is not configured or the text is not a dashboard request, so the
+    caller falls back to the normal help reply. Only reached for texts with no
+    purchase signal, so real purchase lines are never hijacked."""
+    if not public_base_url:
+        return None
+    words = {w.strip(".,!?()[]\"'").casefold() for w in str(text or "").split()}
+    if not words & DASHBOARD_LINK_KEYWORDS:
+        return None
+    url = _dashboard_url(public_base_url)
+    return (
+        "Buka dashboard RestoPilot di browser:\n"
+        f"{url}\n\n"
+        "Login pakai akun owner resto. Untuk catat belanja cepat, tetap chat di sini saja ya."
+    )
 # Sent to WhatsApp numbers the admin has not linked to any restaurant. Nothing
 # about the sender's message is processed, stored as a draft, or answered.
 UNREGISTERED_REPLY = (

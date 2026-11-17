@@ -55,3 +55,29 @@ def login_owner(client):
 
 def login_admin(client):
     return login(client, ADMIN["username"], ADMIN["password"])
+
+
+def freeze_api_clock(monkeypatch, hour, *, date=(2026, 11, 13)):
+    """Pin service.api's wall clock (Asia/Jakarta) so reminder tests are deterministic.
+
+    The reminder engine fires only inside the exact configured hour and refuses
+    quiet hours (22:00–07:00 WIB), so tests that drive /v1/reminders/check must
+    not depend on when they run — CI executes at arbitrary hours and the suite
+    previously failed on every evening run. Freezing api.datetime makes the
+    engine's clock deterministic; other modules keep their own clocks.
+
+    Returns the frozen aware datetime for tests that need matching dates.
+    """
+    import service.api as api_module
+    from datetime import datetime as real_datetime
+    from zoneinfo import ZoneInfo
+
+    fixed = real_datetime(*date, hour, tzinfo=ZoneInfo("Asia/Jakarta"))
+
+    class _FrozenDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed if tz is None else fixed.astimezone(tz)
+
+    monkeypatch.setattr(api_module, "datetime", _FrozenDateTime)
+    return fixed

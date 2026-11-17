@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from conftest import login_owner
+from conftest import freeze_api_clock, login_owner
 from service.api import create_app
 from service.db import RESTAURANT_TIMEZONE
 from service.reminders import parse_reminder_command, reminder_command_reply
@@ -122,20 +122,17 @@ def test_ingest_draft_survives_a_reminder_command(tmp_path):
 
 # ---- run_reminder_check via the route --------------------------------------
 
-def test_morning_reminder_sends_once_per_day(tmp_path):
+def test_morning_reminder_sends_once_per_day(tmp_path, monkeypatch):
     fake = FakeGraphClient(content_json=None)
     client = owner_client(tmp_path, **META, meta_http_client=fake)
     check = lambda: client.post("/v1/reminders/check", json=None).json()["data"]
-    # The seeded schedule is the defaults (9/21); dry_run shows what would go.
+    # Freeze the engine clock at 09:00 WIB: the seeded default morning hour.
+    freeze_api_clock(monkeypatch, hour=9)
+    # Dry run shows what would go out without marking or sending.
     dry = client.post("/v1/reminders/check?dry_run=true").json()["data"]
-    assert dry["slot"] is None  # 09:00 WIB does not match the test run's real clock
-    # Drive the clock directly: schedule the morning slot to now's hour.
+    assert dry["slot"] == "morning"
     store = client.app.state.store
     resto = store.list_restaurants()[0]["id"]
-    hour = datetime.now(RESTAURANT_TIMEZONE).hour or 9
-    if not 7 <= hour <= 21:
-        hour = 9
-    store.set_reminder_settings(resto, morning_hour=hour)
     inbound_hours_ago(store)
     result = check()
     assert result["slot"] == "morning" and result["sent"][0]["ok"] is True
@@ -146,15 +143,12 @@ def test_morning_reminder_sends_once_per_day(tmp_path):
     assert again["slot"] is None and len(fake.calls) == 1
 
 
-def test_evening_reminder_and_disabled_schedule(tmp_path):
+def test_evening_reminder_and_disabled_schedule(tmp_path, monkeypatch):
     fake = FakeGraphClient(content_json=None)
     client = owner_client(tmp_path, **META, meta_http_client=fake)
+    freeze_api_clock(monkeypatch, hour=21)  # the seeded default evening hour
     store = client.app.state.store
     resto = store.list_restaurants()[0]["id"]
-    hour = datetime.now(RESTAURANT_TIMEZONE).hour
-    if not 7 <= hour <= 21:
-        hour = 21
-    store.set_reminder_settings(resto, evening_hour=hour)
     inbound_hours_ago(store)
     result = client.post("/v1/reminders/check").json()["data"]
     assert result["slot"] == "evening" and result["sent"][0]["ok"] is True
@@ -164,15 +158,11 @@ def test_evening_reminder_and_disabled_schedule(tmp_path):
     assert client.post("/v1/reminders/check").json()["data"]["slot"] is None
 
 
-def test_silence_aware_skip_after_recent_interaction(tmp_path):
+def test_silence_aware_skip_after_recent_interaction(tmp_path, monkeypatch):
     fake = FakeGraphClient(content_json=None)
     client = owner_client(tmp_path, **META, meta_http_client=fake)
+    freeze_api_clock(monkeypatch, hour=9)
     store = client.app.state.store
-    resto = store.list_restaurants()[0]["id"]
-    hour = datetime.now(RESTAURANT_TIMEZONE).hour
-    if not 7 <= hour <= 21:
-        hour = 9
-    store.set_reminder_settings(resto, morning_hour=hour)
     # A fresh inbound message: the owner is at the chat, no nudge needed.
     store.whatsapp_ingest(uuid4().hex, {"sender": SENDER, "text": "berapa sisa cabai?"})
     result = client.post("/v1/reminders/check").json()["data"]
@@ -184,7 +174,8 @@ def test_silence_aware_skip_after_recent_interaction(tmp_path):
     assert result["sent"][0]["ok"] is True
 
 
-def test_quiet_hours_never_send(tmp_path):
+def test_quiet_hours_never_send(tmp_path, monkeypatch):
+    freeze_api_clock(monkeypatch, hour=9)  # deterministic hour, far from the forced 23
     client = owner_client(tmp_path, **META, meta_http_client=FakeGraphClient(content_json=None))
     store = client.app.state.store
     resto = store.list_restaurants()[0]["id"]
