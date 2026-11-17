@@ -45,6 +45,7 @@ SUPPORTED_ENV_KEYS = {
     "LLM_STOCK_ANSWER",
     "LLM_INTENT",
     "LLM_FORWARDED_ROUTER",
+    "LLM_CONTEXT_GATE",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
     "TELEGRAM_API_BASE",
@@ -118,6 +119,9 @@ def main():
     # that defaults OFF: it changes the over-20-line refusal into a model
     # read, so the pilot turns it on explicitly (LLM_FORWARDED_ROUTER=1).
     forwarded_router_enabled = bool(vision_api_key) and (setting("LLM_FORWARDED_ROUTER") or "").strip().casefold() in {"1", "true", "yes", "on"}
+    # The context gate also defaults OFF: it asks the model one bounded
+    # question before a suspicious chat-derived draft is filed.
+    context_gate_enabled = bool(vision_api_key) and (setting("LLM_CONTEXT_GATE") or "").strip().casefold() in {"1", "true", "yes", "on"}
     telegram_settings = {
         "telegram_bot_token": setting("TELEGRAM_BOT_TOKEN"),
         "telegram_webhook_secret": setting("TELEGRAM_WEBHOOK_SECRET"),
@@ -167,6 +171,10 @@ def main():
         print(f"Forwarded-supplier-list router: enabled (model {text_llm_model or 'default'}; long forwards are read in chunks, rows stay flagged for confirmation; set LLM_FORWARDED_ROUTER=0 to disable)")
     else:
         print("Forwarded-supplier-list router: disabled (set LLM_FORWARDED_ROUTER=1 to read long forwards)")
+    if context_gate_enabled:
+        print(f"Context gate: enabled (model {text_llm_model or 'default'}; chat-derived pseudo-purchases are re-read before drafting; set LLM_CONTEXT_GATE=0 to disable)")
+    else:
+        print("Context gate: disabled (set LLM_CONTEXT_GATE=1 to re-read suspicious chat drafts)")
     uvicorn.run(
         create_app(
             str(args.db),
@@ -187,6 +195,7 @@ def main():
             stock_llm_enabled=bool(stock_llm_enabled),
             intent_llm_enabled=bool(intent_llm_enabled),
             forwarded_router_enabled=bool(forwarded_router_enabled),
+            context_gate_enabled=bool(context_gate_enabled),
             public_demo=public_demo,
             proactive_check_interval_seconds=proactive_hours * 3600,
             whatsapp_open_onboarding=setting("WHATSAPP_OPEN_ONBOARDING", "1").strip().casefold() in {"1", "true", "yes", "on"},

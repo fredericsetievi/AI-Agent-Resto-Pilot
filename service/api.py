@@ -54,11 +54,12 @@ from .extraction import (
     FORWARDED_MAX_ITEMS,
     extract_purchase,
     has_itemized_purchase_signal,
+    has_uncontextual_quantity_items,
     split_message_chunks,
 )
 from .suppliers import parse_supplier_command
 from .suppliers import supplier_alert_hint, supplier_inquiry_send
-from .intent_llm import classify_intent
+from .intent_llm import classify_context, classify_intent
 from .operation_extraction import caption_requests_purchase, extract_operations_document, parse_operations_text
 from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .notifications import build_alert_text, build_refill_plan_text, phrase_alert
@@ -114,6 +115,7 @@ from .whatsapp import (
     parse_payment_followup,
     parse_webhook,
     input_over_line_limit,
+    chat_note_reply,
     stock_reply,
     public_origin,
     opname_reply,
@@ -404,6 +406,7 @@ def create_app(
     intent_llm_enabled=False,
     intent_llm_http_client=None,
     forwarded_router_enabled=False,
+    context_gate_enabled=False,
     telegram_bot_token=None,
     telegram_webhook_secret=None,
     telegram_api_base=TELEGRAM_DEFAULT_API_BASE,
@@ -566,6 +569,31 @@ def create_app(
                         rescued["supplier"] = extracted["supplier"]
                     return rescued
             return extracted
+        if context_gate_enabled and has_uncontextual_quantity_items(extracted):
+            # The parser drafted chat: a sentence plus a number that is a
+            # time or label ("jam 8") became a quantity-only row, which every
+            # chatter guard lets through. The gate reads the whole message
+            # and asks one bounded question — is this a purchase at all? A
+            # no verdict files no draft; the note rides to the help reply.
+            # Fail-open: any classifier problem keeps the rules result.
+            try:
+                verdict = await classify_context(
+                    text,
+                    api_key=vision_api_key,
+                    model=text_llm_model,
+                    base_url=vision_base_url,
+                    client=text_llm_http_client,
+                )
+            except (StepFunTextError, ValueError) as exc:
+                logger.warning("Context gate could not classify; keeping the rules result: %s", exc)
+                verdict = None
+            if verdict is not None and not verdict["is_purchase"]:
+                return {
+                    "items": [],
+                    "warnings": [],
+                    "supplier": None,
+                    "chat_note": chat_note_reply(verdict["intent"], verdict["summary"]),
+                }
         if _rules_draft_complete(extracted):
             return extracted
         try:

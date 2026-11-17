@@ -1589,7 +1589,8 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                             result["action"] = "dashboard_link"
                         else:
                             link_line = dashboard_link_line(self.public_base_url)
-                            reply = HELP_REPLY + (f"\n\n{link_line}" if link_line else "")
+                            note = str(extracted.get("chat_note") or "").strip()
+                            reply = HELP_REPLY + (f"\n\n{note}" if note else "") + (f"\n\n{link_line}" if link_line else "")
                             result["action"] = "help_reply"
                 else:
                     draft = self._new_draft(conn, payload["text"], extracted.get("supplier"), extracted["items"], extracted["warnings"], restaurant_id=tenant)
