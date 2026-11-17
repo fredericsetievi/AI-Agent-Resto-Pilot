@@ -18,6 +18,7 @@ import hashlib
 import re
 import io
 import logging
+import os
 from datetime import datetime, timedelta
 from contextlib import AsyncExitStack
 from time import perf_counter
@@ -496,8 +497,11 @@ def create_app(
     # environment for Telegram so a credentials-only change never needs a
     # code change (the adapter process env carries the project Keys).
     if hosted and not (telegram_bot_token and telegram_webhook_secret):
-        import os
-
+        # NOTE: do not `import os` here. A function-level import makes `os`
+        # a local of create_app for the whole body; when the adapter passes
+        # Telegram credentials and skips this branch, the hosted boot env
+        # check below raised UnboundLocalError and failed closed (the
+        # 2026-11-17 outage). os is imported at module level instead.
         telegram_bot_token = telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
         telegram_webhook_secret = telegram_webhook_secret or os.environ.get("TELEGRAM_WEBHOOK_SECRET")
         if telegram_api_base == TELEGRAM_DEFAULT_API_BASE:
@@ -590,7 +594,6 @@ def create_app(
     # lets the existing "owner" account authenticate through the normal
     # store.verify_login against its stored hash. Every other default
     # credential (including admin's) stays blocked.
-    import os
     allow_demo_owner_login = hosted and os.environ.get("ALLOW_DEMO_OWNER_LOGIN", "") == "1"
     if allow_demo_owner_login:
         logger.warning("ALLOW_DEMO_OWNER_LOGIN is enabled: the 'owner' account may log in with its existing password.")

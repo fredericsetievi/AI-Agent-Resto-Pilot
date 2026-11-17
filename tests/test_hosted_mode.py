@@ -115,6 +115,23 @@ def anon(app):
 
 # ---- configuration -------------------------------------------------------------
 
+def test_hosted_boot_survives_adapter_passed_telegram_credentials(hosted_env, monkeypatch):
+    """Regression for the 2026-11-17 outage: create_app had a function-level
+    `import os` inside the Telegram env-fallback branch. With the adapter
+    passing Telegram credentials (branch skipped) Python still made `os` a
+    local of create_app, so the hosted boot env check raised
+    UnboundLocalError and the app failed closed with all keys present."""
+    hosted_env.setenv("SUPABASE_DB_PASSWORD", PLACEHOLDER_PASSWORD)
+    install_fake_pool(monkeypatch, full_schema())
+    app = create_app("unused-db-path", hosted=True, public_demo=True, public_base_url="https://restopilot.test",
+                     telegram_bot_token="123456789:AA" + "x" * 30, telegram_webhook_secret="w" * 32)
+    with anon(app) as client:
+        assert client.get("/health/live").status_code == 200
+        # The point is the app booted past the hosted env check with the
+        # Telegram branch skipped, instead of raising UnboundLocalError.
+        assert client.get("/health/ready").status_code == 200
+
+
 def test_direct_connection_is_the_default(hosted_env):
     hosted_env.setenv("SUPABASE_DB_PASSWORD", PLACEHOLDER_PASSWORD)
     config = pg.db_config()
