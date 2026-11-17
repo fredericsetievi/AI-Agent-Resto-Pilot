@@ -231,6 +231,16 @@ def clean_extraction(data):
         }
 
     items = []
+    skipped_templates = 0
+    # Order-form noise vs a damaged real nota: a photo with priced rows is a
+    # filled receipt whose pre-printed catalog rows carry nothing by design —
+    # skip those empty rows. A photo with NO priced rows (folded price
+    # column, washed-out ink) keeps every row with warnings so the owner can
+    # type the values in.
+    has_priced_rows = any(
+        isinstance(raw, dict) and _idr_amount(raw.get("line_total_idr")) is not None
+        for raw in raw_items
+    )
     for index, raw in enumerate(raw_items, 1):
         label = f"Line {index}"
         if not isinstance(raw, dict):
@@ -245,6 +255,15 @@ def clean_extraction(data):
         quantity = _quantity_text(raw.get("quantity"))
         unit = canonical_unit_name(raw.get("unit"))
         total = _idr_amount(raw.get("line_total_idr"))
+        if has_priced_rows and quantity is None and total is None:
+            # The prompt tells the model to skip pre-printed template rows,
+            # but model behavior is probabilistic and the pilot receipt
+            # shows it returns them anyway. With money elsewhere on the
+            # photo, a row with neither a count nor an amount is an
+            # unfilled order-form line, never a purchase — skip it
+            # deterministically so the owner never confirms a phantom row.
+            skipped_templates += 1
+            continue
         if quantity is None:
             warnings.append(f"{label}: quantity is missing or unreadable; type it in.")
         if unit is None:
@@ -263,6 +282,8 @@ def clean_extraction(data):
             "line_total_idr": total,
             **({"matched_from": raw_name} if fuzzy and ingredient_id else {}),
         })
+    if skipped_templates:
+        warnings.insert(0, f"{skipped_templates} order-form rows with nothing written in them were skipped.")
     for note in data.get("unreadable") or []:
         if isinstance(note, str) and note.strip():
             warnings.append(f"Photo note: {note.strip()[:200]}")

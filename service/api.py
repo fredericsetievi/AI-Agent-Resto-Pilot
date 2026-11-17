@@ -65,7 +65,7 @@ from .kitchen_filter import classify_items, NON_KITCHEN_WARNING
 from .notifications import build_alert_text, build_refill_plan_text, phrase_alert
 from .pdfpages import PdfRenderError, render_pdf_pages
 from .rules import effective_directives
-from .text_llm import StepFunTextError, extract_message
+from .text_llm import DEFAULT_MODEL as TEXT_DEFAULT_MODEL, StepFunTextError, extract_message
 from .stock_llm import phrase_stock_answer
 from .telegram import (
     DEFAULT_API_BASE as TELEGRAM_DEFAULT_API_BASE,
@@ -421,6 +421,11 @@ def create_app(
 ):
     """Build the app.
 
+    An unset STEPFUN_TEXT_MODEL must not silently 404 every text-LLM call:
+    a ``None`` model reaches the provider payload and the provider answers
+    HTTP 404, which all the LLM paths swallow as fail-open. Fall back to the
+    documented default model instead so the features work out of the box.
+
     ``hosted=True`` is the deployment mode for an existing Supabase ledger:
     startup only validates the schema (no demo users, allowlist, metadata or
     stock writes), a missing or unreachable database fails closed with a JSON
@@ -439,6 +444,7 @@ def create_app(
         telegram_webhook_secret = telegram_webhook_secret or os.environ.get("TELEGRAM_WEBHOOK_SECRET")
         if telegram_api_base == TELEGRAM_DEFAULT_API_BASE:
             telegram_api_base = os.environ.get("TELEGRAM_API_BASE") or telegram_api_base
+    text_llm_model = text_llm_model or TEXT_DEFAULT_MODEL
     # The proactive loop closes over store/run_proactive_check by name; both
     # are bound below before any request (or lifespan call) can run. The
     # reminder loop does the same with run_reminder_check.

@@ -170,6 +170,36 @@ def test_extract_invoice_rejects_more_than_twenty_lines():
     assert "more than 20 lines" in result["warnings"][0]
 
 
+def test_clean_extraction_drops_empty_order_form_rows():
+    # Live regression (Warung Urang bon gas, pilot): the model returns the
+    # pre-printed catalog rows of an order form even though the prompt asks
+    # it not to — 9 Aqua/Vit template rows with nothing written in them
+    # beside the 3 filled gas lines. A real nota line always carries a count
+    # or an amount, so empty rows are template noise and are skipped.
+    from service.vision import clean_extraction
+
+    data = {
+        "supplier": "WARUNG URANG",
+        "items": [
+            {"raw_name": "aqua galon"}, {"raw_name": "aqua 600 ml"}, {"raw_name": "vit 1500 ml"},
+            {"raw_name": "gas 12 kg", "quantity": "2", "line_total_idr": 380000},
+            {"raw_name": "gas 5.5 kg"},
+            {"raw_name": "gas 3 kg", "quantity": "4", "line_total_idr": 92000},
+            {"raw_name": "isi ulang", "quantity": "8", "line_total_idr": 48000},
+        ],
+    }
+    result = clean_extraction(data)
+    names = [item["raw_name"] for item in result["items"]]
+    assert names == ["gas 12 kg", "gas 3 kg", "isi ulang"]
+    assert any("skipped" in warning for warning in result["warnings"])
+    assert sum(item["line_total_idr"] for item in result["items"]) == 520000
+    # But a photo with NO priced rows (folded price column) keeps every row
+    # with warnings — that is a damaged real nota, not a template form.
+    result = clean_extraction({"supplier": "Toko", "items": [{"raw_name": "telur"}]})
+    assert result["items"] and result["items"][0]["raw_name"] == "telur"
+    assert any("quantity is missing" in warning for warning in result["warnings"])
+
+
 def test_extract_invoice_rejects_a_provider_error_without_leaking_the_key():
     client = FakeVisionClient()
     client.responses.append(FakeResponse(status_code=401, body={"error": {"message": "bad key"}}))
