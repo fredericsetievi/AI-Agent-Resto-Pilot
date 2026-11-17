@@ -139,6 +139,31 @@ def test_invalid_port_is_rejected(hosted_env):
         pg.db_config()
 
 
+def test_restopilot_db_aliases_are_honoured(hosted_env):
+    # The 2026-11-17 Atoms outage path: the platform's Cloud Keys held the
+    # values but the published runtime behaved as if SUPABASE_DB_HOST were
+    # empty. The neutral RESTOPILOT_DB_* names carry the same values.
+    hosted_env.setenv("SUPABASE_DB_PASSWORD", PLACEHOLDER_PASSWORD)
+    hosted_env.setenv("RESTOPILOT_DB_HOST", "aws-0-ap-southeast-1.pooler.supabase.com")
+    hosted_env.setenv("RESTOPILOT_DB_PORT", "5432")
+    hosted_env.setenv("RESTOPILOT_DB_USER", "postgres.exampleref")
+    config = pg.db_config()
+    assert (config["host"], config["port"], config["user"]) == (
+        "aws-0-ap-southeast-1.pooler.supabase.com", 5432, "postgres.exampleref")
+
+
+def test_restopilot_alias_wins_over_supabase_name(hosted_env):
+    hosted_env.setenv("SUPABASE_DB_PASSWORD", PLACEHOLDER_PASSWORD)
+    hosted_env.setenv("SUPABASE_DB_HOST", "db.exampleref.supabase.co")
+    hosted_env.setenv("RESTOPILOT_DB_HOST", "aws-0-ap-southeast-1.pooler.supabase.com")
+    assert pg.db_config()["host"] == "aws-0-ap-southeast-1.pooler.supabase.com"
+
+
+def test_restopilot_alias_password_satisfies_authority(hosted_env):
+    hosted_env.setenv("RESTOPILOT_DB_PASSWORD", PLACEHOLDER_PASSWORD)
+    assert pg.db_config()["password"] == PLACEHOLDER_PASSWORD
+
+
 def test_hosted_mode_ignores_dotenv_files(hosted_env):
     with pytest.raises(RuntimeError):
         pg.db_config()
@@ -198,6 +223,38 @@ def assert_fail_closed(app, tmp_path):
 def test_missing_password_fails_closed(hosted_env, tmp_path):
     app = create_app(tmp_path / "never.sqlite3", hosted=True, public_demo=True)
     assert_fail_closed(app, tmp_path)
+
+
+def test_storage_cause_tokens_never_leak_exception_text():
+    from service.api import _storage_cause
+    assert _storage_cause(RuntimeError("Environment keys absent at boot (the launcher did not export them?): SUPABASE_URL")) == "config_missing"
+    assert _storage_cause(Exception("password authentication failed for user postgres")) == "auth_rejected"
+    assert _storage_cause(Exception('could not translate host name "db.x.supabase.co" to address: Name or service not known')) == "dns_failure"
+    assert _storage_cause(Exception("connection timed out")) == "timeout"
+    assert _storage_cause(Exception("Network is unreachable")) == "network_unreachable"
+    assert _storage_cause(Exception("totally novel failure")) == "Exception"
+
+
+def test_fail_closed_error_shows_cause_and_boot_env(hosted_env, tmp_path):
+    def broken_factory():
+        raise Exception("password authentication failed for user")
+    app = create_app(tmp_path / "never.sqlite3", hosted=True, public_demo=True, store_factory=broken_factory)
+    assert_fail_closed(app, tmp_path)
+    with anon(app) as client:
+        body = client.get("/health/ready").json()["error"]["message"]
+    assert "cause=auth_rejected" in body
+    assert "boot env:" in body and "SUPABASE_URL" in body
+    assert "password authentication failed" not in body, "raw exception text must never leak"
+    assert PLACEHOLDER_PASSWORD not in body
+
+
+def test_missing_keys_error_marks_boot_env_missing(hosted_env, tmp_path):
+    app = create_app(tmp_path / "never.sqlite3", hosted=True, public_demo=True)
+    assert_fail_closed(app, tmp_path)
+    with anon(app) as client:
+        body = client.get("/health/ready").json()["error"]["message"]
+    assert "cause=config_missing" in body
+    assert "MISSING" in body and "RESTOPILOT_DB_HOST" in body
 
 
 def test_unreachable_database_fails_closed(hosted_env, tmp_path):

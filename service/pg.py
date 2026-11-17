@@ -39,22 +39,29 @@ def db_config():
     if not hosted_mode():
         load_dotenv(ENV_PATH)
     env = os.environ.get
+
+    def _setting(restopilot_name, supabase_name):
+        # RESTOPILOT_DB_* alternates carry the same values under a neutral
+        # name: a hosted platform that fails to inject the SUPABASE_* names
+        # into the runtime can still pass them (2026-11-17 Atoms outage).
+        return (env(restopilot_name) or env(supabase_name) or "").strip()
+
     url = (env("SUPABASE_URL") or "").strip()
-    password = (env("SUPABASE_DB_PASSWORD") or "").strip()
+    password = _setting("RESTOPILOT_DB_PASSWORD", "SUPABASE_DB_PASSWORD")
     if not url or not password:
         raise RuntimeError(
             "Postgres authority is not configured: set SUPABASE_URL and "
-            "SUPABASE_DB_PASSWORD in the server environment."
+            "SUPABASE_DB_PASSWORD (or RESTOPILOT_DB_PASSWORD) in the server environment."
         )
     ref = url.split("//")[-1].split(".")[0]
-    port_text = (env("SUPABASE_DB_PORT") or "5432").strip()
+    port_text = _setting("RESTOPILOT_DB_PORT", "SUPABASE_DB_PORT") or "5432"
     if not port_text.isdigit() or not 0 < int(port_text) < 65536:
-        raise RuntimeError("SUPABASE_DB_PORT must be a TCP port number.")
+        raise RuntimeError("SUPABASE_DB_PORT (or RESTOPILOT_DB_PORT) must be a TCP port number.")
     # TCP keepalives: the session pooler drops idle connections mid-flight,
     # which surfaces as "server closed the connection unexpectedly".
-    return {"host": (env("SUPABASE_DB_HOST") or "").strip() or f"db.{ref}.supabase.co",
+    return {"host": _setting("RESTOPILOT_DB_HOST", "SUPABASE_DB_HOST") or f"db.{ref}.supabase.co",
             "port": int(port_text), "dbname": "postgres",
-            "user": (env("SUPABASE_DB_USER") or "").strip() or "postgres",
+            "user": _setting("RESTOPILOT_DB_USER", "SUPABASE_DB_USER") or "postgres",
             "password": password,
             "keepalives": 1, "keepalives_idle": 30,
             "keepalives_interval": 10, "keepalives_count": 5}
