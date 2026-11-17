@@ -466,3 +466,16 @@ test('inventory search filters stock cards by name and reports the match count',
   const empty=h.run('inventoryCardsHtml()');
   assert.equal(typeof empty,'string');
 });
+
+test('supplier and insights pages render owner analytics',()=>{
+  const h=harness();
+  const supplierHtml=h.run(`state.user={role:'owner',restaurant_id:'r1'};supplierState.data={suppliers:[{name:'Pak Budi',contact_phone:'6281',contact_platform:'wa',purchase_count:2,unpaid_count:0}],quotes:[{ingredient_name:'Cabai merah',supplier_name:'Pak Budi',unit_price_idr:30000,created_at:'2026-11-18T10:00:00',note:null}]};suppliersPage()`);
+  assert.ok(supplierHtml.includes('Pak Budi'));
+  assert.ok(supplierHtml.includes('Rp30.000'));
+  assert.ok(supplierHtml.includes('Best price per ingredient'));
+  const insightsHtml=h.run(`insightsState.days=7;insightsState.data={days:7,start:'2026-11-12',end:'2026-11-19',menus:[{name:'Nasi goreng',portions:10,revenue:150000,events:2},{name:'Mie ayam',portions:4,revenue:60000,events:1}],total_portions:14,total_revenue:210000,previous_total_portions:8,previous_total_revenue:120000,delta_percent:75};insightsPage()`);
+  assert.ok(insightsHtml.includes('Nasi goreng'));
+  assert.ok(insightsHtml.indexOf('Nasi goreng')<insightsHtml.indexOf('Mie ayam'));  // ranked by portions
+  assert.ok(insightsHtml.includes('Rp210.000'));
+  assert.ok(insightsHtml.includes('+75%'));
+});
