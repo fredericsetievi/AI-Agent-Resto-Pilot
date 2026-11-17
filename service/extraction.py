@@ -202,6 +202,19 @@ _JUNK_LINE = re.compile(
     r"|^[^\d]*=[^\d]*$"                                  # "Isul = air isi ulang ..." (no digits)
     r"|\b\d{9,}\b"                                       # bare phone number
 )
+# Conversational phrasing for is_chatter_item: greetings and questions that
+# owners mix into purchase messages ("Papa pagi ini beli", "bagaimana
+# isinya, ci?"). A parsed pseudo-item matching this is chat context, never
+# stock — it stays visible as chatter but never reaches the catalog.
+_CHAT_LINE = re.compile(
+    r"(?ix)"
+    r"^\s*(?:papa|pa|mama|bu|pak|om|gan|ci|cici?|halo|hallo|hai|hello|hei|hay"
+    r"|ok(?:e|ay)?|siap|sip|siipp?|mantap|siipp|makasih|makasi|terima\s*kasih"
+    r"|thanks?|thank\s*you|selamat|pagi|siang|sore|malam|assalamualaikum)\b"
+    r"|^\s*(?:bagaimana|gimana|kenapa|mengapa|kok|apakah|siapa|kapan|mana)\b"
+    r"|\b(?:berapa|yang\s+mana)\b"
+    r"|\?\s*$"
+)
 # A purchase sentence with a tacked-on question ("... 25rb. btw stok beras
 # masih berapa?") loses the price when the question tail rides along; the
 # tail is chat, not part of the order line.
@@ -803,8 +816,30 @@ def is_chatter_item(item: dict[str, Any]) -> bool:
     name = (item.get("raw_name") or "").strip()
     if not name:
         return False
+    # Short conversational sentences ("bagaimana isinya, ci?", "pagi ci",
+    # "stok beras masih berapa?") are chat even below the four-word bar:
+    # greeting/question phrasing on a line with no quantity, unit, or price
+    # never names stock. Priceless-but-real lines ("kecap manis") match no
+    # pattern and still draft to ask for prices.
+    if _CHAT_LINE.search(name):
+        return True
     words = [word for word in re.split(r"[\s,]+", name) if word]
     return len(words) >= 4
+
+
+def is_chat_line_item(item: dict[str, Any]) -> bool:
+    """Stricter chatter test for draft creation.
+
+    Only greeting/question phrasing drops a line here ("Papa pagi ini beli",
+    "bagaimana isinya, ci?"): approving such a draft would file the sentence
+    as a catalog ingredient. The four-word sentence rule is deliberately NOT
+    applied — the LLM-rescue fallback keeps flexible sentences as unmodelled
+    draft rows for owner review, and those must survive.
+    """
+    if item.get("ingredient_id") is not None or item.get("quantity") is not None:
+        return False
+    name = (item.get("raw_name") or "").strip()
+    return bool(name) and bool(_CHAT_LINE.search(name))
 
 
 def _pack_conversion(item: dict[str, Any]) -> tuple[Decimal | None, str | None]:

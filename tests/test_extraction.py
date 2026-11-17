@@ -606,6 +606,39 @@ def test_question_tail_after_a_purchase_is_dropped():
     assert result["warnings"] == []
 
 
+def test_greeting_and_question_lines_classify_as_chatter_not_stock():
+    # Owners mix greetings and questions into a purchase message; those lines
+    # parse as chatter items — visible in the thread, never catalog products.
+    result = extract_purchase(
+        "Papa pagi ini beli\n"
+        "3 gas 12kg\n"
+        "4 gas 3kg\n"
+        "8 galon air isi ulang\n"
+        "bagaimana isinya, ci?"
+    )
+    stock = [item for item in result["items"] if not is_chatter_item(item)]
+    chatter = [item for item in result["items"] if is_chatter_item(item)]
+    assert [item["raw_name"] for item in stock] == ["gas 12kg", "gas 3kg", "galon air isi ulang"]
+    assert [item["quantity"] for item in stock] == ["3", "4", "8"]
+    assert "bagaimana isinya" in " ".join(item["raw_name"] or "" for item in chatter)
+
+
+def test_chatter_filter_keeps_real_priceless_items_and_priced_lines():
+    # Priceless-but-real lines still draft to ask for prices; greeting-embedded
+    # priced lines are unaffected; digit-less stock questions are chatter.
+    result = extract_purchase("kecap manis\nCimory 2 15000\nsisa beras masih berapa?")
+    stock = [item for item in result["items"] if not is_chatter_item(item)]
+    chatter = [item for item in result["items"] if is_chatter_item(item)]
+    assert [item["raw_name"] for item in stock] == ["kecap manis", "cimory"]
+    assert stock[1]["line_total_idr"] == 30000
+    assert len(chatter) == 1
+
+
+def test_chat_only_message_classifies_as_chatter():
+    result = extract_purchase("halo pagi pa, gimana kabarnya?")
+    assert result["items"] and all(is_chatter_item(item) for item in result["items"])
+
+
 def test_pack_size_marker_lands_in_pack_fields_and_multiplies():
     result = extract_purchase("PO Sunco @2ltr 10 dus ya🙏")
     item = result["items"][0]

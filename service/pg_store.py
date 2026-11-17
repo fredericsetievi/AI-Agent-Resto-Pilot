@@ -51,7 +51,7 @@ from .db import (
     validate_phone_number, validate_platform, validate_username,
     verify_password,
 )
-from .extraction import catalog_aliases, extract_purchase, is_chatter_item
+from .extraction import catalog_aliases, extract_purchase, is_chat_line_item, is_chatter_item
 from .notifications import refill_suggestion
 from .pg import pg_connection, pg_transaction
 from .onboarding import restaurant_selection
@@ -460,6 +460,13 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
     def _new_draft(self, conn, text, supplier, items, warnings, created_at=None, restaurant_id=None):
         if not restaurant_id:
             raise DomainError("restaurant_required", "A draft needs a restaurant.", 500)
+        # Greeting/question lines mixed into a purchase message never become
+        # draft rows: approving such a draft would file them as catalog
+        # ingredients ("Papa pagi ini beli" as an item). An all-chat text
+        # drafts empty and waits for real lines. The four-word sentence rule
+        # is not applied here so the LLM-rescue fallback keeps flexible
+        # sentences as unmodelled rows. Must stay in sync with db.py.
+        items = [item for item in items if not is_chat_line_item(item)]
         items, field_warnings = self._normalize(items, self._catalog_for(restaurant_id))
         all_warnings = list(dict.fromkeys(list(warnings) + field_warnings))
         draft = {
