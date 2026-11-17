@@ -465,15 +465,20 @@ def _match_name(name: str) -> tuple[str, str | None, bool]:
         return candidate, best[1], False
 
     # Spelling slips ("kombrang", "bwang merah") are close enough to recover,
-    # but only when the same word opens the name; that keeps a different item
-    # from being pulled in on a coincidental letter overlap.
+    # but only when the same word opens the name and the token counts match:
+    # a slip recovers the whole name, not one word of it. "bacang ayam beras"
+    # merely looks like "bawang" on its first token — the rest names a
+    # different product, and guessing "bawang" from that overlap files wrong
+    # stock. Such names stay unmapped with the raw name intact.
     scored: list[tuple[float, str]] = []
     head = tokens[0]
     for alias, canonical_id in _ALIASES:
         alias_tokens = [token for token in _NAME_TOKEN.findall(alias) if token not in _NAME_NOISE]
         if not alias_tokens or alias_tokens[0][0] != head[0]:
             continue
-        scored.append((SequenceMatcher(a=" ".join(tokens[: len(alias_tokens)]), b=" ".join(alias_tokens)).ratio(), canonical_id))
+        if len(alias_tokens) != len(tokens):
+            continue
+        scored.append((SequenceMatcher(a=" ".join(tokens), b=" ".join(alias_tokens)).ratio(), canonical_id))
     scored.sort(reverse=True)
     if scored and scored[0][0] >= _FUZZY_CUTOFF:
         return candidate, scored[0][1], True

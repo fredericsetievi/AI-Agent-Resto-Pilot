@@ -466,6 +466,25 @@ def test_spelling_recoveries_are_marked_for_confirmation():
     assert normalize_item(dict(item))["matched_from"] == "bwang putih"
 
 
+def test_a_one_token_overlap_never_guesses_a_longer_name():
+    # Pilot regression (Warung Bu Cemong bon, 2026-11-17): "bacang ayam beras"
+    # and "bacang ayam ketan" are real products; the fuzzy path compared only
+    # their first token ("bacang" vs "bawang", one letter apart) and guessed
+    # Bawang merah for both. A slip recovers the whole name or nothing: the
+    # rows stay unmapped with the raw name intact, so the owner maps them on
+    # the dashboard instead of confirming wrong stock.
+    assert match_catalog_detail("bacang ayam beras") == ("bacang ayam beras", None, False)
+    assert match_catalog_detail("bacang ayam ketan") == ("bacang ayam ketan", None, False)
+    # A bare single-token slip ("bacang" vs "bawang") is still a flagged
+    # suggestion — the owner must confirm it — but the product names above
+    # never guess: their extra tokens name a different thing entirely.
+    # Whole-name slips still recover.
+    assert match_catalog_detail("telor ayam")[1] == "telur"
+    assert match_catalog_detail("bwang merah")[1] == "bawang"
+    draft = extract_purchase("bacang ayam beras 5 pcs 40000")["items"][0]
+    assert draft["ingredient_id"] is None and draft["raw_name"] == "bacang ayam beras"
+
+
 # Real supplier messages from the warung pilot (Nov 2026), verbatim except
 # that supplier names are anonymized. Owners forward what they sent to the
 # supplier (and what the supplier quoted) so the draft shows what cash to
