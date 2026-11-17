@@ -29,7 +29,7 @@ from .extraction import catalog_aliases, extract_purchase, is_chat_line_item, is
 from .notifications import refill_suggestion
 from .purchase_edits import PurchaseEditsMixin, parse_purchase_edit_command
 from .suppliers import SupplierMixin, parse_supplier_command
-from .reminders import ReminderMixin, SQLITE_SCHEMA as REMINDERS_SQLITE_SCHEMA, parse_reminder_command
+from .reminders import ReminderMixin, SQLITE_SCHEMA as REMINDERS_SQLITE_SCHEMA, parse_reminder_command, parse_reminder_request
 from .cash_envelope import CashEnvelopeMixin, SQLITE_SCHEMA as ENVELOPE_SQLITE_SCHEMA, parse_envelope_command
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
 from .onboarding import restaurant_selection
@@ -1312,7 +1312,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 # follow-up merge (the sentence names items in the draft).
                 reply, updated = self.apply_unit_command(tenant, unit_cmd, conn=conn)
                 result["action"] = "units_updated" if updated else "unit_edit_rejected"
-            elif tenant and (reminder_cmd := parse_reminder_command(payload["text"])):
+            elif tenant and (reminder_cmd := parse_reminder_command(payload["text"]) or parse_reminder_request(payload["text"])):
                 # Schedule commands ("pengingat pagi jadi jam 8") are pure
                 # settings: they run even while a purchase draft waits, since
                 # the sentence can never be a purchase line.

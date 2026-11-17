@@ -36,7 +36,7 @@ from .menu_insights import MenuInsightsMixin
 from .operations import OperationsMixin
 from .purchase_edits import PurchaseEditsMixin
 from .suppliers import SupplierMixin
-from .reminders import ReminderMixin, parse_reminder_command
+from .reminders import ReminderMixin, parse_reminder_command, parse_reminder_request
 from .cash_envelope import CashEnvelopeMixin, parse_envelope_command
 from .purchase_sources import PurchaseSourcesMixin
 from .purchase_idempotency import purchase_idempotent
@@ -1306,7 +1306,7 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
             elif operation_result is not None:
                 reply = operation_result["reply"]
                 result = operation_result["result"]
-            elif tenant and (reminder_cmd := parse_reminder_command(payload["text"])):
+            elif tenant and (reminder_cmd := parse_reminder_command(payload["text"]) or parse_reminder_request(payload["text"])):
                 # Schedule commands ("pengingat pagi jadi jam 8") are pure
                 # settings: they run even while a purchase draft waits, since
                 # the sentence can never be a purchase line.

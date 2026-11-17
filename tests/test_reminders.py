@@ -120,6 +120,43 @@ def test_ingest_draft_survives_a_reminder_command(tmp_path):
     assert response["thread"]["active_draft_id"]  # the draft is still there
 
 
+# ---- natural reminder requests ----------------------------------------------
+
+def test_parse_reminder_request_accepts_natural_phrasings():
+    # The pilot regression: "Tolong kirim reminder ke saya setiap malam jam 8"
+    # used to fall to the purchase parser and draft "jam — 8 pcs".
+    from service.reminders import parse_reminder_request
+
+    assert parse_reminder_request("Tolong kirim reminder ke saya setiap malam jam 8") == {"kind": "set", "slot": "evening", "hour": 20}
+    assert parse_reminder_request("ingetin saya jam 8") == {"kind": "clarify"}
+    assert parse_reminder_request("reminder mati") == {"kind": "off"}
+    assert parse_reminder_request("tolong reminder nyala dong") == {"kind": "on"}
+    assert parse_reminder_request("bisa atur reminder pagi jadi jam 7") == {"kind": "set", "slot": "morning", "hour": 7}
+    assert parse_reminder_request("reminder malam jadi jam 11 malam") == {"kind": "quiet"}
+
+
+def test_parse_reminder_request_never_wins_over_purchases():
+    from service.reminders import parse_reminder_request
+
+    # A price routes the message back to the purchase parser.
+    assert parse_reminder_request("ingatkan saya beli telur 2 kg 30000") is None
+    assert parse_reminder_request("reminder dulu beli sasa 12 kardus 450rb") is None
+    # No scheduling signal ("ingetin saya beli telur") stays with purchases.
+    assert parse_reminder_request("tolong ingetin saya beli telur") is None
+    assert parse_reminder_request("") is None
+    assert parse_reminder_request(None) is None
+
+
+def test_ingest_accepts_a_natural_reminder_request(tmp_path):
+    client = owner_client(tmp_path)
+    store = client.app.state.store
+    resto = store.list_restaurants()[0]["id"]
+    response = store.whatsapp_ingest(uuid4().hex, {"sender": SENDER, "text": "Tolong kirim reminder ke saya setiap malam jam 8"})
+    assert response["result"]["action"] == "reminder_updated"
+    assert "jam 20" in response["messages"][-1]["body"]
+    assert store.reminder_settings(resto)["evening_hour"] == 20
+
+
 # ---- run_reminder_check via the route --------------------------------------
 
 def test_morning_reminder_sends_once_per_day(tmp_path, monkeypatch):

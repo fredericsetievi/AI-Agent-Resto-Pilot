@@ -60,6 +60,37 @@ _ON_RE = re.compile(r"(?i)\b(nyala|aktif|hidup|on)\b")
 
 _SLOT_NAMES = {"morning": "pagi", "evening": "malam"}
 
+# Natural reminder requests ("Tolong kirim reminder ke saya setiap malam jam
+# 8") do not start with the command word, so the strict command regex misses
+# them and the message falls to the purchase parser, which drafts "jam 8" as
+# "8 pcs". The request path needs a reminder word anywhere plus a scheduling
+# signal, and it never wins over a purchase note: any price token routes the
+# message back to the purchase parser.
+_REMINDER_WORD_RE = re.compile(r"(?i)\b(reminder|pengingat|ingatkan|ingetin)\b")
+_SCHEDULING_SIGNAL_RE = re.compile(
+    r"(?i)\b(?:jam\s*\d|pagi|siang|sore|malam|tiap|harian|mati(?:kan)?|berhenti|stop|non\s?aktif|nyala|aktif|hidup)\b")
+_PRICE_SIGNAL_RE = re.compile(r"(?i)(?:rp\s*\d|\d+(?:[.,]\d+)?\s*(?:rb|ribu|jt|juta|k)\b|\d{4,}\b)")
+
+
+def parse_reminder_request(text):
+    """Detect a reminder request phrased naturally. Returns the same command
+    dict as parse_reminder_command, or None to leave the message to the
+    purchase parser.
+
+    Still fully deterministic: match a reminder word anywhere, require a
+    scheduling signal, refuse when a price is mentioned, then normalize the
+    text to a canonical "pengingat ..." command for the strict parser — so
+    all validation (quiet hours, clarify, invalid) stays in one place.
+    """
+    text = str(text or "").strip()
+    if len(text) > 200:
+        return None
+    word = _REMINDER_WORD_RE.search(text)
+    if not word or not _SCHEDULING_SIGNAL_RE.search(text) or _PRICE_SIGNAL_RE.search(text):
+        return None
+    canonical = "pengingat " + re.sub(r"(?i)\b(?:reminder|ingetin|ingatkan)\b", "pengingat", text[word.start():])
+    return parse_reminder_command(canonical)
+
 
 def parse_reminder_command(text):
     """Detect a reminder command in one message. Returns a dict or None.
