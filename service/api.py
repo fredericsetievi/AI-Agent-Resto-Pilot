@@ -405,6 +405,22 @@ def _boot_env_presence():
     return {name: bool((os.environ.get(name) or "").strip()) for name in names}
 
 
+def _failure_origin(exc):
+    """Innermost frame of the failure as ``file.py:LINE in function`` —
+    enough to pinpoint a startup bug from the public fail-closed error
+    without exposing message text, values or absolute paths (V34.4.12)."""
+    import os
+    last = None
+    tb = getattr(exc, "__traceback__", None)
+    while tb is not None:
+        last = tb
+        tb = tb.tb_next
+    if last is None:
+        return "unknown"
+    code = last.tb_frame.f_code
+    return f"{os.path.basename(code.co_filename)}:{last.tb_lineno} in {code.co_name}"
+
+
 def _is_loopback_host(host):
     try:
         parsed = urlsplit("http://" + host)
@@ -549,12 +565,13 @@ def create_app(
                 store = PostgresStore(seed=False, read_only_startup=True, public_base_url=public_base_url)
             storage = "supabase"
         except Exception as exc:  # noqa: BLE001 - any config/connect/schema failure fails closed
-            logger.error("Hosted storage unavailable; failing closed: %s: %s", type(exc).__name__, exc)
+            logger.error("Hosted storage unavailable; failing closed: %s: %s at %s",
+                         type(exc).__name__, exc, _failure_origin(exc), exc_info=True)
             store = None
             storage = "unavailable"
             base = str(exc) if isinstance(exc, RuntimeError) else "The database could not be reached."
             env_note = " ".join(f"{name}={'set' if ok else 'MISSING'}" for name, ok in boot_env.items())
-            storage_error = f"{base} [cause={_storage_cause(exc)}; boot env: {env_note}]"
+            storage_error = f"{base} [cause={_storage_cause(exc)} at {_failure_origin(exc)}; boot env: {env_note}]"
     else:
         # The authority is Supabase Postgres when configured; the local SQLite
         # file stays as an offline/demo fallback so the app still boots without it.
