@@ -50,7 +50,12 @@ from .catalog_import import CatalogImportError, parse_catalog_file
 from .pg_store import PostgresStore
 from .data_qa import build_answer as build_data_answer
 from .data_qa import phrase_data_answer, phrase_opname_answer
-from .extraction import extract_purchase
+from .extraction import (
+    FORWARDED_MAX_ITEMS,
+    extract_purchase,
+    has_itemized_purchase_signal,
+    split_message_chunks,
+)
 from .suppliers import parse_supplier_command
 from .suppliers import supplier_alert_hint, supplier_inquiry_send
 from .intent_llm import classify_intent
@@ -108,6 +113,7 @@ from .whatsapp import (
     mark_read,
     parse_payment_followup,
     parse_webhook,
+    input_over_line_limit,
     stock_reply,
     public_origin,
     opname_reply,
@@ -397,6 +403,7 @@ def create_app(
     kitchen_filter_enabled=True,
     intent_llm_enabled=False,
     intent_llm_http_client=None,
+    forwarded_router_enabled=False,
     telegram_bot_token=None,
     telegram_webhook_secret=None,
     telegram_api_base=TELEGRAM_DEFAULT_API_BASE,
@@ -532,14 +539,32 @@ def create_app(
         keeps the rules result, so behavior with the feature off is
         unchanged. Short clean single-line messages stay rules-only: a bare
         "beli cabai 3 kg 150rb" needs no model round trip, and "ya" must stay
-        a zero-cost command. The restaurant name rides along so the model
-        prompt carries the tenant rule as defense in depth.
+        a zero-cost command. With the forwarded-router flag on, a message
+        longer than the 20-line cap is split into cap-sized chunks and read
+        through the same rescue, so a forwarded supplier list drafts as one
+        flagged batch instead of a refusal. The restaurant name rides along
+        so the model prompt carries the tenant rule as defense in depth.
         """
         extracted = extract_purchase(text)
         if not text_llm_enabled or not vision_api_key:
             return extracted
         messy = bool(extracted["warnings"]) or len(text.strip().splitlines()) > 1
         if not messy or text.strip().casefold() in _text_command_words or parse_payment_followup(text):
+            return extracted
+        if input_over_line_limit(extracted["warnings"]):
+            # A forwarded supplier list exceeded the deterministic 20-line cap.
+            # The flag-gated router reads it chunk by chunk through the same
+            # rescue; without the flag the refusal reply stands unchanged.
+            if forwarded_router_enabled and has_itemized_purchase_signal(text):
+                try:
+                    rescued = await _rescue_forwarded(text, restaurant_name)
+                except (StepFunTextError, ValueError) as exc:
+                    logger.warning("Forwarded-message router failed; keeping the rules result: %s", exc)
+                    rescued = None
+                if rescued:
+                    if extracted.get("supplier") and not rescued.get("supplier"):
+                        rescued["supplier"] = extracted["supplier"]
+                    return rescued
             return extracted
         if _rules_draft_complete(extracted):
             return extracted
@@ -565,6 +590,42 @@ def create_app(
         if extracted.get("supplier") and not rescued.get("supplier"):
             rescued["supplier"] = extracted["supplier"]
         return rescued
+
+    async def _rescue_forwarded(text, restaurant_name=None):
+        """Read a long forwarded supplier list chunk by chunk, then merge.
+
+        The 20-line cap protects the deterministic parsers, not the model: the
+        router splits the message into cap-sized chunks, rescues each through
+        the same extract_message path, and merges the proposed rows. Every
+        merged row keeps the rescue guarantees — values the sender did not
+        clearly state stay None, so the draft lands flagged for confirmation
+        and nothing is invented. Any provider error raises; the caller keeps
+        the rules result unchanged.
+        """
+        chunks = split_message_chunks(text)
+        if not chunks:
+            return None
+        items, warnings, seen = [], [], set()
+        for chunk in chunks:
+            rescued = await extract_message(
+                chunk,
+                restaurant=restaurant_name,
+                api_key=vision_api_key,
+                model=text_llm_model,
+                base_url=vision_base_url,
+                client=text_llm_http_client,
+            )
+            items.extend(rescued["items"])
+            for warning in rescued["warnings"]:
+                if warning not in seen:
+                    seen.add(warning)
+                    warnings.append(warning)
+        if not items:
+            return None
+        if len(items) > FORWARDED_MAX_ITEMS:
+            items = items[:FORWARDED_MAX_ITEMS]
+            warnings.append(f"The message mentions more than {FORWARDED_MAX_ITEMS} items; only the first {FORWARDED_MAX_ITEMS} were read.")
+        return {"items": items, "warnings": warnings}
 
     def _rules_draft_complete(extracted):
         """True when every rules item carries a count and a price (or an

@@ -348,6 +348,31 @@ def test_tiny_decimal_total_that_does_not_resolve_to_whole_rupiah_is_rejected():
     assert result["warnings"]
 
 
+def test_split_message_chunks_respects_the_line_cap():
+    from service.extraction import split_message_chunks
+
+    lines = [f"{index}kg bahan nomor {index}" for index in range(1, 26)]
+    chunks = split_message_chunks("\n".join(lines))
+    assert len(chunks) == 2
+    assert len(chunks[0].splitlines()) == 20
+    assert len(chunks[1].splitlines()) == 5
+    assert chunks[0].splitlines()[0] == "1kg bahan nomor 1"
+    assert chunks[1].splitlines()[-1] == "25kg bahan nomor 25"
+    assert split_message_chunks("beli cabai 3 kg") == ["beli cabai 3 kg"]
+    assert split_message_chunks("") == []
+    assert split_message_chunks(None) == []
+
+
+def test_has_itemized_purchase_signal_needs_digit_lines():
+    from service.extraction import has_itemized_purchase_signal
+
+    listed = "\n".join(["#2 Sayuran:", "2kg daun bawang", "5kg wortel", "6kg kol"])
+    assert has_itemized_purchase_signal(listed)
+    assert not has_itemized_purchase_signal("\n".join(["halo mas", "pagi ini cerah", "nanti kami ke pasar"]))
+    assert not has_itemized_purchase_signal("2kg daun bawang")
+    assert not has_itemized_purchase_signal(None)
+
+
 def test_oversized_rp_amount_and_normalization_total_are_rejected_without_exception():
     huge = "9" * 10000
     extracted = extract_purchase(f"beli cabai 1 kg Rp{huge}")

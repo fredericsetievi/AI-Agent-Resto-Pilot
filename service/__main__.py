@@ -44,6 +44,7 @@ SUPPORTED_ENV_KEYS = {
     "AUDIO_ASR_PROMPT",
     "LLM_STOCK_ANSWER",
     "LLM_INTENT",
+    "LLM_FORWARDED_ROUTER",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_WEBHOOK_SECRET",
     "TELEGRAM_API_BASE",
@@ -113,6 +114,10 @@ def main():
     asr_model_setting = (asr_model_override if custom_asr else None) or setting("STEPFUN_ASR_MODEL")
     stock_llm_enabled = bool(vision_api_key) and not llm_disabled("LLM_STOCK_ANSWER")
     intent_llm_enabled = bool(vision_api_key) and not llm_disabled("LLM_INTENT")
+    # The forwarded-supplier-list router is the one language-model feature
+    # that defaults OFF: it changes the over-20-line refusal into a model
+    # read, so the pilot turns it on explicitly (LLM_FORWARDED_ROUTER=1).
+    forwarded_router_enabled = bool(vision_api_key) and (setting("LLM_FORWARDED_ROUTER") or "").strip().casefold() in {"1", "true", "yes", "on"}
     telegram_settings = {
         "telegram_bot_token": setting("TELEGRAM_BOT_TOKEN"),
         "telegram_webhook_secret": setting("TELEGRAM_WEBHOOK_SECRET"),
@@ -158,6 +163,10 @@ def main():
         print(f"Intent routing: enabled (model {text_llm_model or 'default'}; exact commands stay first, purchases never routed; set LLM_INTENT=0 to disable)")
     else:
         print("Intent routing: disabled (STEPFUN_API_KEY missing or LLM_INTENT=0; exact commands stay first)")
+    if forwarded_router_enabled:
+        print(f"Forwarded-supplier-list router: enabled (model {text_llm_model or 'default'}; long forwards are read in chunks, rows stay flagged for confirmation; set LLM_FORWARDED_ROUTER=0 to disable)")
+    else:
+        print("Forwarded-supplier-list router: disabled (set LLM_FORWARDED_ROUTER=1 to read long forwards)")
     uvicorn.run(
         create_app(
             str(args.db),
@@ -177,6 +186,7 @@ def main():
             text_llm_model=text_llm_model,
             stock_llm_enabled=bool(stock_llm_enabled),
             intent_llm_enabled=bool(intent_llm_enabled),
+            forwarded_router_enabled=bool(forwarded_router_enabled),
             public_demo=public_demo,
             proactive_check_interval_seconds=proactive_hours * 3600,
             whatsapp_open_onboarding=setting("WHATSAPP_OPEN_ONBOARDING", "1").strip().casefold() in {"1", "true", "yes", "on"},
