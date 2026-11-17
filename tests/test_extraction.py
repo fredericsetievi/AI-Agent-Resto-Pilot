@@ -466,6 +466,26 @@ def test_spelling_recoveries_are_marked_for_confirmation():
     assert normalize_item(dict(item))["matched_from"] == "bwang putih"
 
 
+def test_redteam_findings_are_flagged_not_clean():
+    # Side-chat red-team findings, 2026-11-17: three deterministic rows that
+    # used to draft with no warning.
+    absurd = normalize_item(dict(extract_purchase("beras 999999 kg 1000rb")["items"][0]))
+    assert any("unusually large" in warning for warning in absurd["warnings"])
+    # Unit price is a plain rupiah figure, not "1.000001000001...".
+    assert absurd["unit_price_idr"] == "1"
+    long_name = "bahan super ekstra " * 10 + "2 kg 30000"
+    long_item = normalize_item(dict(extract_purchase(long_name)["items"][0]))
+    assert any("unusually long" in warning for warning in long_item["warnings"])
+    payment = normalize_item(dict(extract_purchase("sudah bayar telur 30000")["items"][0]))
+    # No longer a pseudo-item called "sudah bayar telur": the payment prefix
+    # strips, "30000" reads as an implausible count, and the row is flagged.
+    assert payment["raw_name"] == "telur"
+    assert payment["quantity"] == "30000"
+    assert any("unusually large" in warning for warning in payment["warnings"])
+    # Payment-only clauses keep their existing payment handling (no item).
+    assert extract_purchase("bayar 30000")["items"] == []
+
+
 def test_a_one_token_overlap_never_guesses_a_longer_name():
     # Pilot regression (Warung Bu Cemong bon, 2026-11-17): "bacang ayam beras"
     # and "bacang ayam ketan" are real products; the fuzzy path compared only
