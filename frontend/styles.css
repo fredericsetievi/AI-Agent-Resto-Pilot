@@ -178,3 +178,10 @@ body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-r
 .chat-decision{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .chat-outcome+.chat-decision{margin-top:8px}
 @media(max-width:620px){.chat-decision .button{flex:1 1 auto}}
+
+/* Inventory search: client-side filter for long ingredient catalogs. */
+.inventory-search-row{display:flex;gap:10px;align-items:center;margin:0 22px 14px}
+.inventory-search{flex:1;min-width:0;padding:9px 12px;border:1px solid #d0d7de;border-radius:10px;font:inherit;background:#fff;color:inherit}
+.inventory-search:focus{outline:2px solid #1a7f37;outline-offset:1px;border-color:#1a7f37}
+.inventory-search-row .muted{white-space:nowrap}
+@media(max-width:620px){.inventory-search-row{margin:0 14px 12px}}

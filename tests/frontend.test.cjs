@@ -447,3 +447,22 @@ test('recipe sales submit the reviewed version even after a background refresh',
   await h.run(`saveInventoryForm({preventDefault(){},target:testForm})`);
   assert.equal(h.run('sent[0].body.expected_recipe_version'),1);
 });
+
+test('inventory search filters stock cards by name and reports the match count',()=>{
+  const h=harness();
+  h.run(`inventoryState.data={forecasts:[]};inventoryState.search='';state.data={inventory:[
+    {ingredient_id:'a',name:'Bolkus jumbo',unit:'pcs',quantity:'12',reorder_threshold:'5',low_stock:false},
+    {ingredient_id:'b',name:'Beras premium',unit:'kg',quantity:'3',reorder_threshold:'5',low_stock:true}]}`);
+  const all=h.run('inventoryCardsHtml()');
+  assert.ok(all.includes('Bolkus jumbo')&&all.includes('Beras premium'));
+  assert.equal(h.run('inventorySearchCount()'),'');
+  h.run(`inventoryState.search='bol'`);
+  const filtered=h.run('inventoryCardsHtml()');
+  assert.ok(filtered.includes('Bolkus jumbo'));
+  assert.ok(!filtered.includes('Beras premium'));
+  assert.equal(h.run('inventorySearchCount()'),'1/2');
+  h.run(`inventoryState.search='KEMIRI'`);
+  assert.equal(h.run('inventorySearchCount()'),'0/2');
+  const empty=h.run('inventoryCardsHtml()');
+  assert.equal(typeof empty,'string');
+});

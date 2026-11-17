@@ -802,6 +802,13 @@ document.addEventListener('submit',async event=>{
   }
 });
 document.addEventListener('submit',event=>{if(event.target.id==='whatsapp-form'){event.preventDefault();sendWhatsAppMessage($('#whatsapp-text').value);}});
+// Live inventory search: re-render only the card grid so the input keeps focus.
+document.addEventListener('input',event=>{
+  if(!event.target.matches?.('[data-inventory-search]'))return;
+  inventoryState.search=event.target.value;
+  const grid=$('[data-inventory-cards]');if(grid)grid.innerHTML=inventoryCardsHtml();
+  const count=$('[data-inventory-count]');if(count)count.textContent=inventorySearchCount();
+});
 $('#review-dialog').addEventListener('cancel',event => {if(state.busy)event.preventDefault();});
 $('#refresh').addEventListener('click',refresh);
 function navigate() {
@@ -821,7 +828,7 @@ document.addEventListener('submit',event => {if(event.target.id==='login-form')l
 $('#logout').addEventListener('click',logout);
 
 // Inventory dialogs live outside the polling content area, preserving unsaved input.
-const inventoryState={data:null,loaded:false,loading:false,error:'',busy:false,formId:null,snapshot:[],recipesSnapshot:[]};
+const inventoryState={data:null,loaded:false,loading:false,error:'',busy:false,formId:null,snapshot:[],recipesSnapshot:[],search:''};
 async function loadInventoryWorkspace(){
   if(inventoryState.loading || state.user?.role!=='owner')return;
   inventoryState.loading=true;const restaurantId=state.user.restaurant_id;
@@ -829,17 +836,29 @@ async function loadInventoryWorkspace(){
   catch(error){inventoryState.error=`Stock tools could not load. ${error.message} If this deployment is older, update it before using these tools.`;}
   finally{inventoryState.loading=false;inventoryState.loaded=true;if(state.page==='inventory')render();}
 }
+// Stock cards for the inventory page, filtered by the search box. Owners with
+// 100+ ingredients (cake warungs buy dozens of items daily) need to find one
+// item without scrolling; the filter is client-side and never touches state.data.
+function inventoryCardsHtml(){
+  const forecasts=inventoryState.data?.forecasts||[];
+  const query=(inventoryState.search||'').trim().toLowerCase();
+  return (state.data.inventory||[]).filter(item=>!query||String(item.name).toLowerCase().includes(query)).map(item=>{
+    const forecast=forecasts.find(row=>row.ingredient_id===item.ingredient_id);
+    const projected=['manual','recorded'].includes(forecast?.source)&&forecast.days_left!=null;
+    return `<article class="stock-card"><div class="stock-card-heading"><strong>${e(item.name)}</strong><span class="badge ${item.low_stock||Number(item.quantity)===0?'red':'green'}">${Number(item.quantity)===0?'Out of stock':item.low_stock?'Below threshold':'In stock'}</span></div><div class="stock-card-quantity">${number(item.quantity)} <small>${e(item.unit)}</small></div><p>${projected?`About <strong>${number(forecast.days_left)} days</strong> left · ${number(forecast.daily_usage)} ${e(item.unit)}/day · ${forecast.source==='manual'?'your estimate':`${number(forecast.evidence_days)} recorded days (${e(inventoryState.data?.settings?.history_start||'')}–${e(inventoryState.data?.settings?.history_end||'')})`}`:'No usage estimate yet. Set a daily rate or complete history period.'}</p><small>${projected?(Number(forecast.reorder_in_days)<=0?'Order now based on your plan':`Plan to order in about ${number(forecast.reorder_in_days)} days`):`Low-stock threshold: ${number(item.reorder_threshold)} ${e(item.unit)}`}</small></article>`;
+  }).join('');
+}
+function inventorySearchCount(){
+  const query=(inventoryState.search||'').trim().toLowerCase(),total=(state.data.inventory||[]).length;
+  if(!query)return '';
+  const visible=(state.data.inventory||[]).filter(item=>String(item.name).toLowerCase().includes(query)).length;
+  return `${number(visible)}/${number(total)}`;
+}
 function inventoryWorkspace(){
   const data=inventoryState.data, enabled=!!data&&!inventoryState.error;
   const action=(kind,label)=>`<button class="button ${kind==='usage'?'primary':'secondary'}" data-inventory-action="${kind}" ${enabled?'':'disabled'}>${label}</button>`;
-  const forecasts=data?.forecasts||[];
-  const cards=(state.data.inventory||[]).map(item=>{
-    const forecast=forecasts.find(row=>row.ingredient_id===item.ingredient_id);
-    const projected=['manual','recorded'].includes(forecast?.source)&&forecast.days_left!=null;
-    return `<article class="stock-card"><div class="stock-card-heading"><strong>${e(item.name)}</strong><span class="badge ${item.low_stock||Number(item.quantity)===0?'red':'green'}">${Number(item.quantity)===0?'Out of stock':item.low_stock?'Below threshold':'In stock'}</span></div><div class="stock-card-quantity">${number(item.quantity)} <small>${e(item.unit)}</small></div><p>${projected?`About <strong>${number(forecast.days_left)} days</strong> left · ${number(forecast.daily_usage)} ${e(item.unit)}/day · ${forecast.source==='manual'?'your estimate':`${number(forecast.evidence_days)} recorded days (${e(data?.settings?.history_start||'')}–${e(data?.settings?.history_end||'')})`}`:'No usage estimate yet. Set a daily rate or complete history period.'}</p><small>${projected?(Number(forecast.reorder_in_days)<=0?'Order now based on your plan':`Plan to order in about ${number(forecast.reorder_in_days)} days`):`Low-stock threshold: ${number(item.reorder_threshold)} ${e(item.unit)}`}</small></article>`;
-  }).join('');
   const events=(data?.events||[]).map(event=>`<div class="inventory-event"><div><strong>${e({usage:'Kitchen usage',waste:'Waste',count:'Stock count',sale:'Sale'}[event.kind]||event.kind)}</strong><p>${e(event.note)}</p><small>${e(date(event.created_at))}${event.business_date?' · Business date '+e(event.business_date):''}${event.operation_id?' · WhatsApp '+e(event.operation_id.slice(0,8)):''}${event.coverage?' · '+e(event.coverage):''}${event.portions!=null?' · '+number(event.portions)+' portions':''}${event.recipe?.name?' · '+e(event.recipe.name):''}${event.revenue_idr!=null?' · '+rupiah(event.revenue_idr):''}${event.history_only?' · History only; current stock unchanged':''}</small></div><div>${(event.items||[]).map(line=>{const ingredient=(state.data.inventory||[]).find(i=>i.ingredient_id===line.ingredient_id);return `<p>${e(ingredient?.name||line.ingredient_id)}: ${number(line.before)} → ${number(line.after)} ${e(ingredient?.unit||'')}${event.history_only?' · historical use '+number(line.planned_quantity??line.quantity):''}</p>`;}).join('')||'<small>Sales record only · stock unchanged</small>'}</div></div>`).join('');
-  return `<div class="inventory-toolbar">${action('usage','Record usage')}${action('waste','Record waste')}${action('count','Count remaining')}${action('sale','Log sales')}${action('recipe','Manage recipes')}${action('settings','Order planning')}</div>${inventoryState.error?`<div class="notice error" role="alert">${e(inventoryState.error)} <button class="text-button" data-inventory-reload>Retry</button></div>`:''}${!inventoryState.loaded?'<p role="status">Loading stock tools…</p>':''}<section class="panel">${panelHeading('Estimated stock','Receipts add stock. Confirmed usage and recipe-based sales reduce it. Counts reconcile it.')}<div class="stock-card-grid">${cards}</div><div class="panel-note">Order dates use your daily estimates or a confirmed complete history period, ${e(data?.settings?.lead_days??2)} days supplier lead time, and ${e(data?.settings?.safety_days??1)} safety days. They are planning estimates, not automatic orders. Check physical stock regularly.</div></section><section class="panel inventory-history">${panelHeading('Usage, counts & sales','An audit trail of confirmed stock changes.')}<div class="inventory-events">${events||'<div class="empty">No usage, counts, or sales recorded yet.</div>'}</div></section>`;
+  return `<div class="inventory-toolbar">${action('usage','Record usage')}${action('waste','Record waste')}${action('count','Count remaining')}${action('sale','Log sales')}${action('recipe','Manage recipes')}${action('settings','Order planning')}</div>${inventoryState.error?`<div class="notice error" role="alert">${e(inventoryState.error)} <button class="text-button" data-inventory-reload>Retry</button></div>`:''}${!inventoryState.loaded?'<p role="status">Loading stock tools…</p>':''}<section class="panel">${panelHeading('Estimated stock','Receipts add stock. Confirmed usage and recipe-based sales reduce it. Counts reconcile it.')}<div class="inventory-search-row"><input class="inventory-search" type="search" data-inventory-search value="${e(inventoryState.search)}" placeholder="${t('Cari bahan…','Search ingredients…')}" aria-label="${t('Cari bahan','Search ingredients')}"><span class="muted" data-inventory-count>${inventorySearchCount()}</span></div><div class="stock-card-grid" data-inventory-cards>${inventoryCardsHtml()}</div><div class="panel-note">Order dates use your daily estimates or a confirmed complete history period, ${e(data?.settings?.lead_days??2)} days supplier lead time, and ${e(data?.settings?.safety_days??1)} safety days. They are planning estimates, not automatic orders. Check physical stock regularly.</div></section><section class="panel inventory-history">${panelHeading('Usage, counts & sales','An audit trail of confirmed stock changes.')}<div class="inventory-events">${events||'<div class="empty">No usage, counts, or sales recorded yet.</div>'}</div></section>`;
 }
 function inventoryOptions(selected=''){return inventoryState.snapshot.map(item=>`<option value="${e(item.ingredient_id)}" ${selected===item.ingredient_id?'selected':''}>${e(item.name)} (${e(item.unit)})</option>`).join('');}
 function recipeLine(){return `<div class="recipe-line"><label>Ingredient<select name="recipe_ingredient">${inventoryOptions()}</select></label><label>Amount per portion<input name="recipe_quantity" type="number" min="0.000001" step="any" required placeholder="e.g. 0.15"></label><button type="button" class="button mini" data-remove-recipe-line aria-label="Remove ingredient">Remove</button></div>`;}
