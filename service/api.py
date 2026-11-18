@@ -1489,6 +1489,36 @@ def create_app(
         data["label"] = window["label"]
         return {"data": data}
 
+    @app.get("/v1/export/purchase-lines.csv")
+    def export_purchase_lines(
+        actor=Depends(owner_actor),
+        start: str | None = Query(None),
+        end: str | None = Query(None),
+        ingredient_id: str | None = Query(None),
+    ):
+        """Line-level purchase export for Excel: one row per item line from
+        non-voided approved purchases, with an optional WIB day-bounded window
+        and single-ingredient filter. The Purchases tab strip passes its
+        period selection so the file matches what the owner just reviewed."""
+        window = {}
+        if start or end:
+            date_pattern = re.compile(r"\d{4}-\d{2}-\d{2}")
+            if not start or not end or not date_pattern.fullmatch(start) or not date_pattern.fullmatch(end):
+                raise DomainError("invalid_period", "Pilih tanggal awal dan akhir yang lengkap.", 422)
+            try:
+                start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=RESTAURANT_TIMEZONE)
+                end_dt = (datetime.strptime(end, "%Y-%m-%d") + timedelta(days=1)).replace(tzinfo=RESTAURANT_TIMEZONE)
+            except ValueError:
+                raise DomainError("invalid_period", "Tanggal tidak valid.", 422) from None
+            window = {"start": start_dt.isoformat(), "end": end_dt.isoformat()}
+        if ingredient_id and not any(entry["id"] == ingredient_id for entry in store.catalog_list(actor["restaurant_id"])):
+            raise DomainError("unknown_ingredient", "Bahan tidak ada di katalog resto ini.", 422)
+        rows = store.purchase_lines(actor["restaurant_id"], window.get("start"), window.get("end"), ingredient_id or None)
+        header = ["purchase_id", "created_at", "supplier", "item", "quantity", "unit", "unit_price_idr", "line_total_idr"]
+        return csv_attachment(
+            [header] + [[row[column] if row[column] is not None else "" for column in header] for row in rows],
+            "restopilot-purchase-lines.csv")
+
     @app.post("/v1/stock-counts", status_code=201)
     def stock_count_apply(body: StockCountCreate, actor=Depends(owner_actor), idempotency_key=Depends(key)):
         """Apply a dashboard physical stock count correction for one ingredient."""
