@@ -530,3 +530,9 @@ test('dialogs and primary actions share the approved dimensions', () => {
   assert.match(css, /dialog \{ border-radius:var\(--modal-radius\); padding:var\(--modal-inset\)/);
   assert.match(css, /\.button\.primary, \.login-submit \{ min-height:var\(--button-min-height\)/);
 });
+
+test('approval badge belongs to its icon and the four owner destinations remain available', () => {
+  const html = fs.readFileSync('frontend/index.html', 'utf8');
+  assert.match(html, /id="nav-approvals"[^]*?<\/svg><span id="nav-count"[^]*?<\/span><\/span>/);
+  for (const page of ['overview', 'approvals', 'inventory', 'more']) assert.ok(html.includes('data-page="'+page+'"'));
+});

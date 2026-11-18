@@ -546,7 +546,13 @@ function render() {
   $('.page-heading').classList.toggle('modest',modestHeading);
   const headingButton=$('.page-heading .button');
   if(headingButton){headingButton.classList.toggle('primary',!modestHeading);headingButton.classList.toggle('secondary',modestHeading);}
-  document.querySelectorAll('[data-page]').forEach(link => { link.classList.toggle('active',link.dataset.page===page); if(link.dataset.page===page)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current'); });
+  const activeTab = ['overview', 'approvals', 'inventory'].includes(page) ? page : 'more';
+  document.querySelectorAll('[data-page]').forEach(link => {
+    const active = link.dataset.page === activeTab;
+    link.classList.toggle('active', active);
+    if (active) link.setAttribute('aria-current', page === activeTab ? 'page' : 'location');
+    else link.removeAttribute('aria-current');
+  });
   updateApprovalsBadge();
   if (!state.data) return;
   $('#restaurant-name').textContent=state.data.restaurant.name;

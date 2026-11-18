@@ -233,18 +233,41 @@ body:not(.is-admin) nav a{position:relative}
   body:not(.is-admin) nav a.active{font-weight:700;color:#f0f5e3}
   body:not(.is-admin) nav a.active::before{content:"";position:absolute;left:0;top:22%;bottom:22%;width:3px;border-radius:2px;background:var(--green-300)}
 }
-@media(max-width:768px){
-  body:not(.is-admin) nav{position:fixed;left:0;right:0;bottom:0;z-index:25;flex-direction:row;margin:0;gap:2px;padding:8px 10px calc(8px + env(safe-area-inset-bottom,0px));background:var(--green-dark);box-shadow:0 -8px 28px rgba(24,63,53,.22);overflow:hidden;scrollbar-width:none}
-  body:not(.is-admin) nav::-webkit-scrollbar{display:none}
-  body:not(.is-admin) nav a{position:relative;flex:1 1 0;min-width:0;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:48px;padding:8px 4px;font-size:10px;font-weight:550;letter-spacing:.2px;border-radius:9px;color:#9db5a8}
-  body:not(.is-admin) nav a>span:first-child{display:block;font-size:22px;width:auto;line-height:1;color:#b7cabe;transition:color .15s}
-  body:not(.is-admin) nav a.active{background:rgba(255,255,255,.10);color:#f0f5e3;font-weight:700}
-  body:not(.is-admin) nav a.active>span:first-child{color:var(--green-300)}
-  body:not(.is-admin) nav a.active::before{content:"";position:absolute;top:0;left:18%;right:18%;height:3px;width:auto;border-radius:0 0 3px 3px;background:var(--green-300)}
-  body:not(.is-admin) nav a:hover{background:rgba(255,255,255,.07);color:#e2ebdd}
-  body:not(.is-admin) .nav-count{margin-left:5px;font-size:8px;padding:2px 5px}
-  body:not(.is-admin) main{padding-bottom:96px}
-  body:not(.is-admin) .toast{bottom:100px}
+#nav-approvals > span:first-child { position:relative; }
+#nav-count { position:absolute; left:100%; top:0; margin:0; }
+@media (min-width:769px) {
+  .sidebar { width:var(--rail); }
+  .shell { margin-left:var(--rail); }
+  .toast { left:calc(50% + var(--rail) / 2); }
+  #nav-approvals { position:relative; }
+  #nav-approvals > span:first-child { position:static; }
+  #nav-count { inset:50% var(--space-1) auto auto; transform:translateY(-50%); }
+}
+@media (max-width:768px) {
+  body:not(.is-admin) #main-nav {
+    position:fixed; inset:auto 0 0; z-index:25; display:grid;
+    grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; margin:0;
+    padding:0 0 var(--safe); background:var(--ink); box-shadow:none;
+  }
+  #main-nav a[hidden] { display:none; }
+  body:not(.is-admin) #main-nav a {
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:0; min-width:0; min-height:var(--tab-target); padding:0;
+    color:var(--green-200); border-radius:var(--tab-backplate);
+    font:var(--medium) var(--text-caption)/var(--space-2) var(--font-body);
+    letter-spacing:normal;
+  }
+  body:not(.is-admin) #main-nav a[hidden] { display:none; }
+  body:not(.is-admin) #main-nav a.active {
+    background:var(--green-300); color:var(--ink); font-weight:var(--bold);
+  }
+  #main-nav a > span:first-child, #main-nav svg {
+    width:var(--space-3); height:var(--space-3); color:inherit;
+  }
+  #main-nav a.active::before { display:none; }
+  #main-nav .nav-count { margin:0; }
+  body:not(.is-admin) main { padding-bottom:calc(var(--tab-target) + var(--safe) + var(--space-2)); }
+  body:not(.is-admin) .toast { bottom:calc(var(--tab-target) + var(--safe) + var(--space-1)); }
 }
 @media(min-width:621px) and (max-width:768px){
   /* Sidebar keeps its desktop shape here; reserve room above the fixed tab bar. */
