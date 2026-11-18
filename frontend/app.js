@@ -1000,6 +1000,14 @@ document.addEventListener('submit',async event=>{
     const button=document.querySelector('#links-form button[type="submit"]');if(button)button.disabled=true;
     $('#links-phone').value='';$('#links-label').value='';await addLink(phone,platform,label);
   }
+  if(event.target.id==='supplier-form'){
+    event.preventDefault();
+    const name=$('#supplier-name').value.trim();if(!name)return;
+    const phone=$('#supplier-phone').value.trim(),platform=$('#supplier-platform').value,notes=$('#supplier-notes').value.trim();
+    const button=document.querySelector('#supplier-form button[type="submit"]');if(button)button.disabled=true;
+    $('#supplier-name').value='';$('#supplier-phone').value='';$('#supplier-notes').value='';
+    await addSupplier(name,phone,platform,notes);
+  }
 });
 document.addEventListener('submit',event=>{if(event.target.id==='whatsapp-form'){event.preventDefault();sendWhatsAppMessage($('#whatsapp-text').value);}});
 // Live inventory search: re-render only the card grid so the input keeps focus.
@@ -1235,7 +1243,21 @@ async function loadSupplierOverview(){
 }
 function supplierRowsHtml(){
   const suppliers=supplierState.data?.suppliers||[];
-  return suppliers.map(s=>`<div class="admin-row"><div><strong>${e(s.name)}</strong><small>${s.contact_phone?` · ${e(s.contact_platform||'wa')} ${e(s.contact_phone)}`:` · ${t('tanpa kontak','no contact')}`}${s.purchase_count?` · ${s.purchase_count}× ${t('beli','purchases')}`:''}${s.unpaid_count?` · ${t('utang','unpaid')} ${s.unpaid_count} ${t('nota','notes')}`:''}</small></div></div>`).join('') || `<div class="empty"><strong>${t('Belum ada supplier terdaftar.','No suppliers registered.')}</strong>${t('Tambahkan lewat chat: tambah supplier <nama> wa <nomor>.','Add through chat: tambah supplier <name> wa <number>.')}</div>`;
+  return suppliers.map(s=>`<div class="admin-row"><div><strong>${e(s.name)}</strong><small>${s.contact_phone?` · ${e(s.contact_platform||'wa')} ${e(s.contact_phone)}`:` · ${t('tanpa kontak','no contact')}`}${s.purchase_count?` · ${s.purchase_count}× ${t('beli','purchases')}`:''}${s.unpaid_count?` · ${t('utang','unpaid')} ${s.unpaid_count} ${t('nota','notes')}`:''}</small></div></div>`).join('') || `<div class="empty"><strong>${t('Belum ada supplier terdaftar.','No suppliers registered.')}</strong>${t('Tambahkan lewat formulir di bawah, atau lewat chat: tambah supplier <nama> wa <nomor>.','Add using the form below, or through chat: tambah supplier <name> wa <number>.')}</div>`;
+}
+function supplierFormHtml(){
+  // Same POST /v1/suppliers the chat command uses: name required, contact
+  // optional; the server rejects owner-linked phones and duplicate names.
+  return `<form id="supplier-form" class="whatsapp-composer"><label class="sr-only" for="supplier-name">${t('Nama supplier','Supplier name')}</label><input id="supplier-name" placeholder="${t('Nama supplier','Supplier name')}" maxlength="100" required><label class="sr-only" for="supplier-phone">${t('Nomor kontak (opsional)','Contact number (optional)')}</label><input id="supplier-phone" placeholder="${t('Nomor kontak, mis. 628123456789 (opsional)','Contact number, e.g. 628123456789 (optional)')}" maxlength="15" inputmode="numeric"><label class="sr-only" for="supplier-platform">${t('Platform','Platform')}</label><select id="supplier-platform" aria-label="${t('Platform','Platform')}"><option value="whatsapp">WhatsApp</option><option value="telegram">Telegram</option></select><label class="sr-only" for="supplier-notes">${t('Catatan (opsional)','Notes (optional)')}</label><input id="supplier-notes" placeholder="${t('Catatan (opsional)','Notes (optional)')}" maxlength="300"><button class="button primary" type="submit" ${supplierState.addBusy?'disabled':''}>${t('Tambah supplier','Add supplier')}</button></form><div id="supplier-error" class="notice error" role="alert" hidden></div>`;
+}
+async function addSupplier(name, phone, platform, notes){
+  if(supplierState.addBusy)return;supplierState.addBusy=true;showError('supplier-error','');
+  try{
+    await api('/v1/suppliers',{method:'POST',body:{name,contact_phone:phone||null,contact_platform:phone?platform:null,notes:notes||null},key:newId()});
+    supplierState.loaded=false;await loadSupplierOverview();toast(t('Supplier ditambahkan.','Supplier added.'));
+  }
+  catch(error){showError('supplier-error',error.message);}
+  finally{supplierState.addBusy=false;const button=document.querySelector('#supplier-form button[type="submit"]');if(button)button.disabled=false;}
 }
 function bestPriceRowsHtml(){
   const quotes=supplierState.data?.quotes||[];
@@ -1255,7 +1277,7 @@ function latestQuoteRowsHtml(){
 function suppliersPage(){
   if(supplierState.loading && !supplierState.loaded)return `<section class="panel"><div class="empty">${t('Memuat data supplier…','Loading supplier data…')}</div></section>`;
   if(supplierState.error)return `<section class="panel"><div class="notice error" role="alert">${e(supplierState.error)}</div><button class="button" data-action="reload-suppliers">${t('Coba lagi','Try again')}</button></section>`;
-  return `<section class="panel">${panelHeading(t('Supplier terdaftar','Registered suppliers'),t('Dibuat otomatis dari pembelian atau lewat chat.','Created automatically from purchases or through chat.'))}${supplierRowsHtml()}</section><section class="panel">${panelHeading(t('Harga terbaik per bahan','Best price per ingredient'),t('Dari kutipan supplier terbaru. Bandingkan sebelum membeli.','From the latest supplier quotes. Compare before you buy.'))}${bestPriceRowsHtml()}</section><section class="panel">${panelHeading(t('Kutipan harga terbaru','Latest price quotes'),t('15 kutipan terakhir dari semua supplier.','15 latest quotes across suppliers.'))}${latestQuoteRowsHtml()}<div class="panel-note">${t('Minta harga baru lewat chat: tanya harga <bahan> ke supplier.','Request fresh prices through chat: tanya harga <ingredient> ke supplier.')}</div></section>`;
+  return `<section class="panel">${panelHeading(t('Supplier terdaftar','Registered suppliers'),t('Dibuat otomatis dari pembelian, lewat chat, atau formulir ini.','Created automatically from purchases, through chat, or with this form.'))}${supplierRowsHtml()}${supplierFormHtml()}</section><section class="panel">${panelHeading(t('Harga terbaik per bahan','Best price per ingredient'),t('Dari kutipan supplier terbaru. Bandingkan sebelum membeli.','From the latest supplier quotes. Compare before you buy.'))}${bestPriceRowsHtml()}</section><section class="panel">${panelHeading(t('Kutipan harga terbaru','Latest price quotes'),t('15 kutipan terakhir dari semua supplier.','15 latest quotes across suppliers.'))}${latestQuoteRowsHtml()}<div class="panel-note">${t('Minta harga baru lewat chat: tanya harga <bahan> ke supplier.','Request fresh prices through chat: tanya harga <ingredient> ke supplier.')}</div></section>`;
 }
 async function loadSalesInsights(days){
   const target=Number(days)||insightsState.days;

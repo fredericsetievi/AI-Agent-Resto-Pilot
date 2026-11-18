@@ -348,7 +348,7 @@ def test_mixed_report_total_attaches_first_sale_when_consumption_line_is_first(s
     assert [line["kind"] for line in op(review)["candidate"]["lines"]] == ["usage", "sale"]
     assert op(review)["payloads"][0].get("revenue_idr") is None
     assert op(review)["payloads"][1]["revenue_idr"] == 50000
-    assert "Total pendapatan laporan Rp50,000; dicatat sekali." in final_reply(review)
+    assert "Total pendapatan laporan Rp50.000; dicatat sekali." in final_reply(review)
     assert balances(store)["beras"] == 30 and events(store) == []
     approve(store, review)
     assert balances(store)["beras"] == Decimal("28.8")
@@ -522,3 +522,19 @@ def test_purchase_order_verb_is_not_hijacked_as_forecast(store):
     response = ingest(store, "pesan beras 2 kg 30rb")
     assert response["result"]["action"] != "operation_forecast"
     assert response.get("draft") is not None
+
+
+def test_forecast_answer_names_the_cheapest_known_supplier(store):
+    """'Apa yang perlu dipesan?' crosses into the supplier ledger: reorder-now
+    ingredients come with the cheapest recorded source, same as alerts."""
+    ingest(store, "beli beras 10 kg 300rb dari warung murah")
+    ingest(store, "ya")
+    ingest(store, "lewati")
+    store.save_inventory_settings(uuid4().hex, {"daily_usage": {"beras": "2"}}, TENANT)
+    with store.transaction() as conn:  # 5 kg / 2 per day leaves the reorder window
+        conn.execute("UPDATE inventory SET quantity='5' WHERE restaurant_id=? AND ingredient_id='beras'", (TENANT,))
+    answer = ingest(store, "apa yang perlu dipesan?")
+    assert answer["result"]["action"] == "operation_forecast"
+    body = answer["reply"] if "reply" in answer else answer["messages"][-1]["body"]
+    assert "beras" in body and "pesan dalam" in body
+    assert "Harga termurah yang tercatat" in body and "warung murah" in body, body

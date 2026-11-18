@@ -1074,11 +1074,16 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                     purchase = json.loads(row["body"])
                     for item in purchase.get("items") or []:
                         ingredient_id = item.get("ingredient_id")
-                        price = item.get("unit_price_idr")
-                        # Ledger stores prices as digit strings; accept both shapes.
-                        if isinstance(price, str) and price.isdigit():
-                            price = int(price)
-                        if ingredient_id in named and isinstance(price, int) and not isinstance(price, bool) and price > 0:
+                        raw_price = item.get("unit_price_idr")
+                        # Ledger stores prices as decimal strings; accept any
+                        # clean whole-rupiah number, never a bool.
+                        if isinstance(raw_price, bool):
+                            continue
+                        try:
+                            price = int(Decimal(str(raw_price)))
+                        except (InvalidOperation, TypeError, ValueError):
+                            continue
+                        if ingredient_id in named and price > 0:
                             history.setdefault(ingredient_id, []).append(
                                 {"unit_price_idr": price, "created_at": row["created_at"], "supplier": purchase.get("supplier")})
             facts = []

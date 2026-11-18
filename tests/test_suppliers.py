@@ -459,3 +459,23 @@ def test_supplier_lists_are_tenant_scoped(tmp_path):
     assert action(followup_b) == "supplier_index_unknown", reply(followup_b)
     assert "Belum ada supplier terdaftar" in reply(followup_b)
     assert "Toko Khusus A" not in reply(followup_b)
+
+
+def test_supplier_phone_shared_across_restaurants_routes_deterministically(tmp_path):
+    """One market supplier phone may serve two restaurants; reply routing
+    resolves to the first registration every time, never an arbitrary row."""
+    store = Store(tmp_path / "shared_phone.sqlite3")
+    created_a = store.create_restaurant(uuid4().hex, {
+        "name": "Resto Satu", "owner_username": "one" + uuid4().hex[:6],
+        "owner_password": "rahasia-123", "whatsapp_number": SENDER,
+    })
+    created_b = store.create_restaurant(uuid4().hex, {
+        "name": "Resto Dua", "owner_username": "two" + uuid4().hex[:6],
+        "owner_password": "rahasia-123", "whatsapp_number": "628888000333",
+    })
+    phone = "628111000999"
+    store.supplier_add(uuid4().hex, {"name": "Pak Budi", "contact_phone": phone}, created_a["id"])
+    store.supplier_add(uuid4().hex, {"name": "Pak Budi Cabang 2", "contact_phone": phone}, created_b["id"])
+    routed = store.supplier_for_phone(phone)
+    assert routed["restaurant_id"] == created_a["id"] and routed["name"] == "Pak Budi"
+    assert store.supplier_for_phone(phone) == routed  # stable across calls

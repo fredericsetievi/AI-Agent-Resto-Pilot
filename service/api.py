@@ -1985,7 +1985,7 @@ def create_app(
                 intake = await run_in_threadpool(
                     store.supplier_reply_intake, supplier_contact["restaurant_id"], supplier_contact["id"], message["text"])
                 ack = "Terima kasih! Harga dicatat: " + ", ".join(
-                    f"{q['ingredient_name']} Rp{q['price']:,}" for q in intake["stored"]) if intake["stored"] else                     "Terima kasih! Balasan diterima tapi harganya belum terbaca — sebutkan bahan dan harganya."
+                    f"{q['ingredient_name']} Rp{q['price']:,}".replace(",", ".") for q in intake["stored"]) if intake["stored"] else                     "Terima kasih! Balasan diterima tapi harganya belum terbaca — sebutkan bahan dan harganya."
                 await send_telegram_text(telegram_bot_token, message["sender"], ack,
                                          api_base=telegram_api_base, client=telegram_http_client)
                 continue

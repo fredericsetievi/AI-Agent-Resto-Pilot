@@ -1149,10 +1149,16 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                     created = self._as_datetime(row["created_at"])
                     for item in row["body"].get("items") or []:
                         ingredient_id = item.get("ingredient_id")
-                        price = item.get("unit_price_idr")
-                        if isinstance(price, str) and price.isdigit():
-                            price = int(price)
-                        if ingredient_id in named and isinstance(price, int) and not isinstance(price, bool) and price > 0:
+                        raw_price = item.get("unit_price_idr")
+                        # Ledger stores prices as decimal strings; accept any
+                        # clean whole-rupiah number, never a bool.
+                        if isinstance(raw_price, bool):
+                            continue
+                        try:
+                            price = int(Decimal(str(raw_price)))
+                        except (InvalidOperation, TypeError, ValueError):
+                            continue
+                        if ingredient_id in named and price > 0:
                             history.setdefault(ingredient_id, []).append(
                                 {"unit_price_idr": price, "created_at": created.isoformat(),
                                  "supplier": row["body"].get("supplier")})

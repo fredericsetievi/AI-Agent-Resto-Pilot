@@ -163,7 +163,7 @@ def _pair_line_quotes(line, resolve, catalog_unit=None):
                 multiplier = _unit_multiplier(unit_note, catalog_unit) if unit_note else None
                 final = int((Decimal(amount) * multiplier).to_integral_value()) if multiplier else amount
                 if multiplier and multiplier != 1:
-                    note = f"asli Rp{amount:,} {unit_note}; dinormalisasi per {catalog_unit}"
+                    note = f"asli Rp{amount:,}".replace(",", ".") + f" {unit_note}; dinormalisasi per {catalog_unit}"
                 quotes.append({"ingredient_id": found[0], "ingredient_name": found[1],
                                "unit_price_idr": final, "note": note, "line": line})
             else:
@@ -400,11 +400,19 @@ class SupplierMixin:
                 for r in rows]
 
     def supplier_for_phone(self, phone):
-        """The supplier contact for this number, or None (owner numbers resolve elsewhere)."""
+        """The supplier contact for this number, or None (owner numbers resolve elsewhere).
+
+        Policy: one phone may legitimately serve several restaurants (the same
+        market supplier selling to both), so uniqueness stays per tenant —
+        UNIQUE(restaurant_id, contact_phone) / UNIQUE(slug, contact_phone).
+        Reply routing needs one deterministic answer anyway: the first
+        registration wins, stable across calls, instead of an arbitrary row.
+        """
         tc = self._tenant_col()
         with self.transaction() as conn:
-            row = self._inventory_query(conn, f"SELECT id, name, {tc} FROM suppliers WHERE contact_phone=?",
-                                        (str(phone),)).fetchone()
+            row = self._inventory_query(
+                conn, f"SELECT id, name, {tc} FROM suppliers WHERE contact_phone=? "
+                      f"ORDER BY created_at, id LIMIT 1", (str(phone),)).fetchone()
         return {"id": row[0], "name": row[1], "restaurant_id": row[2]} if row else None
 
     # ---- quotes -------------------------------------------------------------
@@ -431,7 +439,7 @@ class SupplierMixin:
                                   (quote_id, restaurant_id, supplier_id, ingredient_id, ingredient_name,
                                    int(unit_price), payload.get("note"), payload.get("raw_message") or "",
                                    source, inquiry_id, now()))
-            self._audit(conn, "supplier_quote_recorded", f"Harga {ingredient_name or ingredient_id}: Rp{int(unit_price):,} dicatat.", restaurant_id)
+            self._audit(conn, "supplier_quote_recorded", "Harga " + f"{ingredient_name or ingredient_id}: " + f"Rp{int(unit_price):,}".replace(",", ".") + " dicatat.", restaurant_id)
             return {"ok": True, "id": quote_id}
 
         if conn is not None:
@@ -1115,27 +1123,34 @@ def _inquiry_request_text_module(text):
 
 
 
-def supplier_alert_hint(store, restaurant_id, candidates):
+def supplier_alert_hint(store, restaurant_id, candidates, conn=None):
     """One line naming the cheapest known source per low-stock ingredient.
 
     Considers recorded quotes first, then purchase prices; returns None
-    when nothing useful is known (no inventing).
+    when nothing useful is known (no inventing). Pass the caller's
+    transaction conn when already inside one (SQLite cannot nest BEGIN).
     """
+    if conn is None:
+        with store.transaction() as conn:
+            return _supplier_alert_hint_conn(store, conn, restaurant_id, candidates)
+    return _supplier_alert_hint_conn(store, conn, restaurant_id, candidates)
+
+
+def _supplier_alert_hint_conn(store, conn, restaurant_id, candidates):
     hints = []
-    with store.transaction() as conn:
-        for candidate in candidates:
-            ingredient_id = candidate.get("ingredient_id")
-            if not ingredient_id:
-                continue
-            quote = store.supplier_quotes_recent(restaurant_id, ingredient_id, limit=1, conn=conn)
-            purchase = store.supplier_purchase_price(conn, restaurant_id, ingredient_id)
-            name = candidate.get("name") or ingredient_id
-            if quote and quote[0].get("unit_price_idr") is not None:
-                price = f"Rp{quote[0]['unit_price_idr']:,}".replace(",", ".")
-                hints.append(f"{name}: termurah tercatat {price} ({quote[0]['supplier_name']})")
-            elif purchase:
-                price = f"Rp{purchase['unit_price_idr']:,}".replace(",", ".")
-                hints.append(f"{name}: harga beli terakhir {price} ({purchase.get('supplier') or 'tanpa pemasok'})")
+    for candidate in candidates:
+        ingredient_id = candidate.get("ingredient_id")
+        if not ingredient_id:
+            continue
+        quote = store.supplier_quotes_recent(restaurant_id, ingredient_id, limit=1, conn=conn)
+        purchase = store.supplier_purchase_price(conn, restaurant_id, ingredient_id)
+        name = candidate.get("name") or ingredient_id
+        if quote and quote[0].get("unit_price_idr") is not None:
+            price = f"Rp{quote[0]['unit_price_idr']:,}".replace(",", ".")
+            hints.append(f"{name}: termurah tercatat {price} ({quote[0]['supplier_name']})")
+        elif purchase:
+            price = f"Rp{purchase['unit_price_idr']:,}".replace(",", ".")
+            hints.append(f"{name}: harga beli terakhir {price} ({purchase.get('supplier') or 'tanpa pemasok'})")
     return ("Harga termurah yang tercatat: " + "; ".join(hints) + ".") if hints else None
 
 

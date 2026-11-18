@@ -650,3 +650,22 @@ test('landing preserves its bilingual copy and groups the entry action before pr
   assert.ok(html.includes('Asisten AI'));
   assert.ok(html.indexOf('/assets/tokens.css') < html.indexOf('/landing-assets/styles.css'));
 });
+
+test('supplier page offers the add form and posts to /v1/suppliers', async () => {
+  const calls=[];
+  const h=harness({fetchImpl:(path,options={})=>{
+    calls.push({path,options});
+    return Promise.resolve({ok:true,json:()=>Promise.resolve({data:{suppliers:[],quotes:[]}})});
+  }});
+  h.run(`state.user={role:'owner',restaurant_id:'r1'};state.page='';supplierState.data={suppliers:[],quotes:[]}`);
+  const page=h.run('suppliersPage()');
+  assert.ok(page.includes('id="supplier-form"'));
+  assert.ok(page.includes('Add supplier'));
+  assert.ok(page.includes('WhatsApp') && page.includes('Telegram'));
+  assert.ok(page.includes('Add using the form below'));
+  await h.run(`addSupplier('Toko Jaya','628111000222','whatsapp','kirim pagi')`);
+  const post=calls.find(call=>call.options.method==='POST');
+  assert.ok(post && post.path==='/v1/suppliers');
+  assert.deepEqual(JSON.parse(post.options.body),{name:'Toko Jaya',contact_phone:'628111000222',contact_platform:'whatsapp',notes:'kirim pagi'});
+  assert.ok(post.options.headers['Idempotency-Key']);
+});
