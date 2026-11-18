@@ -552,3 +552,9 @@ test('every draft warning is visible and escaped before the decision buttons', (
   h.run("window.setLang('id')");
   assert.match(h.run('recipeLine()'), /Jumlah per porsi/);
 });
+test('landing preserves its bilingual copy and groups the entry action before proof', () => {
+  const html = fs.readFileSync('landing/index.html','utf8');
+  assert.match(html, /data-i18n="hero.title"[^]*?data-i18n-html="hero.lede"[^]*?class="hero-actions"[^]*?class="hero-channels"[^]*?class="trust-strip"/);
+  assert.ok(html.includes('Asisten AI'));
+  assert.ok(html.indexOf('/assets/tokens.css') < html.indexOf('/landing-assets/styles.css'));
+});
