@@ -517,3 +517,10 @@ test('approved tokens ship before styles and the translated dashboard scripts', 
   assert.ok(plugin.includes("'/assets/tokens.css': { file: path.join(frontendDir, 'tokens.css')"));
   assert.match(plugin, /generateBundle\(\)[^]*Object.entries\(allAssets\(\)\)[^]*this.emitFile/);
 });
+
+test('base typography consumes approved tokens and preserves the legacy canvas', () => {
+  const css = fs.readFileSync('frontend/styles.css', 'utf8');
+  assert.ok(css.includes('font-family:var(--font-display)'));
+  assert.ok(css.includes('--legacy-paper:#f6f7f2'));
+  assert.ok(css.includes('--green-dark:var(--ink)'));
+});
