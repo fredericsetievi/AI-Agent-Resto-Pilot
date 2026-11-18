@@ -51,6 +51,7 @@ from .catalog_import import CatalogImportError, parse_catalog_file
 from .pg_store import PostgresStore
 from .data_qa import build_answer as build_data_answer
 from .data_qa import phrase_data_answer, phrase_opname_answer
+from .data_qa import parse_window
 from .extraction import (
     FORWARDED_MAX_ITEMS,
     extract_purchase,
@@ -1456,6 +1457,37 @@ def create_app(
     @app.get("/v1/stock-counts")
     def stock_counts_list(actor=Depends(owner_actor)):
         return {"data": {"counts": store.recent_stock_counts(actor["restaurant_id"])}}
+
+    @app.get("/v1/purchase-totals")
+    def purchase_totals(
+        actor=Depends(owner_actor),
+        period: Literal["this_month", "last_month", "custom"] = Query("this_month"),
+        start: str | None = Query(None),
+        end: str | None = Query(None),
+    ):
+        """Per-item purchase totals for one period: what was bought (in the
+        purchase units the lines recorded) and its value, from non-voided
+        approved purchases. Same ledger figures and window rules as the chat
+        totals question ("total pembelian gas 12 kg bulan ini")."""
+        if period == "custom":
+            date_pattern = re.compile(r"\d{4}-\d{2}-\d{2}")
+            if not start or not end or not date_pattern.fullmatch(start) or not date_pattern.fullmatch(end):
+                raise DomainError("invalid_period", "Pilih tanggal awal dan akhir.", 422)
+            try:
+                start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=RESTAURANT_TIMEZONE)
+                # The end date is inclusive for the owner; the window ends at
+                # the start of the next day, like every WIB day boundary.
+                end_dt = (datetime.strptime(end, "%Y-%m-%d") + timedelta(days=1)).replace(tzinfo=RESTAURANT_TIMEZONE)
+            except ValueError:
+                raise DomainError("invalid_period", "Tanggal tidak valid.", 422) from None
+            if start_dt >= end_dt:
+                raise DomainError("invalid_period", "Tanggal akhir harus setelah tanggal awal.", 422)
+            window = {"start": start_dt.isoformat(), "end": end_dt.isoformat(), "label": f"{start} s/d {end}"}
+        else:
+            window = parse_window("bulan ini" if period == "this_month" else "bulan lalu")
+        data = store.purchase_item_totals(actor["restaurant_id"], window.get("start"), window.get("end"))
+        data["label"] = window["label"]
+        return {"data": data}
 
     @app.post("/v1/stock-counts", status_code=201)
     def stock_count_apply(body: StockCountCreate, actor=Depends(owner_actor), idempotency_key=Depends(key)):

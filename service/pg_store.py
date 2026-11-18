@@ -28,8 +28,9 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 
 from .data_qa import (
     average_fact, compare_fact, ingredient_spend_fact, is_average_question,
-    is_compare_question, is_price_question, is_rank_question, is_spend_question,
-    parse_window, find_windows, price_fact, rank_fact, spend_fact,
+    is_compare_question, is_price_question, is_purchase_total_question,
+    is_rank_question, is_spend_question, parse_window, find_windows,
+    price_fact, purchase_total_payload, rank_fact, spend_fact,
 )
 from .inventory import InventoryMixin
 from .menu_insights import MenuInsightsMixin
@@ -1085,7 +1086,7 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         total, count, first = 0, 0, None
         per_ingredient = {}
         cur = self._execute(conn,
-            "SELECT body, created_at FROM purchases WHERE slug=%s ORDER BY created_at, id", (restaurant_id,))
+            "SELECT body, created_at FROM purchases WHERE slug=%s AND voided_at IS NULL ORDER BY created_at, id", (restaurant_id,))
         for row in self._rows(cur):
             created = self._as_datetime(row["created_at"])
             body = row["body"]
@@ -1117,6 +1118,13 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
             known = self._execute(conn, "SELECT 1 FROM tenants WHERE slug=%s", (restaurant_id,)).fetchone()
         if not known:
             return None
+        if is_purchase_total_question(text):
+            window = find_windows(text, limit=1)
+            window = window[0] if window else parse_window(text)
+            with pg_connection() as conn:
+                agg = self._spend_aggregate(conn, restaurant_id, window.get("start"), window.get("end"))
+            return purchase_total_payload(str(text).strip(), agg, self._stock_ingredient_ids(text, restaurant_id),
+                                          self._catalog_for(restaurant_id)["by_id"], window)
         if is_price_question(text):
             named = self._stock_ingredient_ids(text, restaurant_id)
             if not named:
@@ -1181,6 +1189,25 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
             top = {"name": ingredient.get("name") or str(top_key), "quantity": str(top_entry["quantity"]), "unit": top_entry["unit"] or ""}
             return {"question": str(text).strip(), "facts": [spend_fact(agg["total_idr"], agg["purchase_count"], window["label"], top=top)]}
         return None
+
+    def purchase_item_totals(self, restaurant_id, start=None, end=None):
+        """Per-item purchase totals for the dashboard Purchases tab strip.
+
+        Quantity in purchase units (tabung, sak, kg — whatever the line
+        recorded), rupiah, and how many purchases mentioned the item, biggest
+        spend first. Same figures the chat answers, same window rules.
+        """
+        with pg_connection() as conn:
+            agg = self._spend_aggregate(conn, restaurant_id, start, end)
+        catalog = self._catalog_for(restaurant_id)["by_id"]
+        items = []
+        for key, entry in agg["per_ingredient"].items():
+            ingredient = catalog.get(key) or {}
+            items.append({"ingredient_id": str(key), "name": ingredient.get("name") or str(key),
+                          "quantity": float(entry["quantity"]), "unit": entry.get("unit") or ingredient.get("unit") or "",
+                          "total_idr": entry["total"], "purchase_count": entry["count"]})
+        items.sort(key=lambda item: item["total_idr"], reverse=True)
+        return {"total_idr": agg["total_idr"], "purchase_count": agg["purchase_count"], "items": items}
 
     def restaurant_name(self, restaurant_id):
         with pg_connection() as conn:
