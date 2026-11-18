@@ -93,8 +93,8 @@ function ingredientIcon(name, ingredientId) {
   return letter ? `<span class="icon-letter">${e(letter)}</span>` : '▦';
 }
 const TITLES = {
-  id: {overview:['Dapur Anda, dalam pandangan, Bos.','Pembelian, stok, dan keputusan yang menunggu Anda.'],approvals:['Saatnya meninjau, Bos.','Periksa detailnya. Anda yang memutuskan menjadi catatan.'],purchases:['Setiap pembelian tercatat, Bos.','Pembelian yang disetujui beserta sumber catatannya. Status pembayaran terpisah.'],inventory:['Stok dapur','Stok estimasi dari pembelian tercatat. Pemakaian dapur belum dilacak.'],rules:['Peraturan asisten resto Anda, Bos.','Aturan khusus per resto — asisten menaatinya, resto lain tidak terpengaruh.'],links:['Hubungkan nomor/chat resto Anda, Bos.','Satu nomor bisa aktif di WhatsApp dan Telegram sekaligus — per resto.'],activity:['Kisah di balik tiap catatan, Bos.','Jejak permanen draf, koreksi, dan keputusan pemilik.'],whatsapp:['Chat dengan asisten, Bos.','Catatan pembelian dan keputusan draf di satu tempat — tanpa pindah aplikasi.'],suppliers:['Harga semua supplier dalam satu tabel, Bos.','Kutipan terbaru per bahan dan harga beli terakhirmu.'],insights:['Penjualan menu dalam angka, Bos.','Terlaris, paling sepi, dan perbandingan periode.']},
-  en: {overview:['Your kitchen, in view, Boss.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review, Boss.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for, Boss.','Approved purchases and their source records. Payment status is separate.'],inventory:['Kitchen stock','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],rules:['Rules for your restaurant assistant, Boss.','Per-restaurant rules — the assistant obeys them, other restaurants are unaffected.'],links:['Connect your restaurant numbers, Boss.','One number can be active on WhatsApp and Telegram at once — per restaurant.'],activity:['The story behind each record, Boss.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['Chat with your assistant, Boss.','Purchase notes and draft decisions in one place — without switching apps.'],suppliers:['Every supplier price in one table, Boss.','Latest quotes per ingredient and your last purchase price.'],insights:['Menu sales in numbers, Boss.','Best sellers, slow movers, and the period comparison.']}
+  id: {overview:['Dapur Anda, dalam pandangan, Bos.','Pembelian, stok, dan keputusan yang menunggu Anda.'],approvals:['Saatnya meninjau, Bos.','Periksa detailnya. Anda yang memutuskan menjadi catatan.'],purchases:['Setiap pembelian tercatat, Bos.','Pembelian yang disetujui beserta sumber catatannya. Status pembayaran terpisah.'],inventory:['Stok dapur','Stok estimasi dari pembelian tercatat. Pemakaian dapur belum dilacak.'],rules:['Peraturan asisten resto Anda, Bos.','Aturan khusus per resto — asisten menaatinya, resto lain tidak terpengaruh.'],links:['Hubungkan nomor/chat resto Anda, Bos.','Satu nomor bisa aktif di WhatsApp dan Telegram sekaligus — per resto.'],activity:['Kisah di balik tiap catatan, Bos.','Jejak permanen draf, koreksi, dan keputusan pemilik.'],whatsapp:['Chat dengan asisten, Bos.','Catatan pembelian dan keputusan draf di satu tempat — tanpa pindah aplikasi.'],suppliers:['Harga semua supplier dalam satu tabel, Bos.','Kutipan terbaru per bahan dan harga beli terakhirmu.'],insights:['Penjualan menu dalam angka, Bos.','Terlaris, paling sepi, dan perbandingan periode.'],more:['Semua menu resto Anda, Bos.','Pembelian, supplier, laporan, chat, dan pengaturan lainnya.']},
+  en: {overview:['Your kitchen, in view, Boss.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review, Boss.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for, Boss.','Approved purchases and their source records. Payment status is separate.'],inventory:['Kitchen stock','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],rules:['Rules for your restaurant assistant, Boss.','Per-restaurant rules — the assistant obeys them, other restaurants are unaffected.'],links:['Connect your restaurant numbers, Boss.','One number can be active on WhatsApp and Telegram at once — per restaurant.'],activity:['The story behind each record, Boss.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['Chat with your assistant, Boss.','Purchase notes and draft decisions in one place — without switching apps.'],suppliers:['Every supplier price in one table, Boss.','Latest quotes per ingredient and your last purchase price.'],insights:['Menu sales in numbers, Boss.','Best sellers, slow movers, and the period comparison.'],more:['Everything else, Boss.','Purchases, suppliers, reports, chat, and other settings.']}
 };
 const titles = () => TITLES[LANG] || TITLES.id;
 let WHATSAPP_SENDER = '';
@@ -138,7 +138,7 @@ async function loadAdminList() {
 function renderAdmin() {
   const page=state.page, [title,subtitle]=(ADMIN_TITLES[page] || ADMIN_TITLES.admin).map(t);
   $('#page-title').textContent=title; $('#page-subtitle').textContent=subtitle; $('#breadcrumb').textContent=t(page==='admin'?'nav_admin':'crumb_admin_detail');
-  const navCount=$('#nav-count');if(navCount)navCount.textContent='—';
+  updateApprovalsBadge();
   if(!state.adminList && !state.adminLoading){state.adminLoading=true;loadAdminList().finally(() => state.adminLoading=false);$('#content').innerHTML='<div class="loading-state"><span class="spinner"></span> '+t('load_resto')+'</div>';return;}
   if(page==='admin')renderAdminList(); else renderAdminDetail();
 }
@@ -322,14 +322,34 @@ function renderIdentity() {
   const isAdmin = user.role==='admin';
   $('#nav-admin').hidden = !isAdmin;
   $('#nav-approvals').hidden = isAdmin;
-  $('#nav-whatsapp').hidden = isAdmin;
-  $('#nav-rules').hidden = isAdmin;
-  $('#nav-links').hidden = isAdmin;
+  $('#nav-more').hidden = isAdmin;
+  // P2 owner nav: the tab strip keeps exactly four entries (Ringkasan,
+  // Persetujuan, Stok, Lainnya); every other owner destination lives on the
+  // Lainnya page. Admins keep the full sidebar list unchanged.
+  $('#nav-purchases').hidden = !isAdmin;
+  $('#nav-suppliers').hidden = !isAdmin;
+  $('#nav-insights').hidden = !isAdmin;
+  $('#nav-activity').hidden = !isAdmin;
+  $('#nav-whatsapp').hidden = true;
+  $('#nav-rules').hidden = true;
+  $('#nav-links').hidden = true;
   $('#workspace-sub').textContent = isAdmin ? t('Semua resto','All restaurants') : t('Workspace resto','Restaurant workspace');
 }
 function toast(message) { $('#toast').textContent=message; $('#toast').hidden=false; clearTimeout(toast.timer); toast.timer=setTimeout(() => $('#toast').hidden=true, 5500); }
 function showError(id, message) { const element=$(`#${id}`); element.textContent=message; element.hidden=!message; }
 function pendingDrafts() { return (state.data?.drafts || []).filter(draft => ['pending_approval','needs_clarification'].includes(draft.status) && !state.inlineDecisions.has(draft.id)); }
+// Approvals tab badge: how many of this restaurant's drafts await a decision.
+// Hidden at zero, "99+" above 99, and announced via aria-label for screen
+// readers. Runs on every render — load, view switch, and after each decision.
+function updateApprovalsBadge() {
+  const countEl=$('#nav-count'), tab=$('#nav-approvals');
+  if(!countEl || !tab)return;
+  const count=pendingDrafts().length;
+  countEl.textContent=count>99?'99+':String(count);
+  countEl.hidden=count===0;
+  if(count>0)tab.setAttribute('aria-label',`${t('nav_approvals')}, ${count} ${t('menunggu','pending')}`);
+  else tab.removeAttribute('aria-label');
+}
 function badge(status) { const text={pending_approval:t('badge_pending'),needs_clarification:t('badge_clarify'),recorded:t('badge_recorded'),rejected:t('badge_rejected')}; return `<span class="badge ${status==='recorded'?'green':status==='rejected'?'gray':'amber'}">${e(text[status] || status)}</span>`; }
 const WA_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg>';
 function timeHM(value) { return value ? new Intl.DateTimeFormat(LANG === 'en' ? 'en-GB' : 'id-ID',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Jakarta'}).format(new Date(value)) : ''; }
@@ -359,11 +379,40 @@ function itemSummary(items) { return (items || []).map(item => nameFor(item)).jo
 function warningFor(draft) { return draft.items?.find(item => item.comparison?.status==='price_increase'); }
 function draftCard(draft) {
   const item=draft.items?.[0] || {}, spike=warningFor(draft), clarify=draft.status==='needs_clarification';
-  return `<article class="draft-card ${spike?'alert':''}"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">${ingredientIcon(item.raw_name || item.name, item.ingredient_id)}</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || t('Pemasok tidak disebutkan','Supplier unspecified'))} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} ${t('bahan','items')}`)}</p>${sourceChip(draft)}</div><div class="price money">${rupiah(draft.total_idr)}<small>${t('Total pembelian','Purchase total')}</small></div></div>${spike ? `<div class="price-alert"><span aria-hidden="true">↗</span><span><strong>${number(Number(spike.comparison.change_percent).toFixed(1))}% ${t('kenaikan harga','price increase')}</strong> · ${rupiah(spike.unit_price_idr)}/${e(spike.canonical_unit)} vs ${rupiah(spike.comparison.baseline_unit_price_idr)}</span></div>` : clarify ? t('<div class="price-alert">Ada detail yang perlu diperhatikan sebelum dicatat.</div>','<div class="price-alert">Some details need your attention before this can be recorded.</div>') : ''}<div class="draft-bottom">${badge(draft.status)}<div class="draft-actions"><button class="text-button" data-review="${e(draft.id)}">${t('Tinjau pembelian','Review purchase')} <span aria-hidden="true">→</span></button><button class="button mini primary" data-approve="${e(draft.id)}"${clarify?' disabled title="Lengkapi detailnya lewat Review dulu"':''}>${t('Setujui','Approve')}</button><button class="button mini" data-reject="${e(draft.id)}">${t('Batalkan','Reject')}</button></div></div></article>`;
+  return `<article class="draft-card ${spike?'alert':''}"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">${ingredientIcon(item.raw_name || item.name, item.ingredient_id)}</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || t('Pemasok tidak disebutkan','Supplier unspecified'))} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} ${t('bahan','items')}`)}</p>${sourceChip(draft)}</div><div class="price money">${rupiah(draft.total_idr)}<small>${t('Total pembelian','Purchase total')}</small></div></div>${spike ? `<div class="price-alert"><span aria-hidden="true">↗</span><span><strong>${number(Number(spike.comparison.change_percent).toFixed(1))}% ${t('kenaikan harga','price increase')}</strong> · ${rupiah(spike.unit_price_idr)}/${e(spike.canonical_unit)} vs ${rupiah(spike.comparison.baseline_unit_price_idr)}</span></div>` : clarify ? t('<div class="price-alert"><span aria-hidden="true">⚠</span><span>Ada detail yang perlu diperhatikan sebelum dicatat.</span></div>','<div class="price-alert"><span aria-hidden="true">⚠</span><span>Some details need your attention before this can be recorded.</span></div>') : ''}<div class="draft-bottom">${badge(draft.status)}<div class="draft-actions"><button class="text-button" data-review="${e(draft.id)}">${t('Tinjau pembelian','Review purchase')} <span aria-hidden="true">→</span></button><button class="button mini primary" data-approve="${e(draft.id)}"${clarify?' disabled title="Lengkapi detailnya lewat Review dulu"':''}>${t('Setujui','Approve')}</button><button class="button mini" data-reject="${e(draft.id)}">${t('Batalkan','Reject')}</button></div></div></article>`;
+}
+// Relative day label for purchase rows: Hari ini/Kemarin, otherwise a short
+// locale date in the selected language.
+function relativeDay(value) {
+  if(!value)return '';
+  const parsed=new Date(value);if(Number.isNaN(parsed.getTime()))return '';
+  const dayOf=stamp=>{const d=new Date(stamp);return Date.UTC(d.getFullYear(),d.getMonth(),d.getDate());};
+  const diff=Math.round((dayOf(Date.now())-dayOf(parsed))/86400000);
+  if(diff===0)return t('Hari ini','Today');
+  if(diff===1)return t('Kemarin','Yesterday');
+  return new Intl.DateTimeFormat(LANG==='en'?'en-GB':'id-ID',{day:'numeric',month:'short'}).format(parsed);
+}
+// LLM non-kitchen warnings travel with the purchase data. They must stay
+// visible (icon + text, never color-only) wherever purchases render: an
+// always-visible line on mobile rows, inline under the purchase cell in the
+// desktop table. Never truncated, never hidden inside the details dialog.
+function purchaseWarnings(purchase){return [...new Set((purchase.warnings||[]).map(String))].slice(0,3);}
+function purchaseWarningHtml(purchase){return purchaseWarnings(purchase).map(text=>`<div class="purchase-warning"><span aria-hidden="true">⚠</span><span>${e(text)}</span></div>`).join('');}
+// Mobile line 1: first two ingredients with quantities, then "+N" for the rest.
+function purchaseItemSummary(items){
+  const list=items||[];
+  if(!list.length)return t('Pembelian perlu detail','Purchase needs details');
+  const parts=list.slice(0,2).map(item=>`${nameFor(item)}${item.quantity!=null&&item.quantity!==''?` ${number(item.quantity)}${item.unit?` ${item.unit}`:''}`:''}`);
+  return list.length>2?`${parts.join(', ')} +${list.length-2}`:parts.join(', ');
 }
 function purchaseTable(purchases) {
-  if (!purchases.length) return `<div class="empty"><strong>${t('Riwayat pembelian Anda dimulai di sini.','Your purchase history starts here.')}</strong>${t('Pembelian yang disetujui akan muncul di sini.','Approved purchases will appear in this view.')}</div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>${t('Pembelian','Purchase')}</th><th>${t('Pemasok','Supplier')}</th><th>${t('Jumlah','Amount')}</th><th>${t('Status','Status')}</th></tr></thead><tbody>${purchases.map(purchase => `<tr><td><button class="text-button" data-review="${e(purchase.draft_id)}">${e(itemSummary(purchase.items))}</button><small>${e(date(purchase.created_at))}</small></td><td>${e(purchase.supplier || t('Tidak disebutkan','Unspecified'))}</td><td class="money">${rupiah(purchase.total_idr)}<small>${t('Pembayaran belum diketahui','Payment unknown')}</small></td><td>${badge('recorded')}</td></tr>`).join('')}</tbody></table></div>`;
+  if (!purchases.length) return `<div class="empty"><strong>${t('Belum ada pembelian.','No purchases yet.')}</strong>${t('Kirim foto nota lewat WhatsApp.','Send a receipt photo via WhatsApp.')}</div>`;
+  // P2 UI pass: two-line rows on mobile (CSS swaps them in ≤768px), the
+  // existing table on desktop. "Lihat detail" reuses the existing data-review
+  // flow; status chips map through the existing badge() labels.
+  const cards=`<div class="purchase-cards">${purchases.map(purchase => `<article class="purchase-row"><div class="purchase-row-top"><span class="purchase-items">${e(purchaseItemSummary(purchase.items))}</span><span class="purchase-amount money">${rupiah(purchase.total_idr)}</span></div><div class="purchase-row-meta"><span>${e(purchase.supplier || t('Tidak disebutkan','Unspecified'))}</span><span aria-hidden="true">·</span><span>${e(relativeDay(purchase.created_at))}</span>${badge(purchase.status || 'recorded')}<button class="text-button purchase-detail-btn" data-review="${e(purchase.draft_id)}">${t('Lihat detail','View details')}</button></div>${purchaseWarningHtml(purchase)}</article>`).join('')}</div>`;
+  const table=`<div class="table-wrap purchase-table-wrap"><table><thead><tr><th>${t('Pembelian','Purchase')}</th><th>${t('Pemasok','Supplier')}</th><th>${t('Jumlah','Amount')}</th><th>${t('Status','Status')}</th></tr></thead><tbody>${purchases.map(purchase => `<tr><td><button class="text-button" data-review="${e(purchase.draft_id)}">${e(itemSummary(purchase.items))}</button><small>${e(date(purchase.created_at))}</small>${purchaseWarningHtml(purchase)}</td><td>${e(purchase.supplier || t('Tidak disebutkan','Unspecified'))}</td><td class="money">${rupiah(purchase.total_idr)}<small>${t('Pembayaran belum diketahui','Payment unknown')}</small></td><td>${badge(purchase.status || 'recorded')}</td></tr>`).join('')}</tbody></table></div>`;
+  return table+cards;
 }
 function inventoryRows(inventory, editableUnits=false) {
   const unitOptions=item=>[...new Set([item.unit,'pcs','kg','g','liter','ml','buah','ikat','tray','dus'])].filter(Boolean).map(u=>`<option value="${e(u)}" ${u===item.unit?'selected':''}>${e(u)}</option>`).join('');
@@ -489,7 +538,7 @@ function render() {
   renderIdentity();
   if(state.user?.role==='admin')return renderAdmin();
   const page=state.page, [title,subtitle]=titles()[page] || titles().overview;
-  $('#page-title').textContent=title; $('#page-subtitle').textContent=subtitle; $('#breadcrumb').textContent=page[0].toUpperCase()+page.slice(1);
+  $('#page-title').textContent=title; $('#page-subtitle').textContent=subtitle; $('#breadcrumb').textContent=t('nav_'+page);
   // P0 UI pass: the Stok view drops the large promotional headline for a modest
   // view title, and its record-purchase button renders secondary (not dominant).
   // The button keeps its data-action="new-purchase" flow; only its weight changes.
@@ -498,10 +547,10 @@ function render() {
   const headingButton=$('.page-heading .button');
   if(headingButton){headingButton.classList.toggle('primary',!modestHeading);headingButton.classList.toggle('secondary',modestHeading);}
   document.querySelectorAll('[data-page]').forEach(link => { link.classList.toggle('active',link.dataset.page===page); if(link.dataset.page===page)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current'); });
+  updateApprovalsBadge();
   if (!state.data) return;
   $('#restaurant-name').textContent=state.data.restaurant.name;
   $('#workspace-sub').textContent=t('ws_restaurant');
-  $('#nav-count').textContent=pendingDrafts().length;
   let html='';
   if (page==='overview') html=overview();
   if (page==='approvals') html=`<section class="panel">${panelHeading(t('Antrean peninjauan','Review queue'),`${pendingDrafts().length} ${t('draf menunggu keputusan Anda','drafts waiting for your decision')}`)}<div class="full-list">${pendingDrafts().map(draftCard).join('') || `<div class="empty"><strong>${t('Tidak ada draf menunggu.','No drafts awaiting review.')}</strong>${t('Setiap draf sudah punya keputusan.','Every draft has a decision.')}</div>`}</div></section>`;
@@ -513,8 +562,12 @@ function render() {
   if (page==='whatsapp') html=whatsappPage();
   if (page==='rules') html=rulesPage();
   if (page==='links') html=linksPage();
+  if (page==='more') html=morePage();
   $('#content').innerHTML=html;
   if(page==='inventory' && !inventoryState.loaded && !inventoryState.loading)loadInventoryWorkspace();
+  // Lainnya → Resep hand-off: once the stock workspace is available, open the
+  // existing recipe dialog; if the workspace failed to load, drop the request.
+  if(page==='inventory' && pendingRecipeDialog && inventoryState.loaded && !inventoryState.loading){pendingRecipeDialog=false;if(inventoryState.data && !inventoryState.error)openInventoryForm('recipe');}
   if(page==='whatsapp' && !state.whatsappLoaded && !state.whatsappLoading)loadWhatsAppMessages();
   if(page==='rules' && !state.rulesLoaded && !state.rulesBusy)loadRules();
   if(page==='links' && !state.linksLoaded && !state.linksBusy)loadLinks();
@@ -543,6 +596,16 @@ async function removeLink(phone, platform) {
   try { await api('/v1/links/'+encodeURIComponent(phone)+'?platform='+encodeURIComponent(platform),{method:'DELETE',key:newId()}); state.linksLoaded=false; await loadLinks(); }
   catch(error) { toast('Gagal memutus koneksi: '+error.message); }
   finally { state.linksBusy=false; }
+}
+
+// Lainnya (More): the owner destinations that don't fit the four primary tabs.
+// Every row maps to an existing route or handler — no new backend views. No
+// "Reports & Export" entry exists because the app has no export feature; the
+// closest real view (menu sales insights) is listed as Laporan penjualan.
+function morePage() {
+  const row=(href,label,desc)=>`<a class="more-row" href="${href}"><span class="more-text"><strong>${label}</strong><small>${desc}</small></span></a>`;
+  const action=(attr,label,desc,extraClass='')=>`<button class="more-row ${extraClass}" type="button" ${attr}><span class="more-text"><strong>${label}</strong><small>${desc}</small></span></button>`;
+  return `<section class="panel"><div class="panel-heading"><div><h2>${t('Semua menu resto','All restaurant tools')}</h2><p>${t('Fitur lainnya tetap dalam jangkauan satu ketuk.','The remaining features stay one tap away.')}</p></div></div><div class="more-list">${row('#purchases',t('Pembelian','Purchases'),t('Riwayat semua pembelian tercatat','History of every recorded purchase'))}${row('#suppliers',t('Pemasok','Suppliers'),t('Daftar supplier & perbandingan harga','Supplier list & price comparison'))}${row('#insights',t('Laporan penjualan','Sales reports'),t('Penjualan menu 7/30 hari','Menu sales, 7/30 days'))}${row('#activity',t('Aktivitas','Activity'),t('Jejak draf, koreksi, dan keputusan','Trail of drafts, corrections, and decisions'))}${row('#whatsapp',t('Chat','Chat'),t('Asisten pembelian via WhatsApp','Purchase assistant over WhatsApp'))}${row('#links',t('Koneksi','Connections'),t('Nomor WhatsApp & Telegram resto','Restaurant WhatsApp & Telegram numbers'))}${action('data-more-recipes',t('Resep','Recipes'),t('Kelola resep porsi untuk penjualan','Manage per-portion recipes for sales'))}<div class="more-row more-row-static"><span class="more-text"><strong>${t('Bahasa','Language')}</strong><small>${t('Ganti Bahasa Indonesia / English','Switch Indonesian / English')}</small></span><div class="lang-toggle" role="group" aria-label="${e(t('lang_aria'))}"><button type="button" data-lang="id" class="${LANG==='en'?'':'active'}">ID</button><button type="button" data-lang="en" class="${LANG==='en'?'active':''}">EN</button></div></div>${action('data-more-logout',t('Keluar','Log out'),t('Akhiri sesi di perangkat ini','End the session on this device'),'more-row-logout')}</div></section>`;
 }
 
 function dailySpendChart(daily) {
@@ -772,20 +835,20 @@ $('#intake-form').addEventListener('submit',async event => {
   const images=photos.filter(photo=>!pdfs.includes(photo));
   const supplier=$('#purchase-supplier').value.trim() || null;
   const text=$('#purchase-text').value.trim();
-  if(photos.length && text){showError('intake-error','Use either files or a typed message, not both.');return;}
-  if(!photos.length && !text){showError('intake-error','Choose a file or type a purchase message first.');return;}
-  if(pdfs.length && images.length){showError('intake-error','Send photos and PDFs separately — each becomes its own draft.');return;}
+  if(photos.length && text){showError('intake-error',t('err_files_or_text'));return;}
+  if(!photos.length && !text){showError('intake-error',t('err_need_input'));return;}
+  if(pdfs.length && images.length){showError('intake-error',t('err_mixed_media'));return;}
   for(const photo of images){
-    if(!PHOTO_TYPES.includes(photo.type)){showError('intake-error','Use JPEG, PNG, or WEBP photos.');return;}
-    if(photo.size > MAX_PHOTO_BYTES){showError('intake-error','A photo is over 5 MB. Take smaller photos.');return;}
+    if(!PHOTO_TYPES.includes(photo.type)){showError('intake-error',t('err_photo_type'));return;}
+    if(photo.size > MAX_PHOTO_BYTES){showError('intake-error',t('err_photo_size'));return;}
   }
   for(const pdf of pdfs){
-    if(pdf.size > 10 * 1024 * 1024){showError('intake-error','A PDF is over 10 MB.');return;}
+    if(pdf.size > 10 * 1024 * 1024){showError('intake-error',t('err_pdf_size'));return;}
   }
-  if(photos.length > 5){showError('intake-error','Send at most 5 files at once — the rest can follow in another draft.');return;}
+  if(photos.length > 5){showError('intake-error',t('err_too_many_files'));return;}
   const fingerprint=photos.length ? photos.map(photo=>`${photo.name}:${photo.size}:${photo.lastModified}`).join('|')+`:${supplier || ''}` : JSON.stringify({text,supplier});
   if(state.intakeKey?.fingerprint!==fingerprint)state.intakeKey={fingerprint,key:newId()};
-  button.disabled=true;button.textContent=photos.length>1?'Reading photos…':photos.length?'Reading photo…':'Preparing…';showError('intake-error','');
+  button.disabled=true;button.textContent=t(photos.length>1?'reading_photos':photos.length?'reading_photo':'preparing');showError('intake-error','');
   try {
     const draft=pdfs.length === 1
       ? await api('/v1/intake/pdf',{method:'POST',body:{pdf_base64:await readPhoto(pdfs[0]),supplier},key:state.intakeKey.key,timeout:180000})
@@ -820,6 +883,8 @@ document.addEventListener('click',event => {
   if(button.dataset.ruleToggle)toggleRule(button.dataset.ruleToggle);
   if(button.hasAttribute('data-catalog-import'))$('#catalog-import-file').click();
   if(button.dataset.linkDelete)removeLink(button.dataset.linkDelete,button.dataset.linkPlatform);
+  if(button.dataset.moreRecipes)openRecipesFromMore();
+  if(button.dataset.moreLogout)logout();
 });
 document.addEventListener('submit',async event=>{
   if(event.target.id==='rules-form'){
@@ -858,7 +923,18 @@ function navigate() {
   state.page=known?hash:(state.user?.role==='admin'?'admin':'overview');
   render();
 }
-window.addEventListener('hashchange',()=>{if(state.user)navigate();else renderAuthView();});
+// Per-tab scroll memory: remember each hash's scroll offset when leaving it
+// and restore the remembered offset when returning, so switching tabs never
+// jumps owners back to the top. Admin keeps its explicit scroll-to-top flow.
+const scrollMemory=new Map();
+let lastHash=location.hash||'#overview';
+window.addEventListener('hashchange',()=>{
+  if(!state.user){renderAuthView();return;}
+  if(state.user.role!=='admin')scrollMemory.set(lastHash,window.scrollY||0);
+  navigate();
+  if(state.user.role!=='admin')window.scrollTo(0,scrollMemory.get(location.hash)||0);
+  lastHash=location.hash;
+});
 document.addEventListener('keydown',event => {
   // A focused admin row (role=button, tabindex=0) activates on Enter or Space.
   if((event.key==='Enter'||event.key===' ') && event.target.classList && event.target.classList.contains('admin-row')){
@@ -870,6 +946,15 @@ $('#logout').addEventListener('click',logout);
 
 // Inventory dialogs live outside the polling content area, preserving unsaved input.
 const inventoryState={data:null,loaded:false,loading:false,error:'',busy:false,formId:null,snapshot:[],recipesSnapshot:[],search:''};
+// Lainnya → Resep: recipes have no standalone route; they are managed in a
+// dialog on the Stok page. Jump to Stok, then open the existing recipe form
+// (openInventoryForm) as soon as the stock workspace is available.
+let pendingRecipeDialog=false;
+function openRecipesFromMore(){
+  pendingRecipeDialog=true;
+  if(location.hash!=='#inventory')location.hash='#inventory';
+  if(state.page==='inventory' && inventoryState.loaded && !inventoryState.loading){pendingRecipeDialog=false;if(inventoryState.data && !inventoryState.error)openInventoryForm('recipe');}
+}
 const supplierState={data:null,loaded:false,loading:false,error:''};
 const insightsState={data:null,loaded:false,loading:false,error:'',days:7};
 async function loadInventoryWorkspace(){
@@ -877,7 +962,7 @@ async function loadInventoryWorkspace(){
   inventoryState.loading=true;const restaurantId=state.user.restaurant_id;
   try{const data=await api('/v1/inventory/workspace');if(state.user?.restaurant_id!==restaurantId)return;inventoryState.data=data;inventoryState.error='';}
   catch(error){inventoryState.error=`Stock tools could not load. ${error.message} If this deployment is older, update it before using these tools.`;}
-  finally{inventoryState.loading=false;inventoryState.loaded=true;if(state.page==='inventory')render();}
+  finally{inventoryState.loading=false;inventoryState.loaded=true;if(state.page==='inventory')render();if(pendingRecipeDialog){pendingRecipeDialog=false;if(state.page==='inventory'&&inventoryState.data&&!inventoryState.error)openInventoryForm('recipe');}}
 }
 // Stock cards for the inventory page, filtered by the search box. Owners with
 // 100+ ingredients (cake warungs buy dozens of items daily) need to find one
