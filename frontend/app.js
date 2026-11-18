@@ -884,8 +884,10 @@ document.addEventListener('click',event => {
   if(button.dataset.ruleToggle)toggleRule(button.dataset.ruleToggle);
   if(button.hasAttribute('data-catalog-import'))$('#catalog-import-file').click();
   if(button.dataset.linkDelete)removeLink(button.dataset.linkDelete,button.dataset.linkPlatform);
-  if(button.dataset.moreRecipes)openRecipesFromMore();
-  if(button.dataset.moreLogout)logout();
+  // data-more-recipes / data-more-logout carry no value, so dataset.* is an
+  // empty string (falsy) — check the attribute itself, not the property.
+  if(button.hasAttribute('data-more-recipes'))openRecipesFromMore();
+  if(button.hasAttribute('data-more-logout'))logout();
 });
 document.addEventListener('submit',async event=>{
   if(event.target.id==='rules-form'){
