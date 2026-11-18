@@ -554,7 +554,7 @@ function render() {
   let html='';
   if (page==='overview') html=overview();
   if (page==='approvals') html=`<section class="panel">${panelHeading(t('Antrean peninjauan','Review queue'),`${pendingDrafts().length} ${t('draf menunggu keputusan Anda','drafts waiting for your decision')}`)}<div class="full-list">${pendingDrafts().map(draftCard).join('') || `<div class="empty"><strong>${t('Tidak ada draf menunggu.','No drafts awaiting review.')}</strong>${t('Setiap draf sudah punya keputusan.','Every draft has a decision.')}</div>`}</div></section>`;
-  if (page==='purchases') html=`<p class="subtle-note">${t('Termasuk pembelian pembuka sintetis untuk demo perbandingan harga. Mencatat pembelian tidak menandai pemasok sebagai dibayar.','Includes synthetic opening purchases used to demonstrate price comparisons. Recording a purchase does not mark a supplier as paid.')}</p><section class="panel">${panelHeading(t('Riwayat pembelian','Purchase history'))}${purchaseTable(state.data.purchases)}</section>`;
+  if (page==='purchases') html=`<p class="subtle-note">${t('Termasuk pembelian pembuka sintetis untuk demo perbandingan harga. Mencatat pembelian tidak menandai pemasok sebagai dibayar.','Includes synthetic opening purchases used to demonstrate price comparisons. Recording a purchase does not mark a supplier as paid.')}</p>${purchaseTotalsPanel()}<section class="panel">${panelHeading(t('Riwayat pembelian','Purchase history'))}${purchaseTable(state.data.purchases)}</section>`;
   if (page==='inventory') html=`<section class="panel">${panelHeading(t('Estimasi stok','Estimated stock'),t('Berdasarkan nota yang disetujui. Pemakaian dapur belum tercatat. Sesuaikan lewat stok opname.','Based on approved purchases. Kitchen usage is untracked. Reconcile with a stock count.'))}${inventoryRows(state.data.inventory, true)}<div class="panel-note">${t('Ambang stok rendah adalah konfigurasi demo. Bandingkan dengan hitungan fisik sebelum memesan.','Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.')}</div></section>` + opnameFormPanel() + catalogImportPanel() + (state.data.stock_counts?.length ? `<section class="panel">${panelHeading(t('Riwayat stok opname','Stock count history'),t('Koreksi stok fisik dari chat dan dashboard. Semua angka dari database.','Physical corrections from chat and the dashboard. Every figure comes from the database.'))}${state.data.stock_counts.map(item=>`<div class="number-row"><code>${e(item.name)}</code><span>${e(item.estimated_quantity)} → ${e(item.counted_quantity)} (${t('selisih','delta')} ${e(item.delta)})</span><span class="spacer"></span><small>${e(date(item.applied_at))}</small></div>`).join('')}</section>` : '');
   if (page==='suppliers') html=suppliersPage();
   if (page==='insights') html=insightsPage();
@@ -573,6 +573,7 @@ function render() {
   if(page==='links' && !state.linksLoaded && !state.linksBusy)loadLinks();
   if(page==='suppliers' && !supplierState.loaded && !supplierState.loading)loadSupplierOverview();
   if(page==='insights' && !insightsState.loaded && !insightsState.loading)loadSalesInsights();
+  if(page==='purchases' && !purchaseTotalsState.loaded && !purchaseTotalsState.loading)loadPurchaseTotals();
 }
 
 function linksPage() {
@@ -957,6 +958,38 @@ function openRecipesFromMore(){
 }
 const supplierState={data:null,loaded:false,loading:false,error:''};
 const insightsState={data:null,loaded:false,loading:false,error:'',days:7};
+// ---- Purchases tab: per-item totals strip ("total bolu kukus bulan ini") ----
+// Same ledger figures the chat totals question answers, with a period picker.
+const purchaseTotalsState={data:null,loaded:false,loading:false,error:'',period:'this_month',custom:{start:'',end:''}};
+function purchaseTotalsPanel(){
+  const st=purchaseTotalsState, data=st.data;
+  const periodButton=(key,id,en)=>`<button type="button" class="button mini ${st.period===key?'primary':'secondary'}" data-pt-period="${key}">${t(id,en)}</button>`;
+  const picker=`<div class="period-picker" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${periodButton('this_month','Bulan ini','This month')}${periodButton('last_month','Bulan lalu','Last month')}${periodButton('custom','Pilih periode','Custom')}${st.period==='custom'?`<input type="date" id="pt-start" value="${e(st.custom.start)}" aria-label="${t('Tanggal awal','Start date')}" style="max-width:150px"><input type="date" id="pt-end" value="${e(st.custom.end)}" aria-label="${t('Tanggal akhir','End date')}" style="max-width:150px"><button type="button" class="button mini primary" data-pt-apply>${t('Terapkan','Apply')}</button>`:''}</div>`;
+  let body;
+  if(st.error)body=`<div class="notice error" role="alert">${e(st.error)}</div>`;
+  else if(st.loading||!data)body=`<div class="loading-state"><span class="spinner"></span> ${t('Memuat total pembelian…','Loading purchase totals…')}</div>`;
+  else if(!data.items.length)body=`<div class="empty"><strong>${t('Belum ada pembelian pada periode ini.','No purchases in this period.')}</strong></div>`;
+  else{
+    const rows=data.items.map(item=>`<tr><td>${e(item.name)}</td><td>${number(item.quantity)} ${e(item.unit)}</td><td class="money">${rupiah(item.total_idr)}</td><td>${item.purchase_count}</td></tr>`).join('');
+    body=`<div class="table-wrap"><table><thead><tr><th>${t('Bahan','Item')}</th><th>${t('Jumlah dibeli','Quantity bought')}</th><th>${t('Nilai','Value')}</th><th>${t('Catatan','Entries')}</th></tr></thead><tbody>${rows}</tbody></table></div><div class="panel-note">${t('Total','Total')}: ${rupiah(data.total_idr)} · ${data.purchase_count} ${t('pembelian','purchases')} · ${e(data.label||'')}</div>`;
+  }
+  return `<section class="panel">${panelHeading(t('Total pembelian per bahan','Purchase totals per item'),t('Berapa yang dibeli dan nilainya per periode — sama seperti menanya lewat chat.','What you bought and its value per period — same as asking the chat.'),picker)}${body}</section>`;
+}
+async function loadPurchaseTotals(){
+  const st=purchaseTotalsState;
+  if(st.loading)return;
+  if(st.period==='custom'&&(!st.custom.start||!st.custom.end))return;
+  const query=st.period==='custom'?`?period=custom&start=${encodeURIComponent(st.custom.start)}&end=${encodeURIComponent(st.custom.end)}`:`?period=${st.period}`;
+  st.loading=true;
+  try{st.data=await api(`/v1/purchase-totals${query}`,{timeout:30000});st.error='';}
+  catch(error){st.error=error.message;st.data=null;}
+  finally{st.loading=false;st.loaded=true;if(state.page==='purchases')render();}
+}
+document.addEventListener('click',event=>{
+  const period=event.target.closest('[data-pt-period]');
+  if(period){purchaseTotalsState.period=period.dataset.ptPeriod;purchaseTotalsState.data=null;purchaseTotalsState.error='';render();if(period.dataset.ptPeriod!=='custom')loadPurchaseTotals();return;}
+  if(event.target.closest('[data-pt-apply]')){purchaseTotalsState.custom.start=$('#pt-start')?.value||'';purchaseTotalsState.custom.end=$('#pt-end')?.value||'';purchaseTotalsState.data=null;loadPurchaseTotals();}
+});
 async function loadInventoryWorkspace(){
   if(inventoryState.loading || state.user?.role!=='owner')return;
   inventoryState.loading=true;const restaurantId=state.user.restaurant_id;
