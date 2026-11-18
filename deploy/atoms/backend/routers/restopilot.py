@@ -88,9 +88,11 @@ def _restopilot_app():
             text_llm_model=env("STEPFUN_TEXT_MODEL"),
             stock_llm_enabled=bool(env("STEPFUN_API_KEY")) and (env("LLM_STOCK_ANSWER", "1").strip().casefold() not in _LLM_OFF),
             intent_llm_enabled=bool(env("STEPFUN_API_KEY")) and (env("LLM_INTENT", "1").strip().casefold() not in _LLM_OFF),
-            # Business analysis agent defaults OFF; opt in via the BIZ_AGENT
-            # server setting (read-only tools, answers only — never writes).
-            biz_agent_enabled=bool(env("STEPFUN_API_KEY")) and (env("BIZ_AGENT", "0").strip().casefold() not in _LLM_OFF),
+            # Business analysis agent defaults ON with the key: it only fires
+            # when nothing deterministic claimed the message, and its tools
+            # are read-only (answers only — never writes). Disable via
+            # BIZ_AGENT=0.
+            biz_agent_enabled=bool(env("STEPFUN_API_KEY")) and (env("BIZ_AGENT", "1").strip().casefold() not in _LLM_OFF),
             # Forwarded-supplier-list router and context gate default OFF;
             # enable via the LLM_FORWARDED_ROUTER / LLM_CONTEXT_GATE server
             # settings when the pilot opts in.
