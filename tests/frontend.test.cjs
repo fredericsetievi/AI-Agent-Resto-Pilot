@@ -337,14 +337,14 @@ test('admin row data attributes drive the detail navigation',()=>{
   assert.match(h.element('#content').innerHTML,/Connected WhatsApp numbers|Nomor WhatsApp terhubung/);
 });
 
-test('review warnings are deduplicated and capped at four visible details',()=>{
+test('review keeps every distinct warning visible',()=>{
   const h=harness();
   h.run(`state.data={ingredients:[]};state.draft={version:1,status:'recorded',items:[],supplier:null,source_text:'demo',warnings:['First warning','First warning','Second warning','Third warning','Fourth warning','Fifth warning']};renderReview()`);
   const html=h.element('#review-content').innerHTML;
   assert.equal((html.match(/First warning/g)||[]).length,1);
   assert.ok(html.includes('Fourth warning'));
-  assert.ok(!html.includes('Fifth warning'));
-  assert.ok(html.includes('Review the fields above for the remaining details.'));
+  assert.ok(html.includes('Fifth warning'));
+  assert.ok(!html.includes('Review the fields above for the remaining details.'));
 });
 
 test('ingredient combo resolves catalog matches and keeps typed new names',()=>{
@@ -535,4 +535,20 @@ test('approval badge belongs to its icon and the four owner destinations remain 
   const html = fs.readFileSync('frontend/index.html', 'utf8');
   assert.match(html, /id="nav-approvals"[^]*?<\/svg><span id="nav-count"[^]*?<\/span><\/span>/);
   for (const page of ['overview', 'approvals', 'inventory', 'more']) assert.ok(html.includes('data-page="'+page+'"'));
+});
+
+test('overview keeps scoped stock estimates and flexible two-column phone metrics', () => {
+  const h = harness();
+  h.run("state.data={metrics:{low_stock_count:9},restaurant:{name:'Test'}}");
+  assert.match(h.run('overview()'), /Low stock[^]*?>9<[^]*?Based on estimated inventory/);
+  const css = fs.readFileSync('frontend/styles.css','utf8');
+  assert.match(css, /\.metrics \{ grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+});
+
+test('every draft warning is visible and escaped before the decision buttons', () => {
+  const h = harness();
+  const html = h.run("draftCard({id:'d',items:[],warnings:['a','b','c','d','<flag>'],status:'pending_approval'})");
+  assert.ok(html.indexOf('&lt;flag&gt;') >= 0 && html.indexOf('&lt;flag&gt;') < html.indexOf('data-approve'));
+  h.run("window.setLang('id')");
+  assert.match(h.run('recipeLine()'), /Jumlah per porsi/);
 });
