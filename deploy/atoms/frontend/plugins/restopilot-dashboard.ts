@@ -40,6 +40,7 @@ const APP_SCRIPT_PATTERN = /<script src="\/assets\/app\.js(?:\?[^"]*)?" defer><\
 const ASSETS: Record<string, { file: string; type: string }> = {
   '/assets/i18n.js': { file: path.join(frontendDir, 'i18n.js'), type: 'text/javascript; charset=utf-8' },
   '/assets/app.js': { file: path.join(frontendDir, 'app.js'), type: 'text/javascript; charset=utf-8' },
+  '/assets/tokens.css': { file: path.join(frontendDir, 'tokens.css'), type: 'text/css; charset=utf-8' },
   '/assets/styles.css': { file: path.join(frontendDir, 'styles.css'), type: 'text/css; charset=utf-8' },
   '/assets/restopilot-api-base.js': { file: shimPath, type: 'text/javascript; charset=utf-8' },
 };
