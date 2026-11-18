@@ -960,7 +960,21 @@ const supplierState={data:null,loaded:false,loading:false,error:''};
 const insightsState={data:null,loaded:false,loading:false,error:'',days:7};
 // ---- Purchases tab: per-item totals strip ("total bolu kukus bulan ini") ----
 // Same ledger figures the chat totals question answers, with a period picker.
-const purchaseTotalsState={data:null,loaded:false,loading:false,error:'',period:'this_month',custom:{start:'',end:''}};
+const purchaseTotalsState={data:null,loaded:false,loading:false,error:'',period:'this_month',custom:{start:'',end:''},exportIngredient:''};
+function purchaseTotalsExportRange(){
+  // Turn the strip's period selection into explicit CSV window dates.
+  const st=purchaseTotalsState, today=new Date(), pad=v=>String(v).padStart(2,'0');
+  if(st.period==='custom')return st.custom.start&&st.custom.end?{start:st.custom.start,end:st.custom.end}:null;
+  const iso=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  if(st.period==='last_month'){return{start:iso(new Date(today.getFullYear(),today.getMonth()-1,1)),end:iso(new Date(today.getFullYear(),today.getMonth(),0))};}
+  return{start:iso(new Date(today.getFullYear(),today.getMonth(),1)),end:iso(today)};
+}
+function purchaseTotalsExportRow(){
+  const st=purchaseTotalsState, data=st.data;
+  const all={ingredient_id:'',name:t('Semua bahan','All items')};
+  const options=[all].concat(data&&data.items?data.items:[]).map(item=>`<option value="${e(item.ingredient_id)}" ${String(st.exportIngredient||'')===String(item.ingredient_id)?'selected':''}>${e(item.name)}</option>`).join('');
+  return `<div class="panel-note" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span>${t('Ekspor CSV:','Export CSV:')}</span><select id="pt-export-item" aria-label="${t('Filter bahan untuk ekspor','Item filter for the export')}" style="max-width:220px">${options}</select><button type="button" class="button mini secondary" data-pt-export>${t('Unduh (Excel)','Download (Excel)')}</button></div>`;
+}
 function purchaseTotalsPanel(){
   const st=purchaseTotalsState, data=st.data;
   const periodButton=(key,id,en)=>`<button type="button" class="button mini ${st.period===key?'primary':'secondary'}" data-pt-period="${key}">${t(id,en)}</button>`;
@@ -973,7 +987,7 @@ function purchaseTotalsPanel(){
     const rows=data.items.map(item=>`<tr><td>${e(item.name)}</td><td>${number(item.quantity)} ${e(item.unit)}</td><td class="money">${rupiah(item.total_idr)}</td><td>${item.purchase_count}</td></tr>`).join('');
     body=`<div class="table-wrap"><table><thead><tr><th>${t('Bahan','Item')}</th><th>${t('Jumlah dibeli','Quantity bought')}</th><th>${t('Nilai','Value')}</th><th>${t('Catatan','Entries')}</th></tr></thead><tbody>${rows}</tbody></table></div><div class="panel-note">${t('Total','Total')}: ${rupiah(data.total_idr)} · ${data.purchase_count} ${t('pembelian','purchases')} · ${e(data.label||'')}</div>`;
   }
-  return `<section class="panel">${panelHeading(t('Total pembelian per bahan','Purchase totals per item'),t('Berapa yang dibeli dan nilainya per periode — sama seperti menanya lewat chat.','What you bought and its value per period — same as asking the chat.'),picker)}${body}</section>`;
+  return `<section class="panel">${panelHeading(t('Total pembelian per bahan','Purchase totals per item'),t('Berapa yang dibeli dan nilainya per periode — sama seperti menanya lewat chat.','What you bought and its value per period — same as asking the chat.'),picker)}${body}${purchaseTotalsExportRow()}</section>`;
 }
 async function loadPurchaseTotals(){
   const st=purchaseTotalsState;
@@ -988,7 +1002,16 @@ async function loadPurchaseTotals(){
 document.addEventListener('click',event=>{
   const period=event.target.closest('[data-pt-period]');
   if(period){purchaseTotalsState.period=period.dataset.ptPeriod;purchaseTotalsState.data=null;purchaseTotalsState.error='';render();if(period.dataset.ptPeriod!=='custom')loadPurchaseTotals();return;}
-  if(event.target.closest('[data-pt-apply]')){purchaseTotalsState.custom.start=$('#pt-start')?.value||'';purchaseTotalsState.custom.end=$('#pt-end')?.value||'';purchaseTotalsState.data=null;loadPurchaseTotals();}
+  if(event.target.closest('[data-pt-apply]')){purchaseTotalsState.custom.start=$('#pt-start')?.value||'';purchaseTotalsState.custom.end=$('#pt-end')?.value||'';purchaseTotalsState.data=null;loadPurchaseTotals();return;}
+  if(event.target.closest('[data-pt-export]')){
+    const range=purchaseTotalsExportRange();
+    if(!range){purchaseTotalsState.error=t('Pilih tanggal awal dan akhir untuk ekspor.','Pick a start and end date to export.');render();return;}
+    const ingredient=purchaseTotalsState.exportIngredient?`&ingredient_id=${encodeURIComponent(purchaseTotalsState.exportIngredient)}`:'';
+    window.open(`/v1/export/purchase-lines.csv?start=${range.start}&end=${range.end}${ingredient}`,'_blank');
+  }
+});
+document.addEventListener('change',event=>{
+  if(event.target&&event.target.id==='pt-export-item')purchaseTotalsState.exportIngredient=event.target.value;
 });
 async function loadInventoryWorkspace(){
   if(inventoryState.loading || state.user?.role!=='owner')return;
