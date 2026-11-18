@@ -478,6 +478,47 @@ PAYMENT_FOLLOWUP_PROMPT = (
     "contoh: 'lunas, dari Pasar Pagi'. Balas 'skip' untuk lewati."
 )
 FOLLOWUP_ACK = "Oke, dicatat tanpa detail pembayaran."
+# The numbered list in the follow-up prompt is capped so the WhatsApp message
+# stays short; numbering still resolves against the full list.
+FOLLOWUP_SUPPLIER_LIMIT = 10
+
+
+def payment_followup_prompt(suppliers=None):
+    """Ask lunas/utang and attach this restaurant's supplier list, numbered in
+    the same order the reply resolves ('lunas dari toko 2'). Tenant-scoped by
+    the caller; with no suppliers the plain prompt keeps the name-only shape."""
+    if not suppliers:
+        return PAYMENT_FOLLOWUP_PROMPT
+    shown = suppliers[:FOLLOWUP_SUPPLIER_LIMIT]
+    lines = [f"{i}. {s['name']}" for i, s in enumerate(shown, 1)]
+    extra = len(suppliers) - len(shown)
+    if extra > 0:
+        lines.append(f"(+{extra} lainnya — balas pakai nomornya)")
+    return (PAYMENT_FOLLOWUP_PROMPT + "\nSupplier resto ini:\n" + "\n".join(lines)
+            + "\nBoleh juga balas nomornya: 'lunas dari toko 1'.")
+
+
+def resolve_supplier_index(index, suppliers):
+    """The supplier name at a 1-based position of the tenant's list — the same
+    order the prompt shows — or None when out of range."""
+    try:
+        position = int(index)
+    except (TypeError, ValueError):
+        return None
+    if 1 <= position <= len(suppliers):
+        return suppliers[position - 1]["name"]
+    return None
+
+
+def supplier_index_unknown_reply(index, suppliers):
+    """Guide the owner back to the list; the follow-up offer stays pending."""
+    if not suppliers:
+        return "Belum ada supplier terdaftar — sebutkan namanya langsung: 'lunas, dari Pasar Pagi'."
+    shown = suppliers[:FOLLOWUP_SUPPLIER_LIMIT]
+    lines = [f"{i}. {s['name']}" for i, s in enumerate(shown, 1)]
+    return (f"Supplier nomor {index} tidak ada di daftar (ada {len(suppliers)}). "
+            "Supplier resto ini:\n" + "\n".join(lines)
+            + "\nBalas ulang, misalnya 'lunas dari toko 1'.")
 # Greetings and chat noise parse to zero purchase lines; invite the owner in
 # instead of filing an empty draft on the dashboard.
 HELP_REPLY = (
@@ -560,6 +601,11 @@ def unregistered_reply(sender: str | None) -> str:
 _PAYMENT_PAID = re.compile(r"(?i)\b(?:lunas(?:\s+semua)?|paid|sudah\s+(?:bayar|dibayar)|udah\s+(?:bayar|lunas))\b")
 _PAYMENT_UNPAID = re.compile(r"(?i)\b(?:belum\s+(?:lunas|bayar|dibayar)|utang|hutang|kredit|credit)\b")
 _PAYMENT_SKIP = ("skip", "lewati")
+# A numbered supplier reference ('lunas dari toko 1') points at the list
+# attached to the follow-up prompt. The numeric clause must close the message
+# so prices and quantities ('utang 2 minggu') never read as list positions.
+_SUPPLIER_INDEX_DARI = re.compile(r"(?i)(?:^|\s)(?:dari|di)\s*(?:toko|supplier|pemasok)?\s*#?(\d{1,2})\s*[.!?,]?\s*$")
+_SUPPLIER_INDEX_NOUN = re.compile(r"(?i)(?:^|\s)(?:toko|supplier|pemasok)\s*#?(\d{1,2})\s*[.!?,]?\s*$")
 _SUPPLIER_LEAD = re.compile(r"(?i)^\s*(?:dari|di)\s+(.+)$")
 _SUPPLIER_TAIL = re.compile(r"(?i)\bdari\s+(.{1,100})")
 _SUPPLIER_DI_TAIL = re.compile(r"(?i)\bdi\s+(.{1,100})")
@@ -806,6 +852,12 @@ def parse_payment_followup(text):
     unpaid = _PAYMENT_UNPAID.search(candidate)
     paid = _PAYMENT_PAID.search(candidate)
     payment_status = "unpaid" if unpaid else "paid" if paid else None
+    # A numbered reference ('lunas dari toko 1') wins over name extraction:
+    # 'dari toko 1' must become list position 1, not a supplier named 'toko 1'.
+    index_match = _SUPPLIER_INDEX_DARI.search(candidate) or _SUPPLIER_INDEX_NOUN.search(candidate)
+    if index_match:
+        return {"payment_status": payment_status, "supplier": None,
+                "supplier_index": int(index_match.group(1)), "skip": False}
     supplier = None
     # A message that only opens with "dari/di X" names the supplier outright;
     # mid-sentence "di X" is a common purchase-message shape, so it only

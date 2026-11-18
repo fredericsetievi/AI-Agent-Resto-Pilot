@@ -57,11 +57,13 @@ from .notifications import refill_suggestion
 from .pg import pg_connection, pg_transaction
 from .onboarding import restaurant_selection
 from .whatsapp import (
-    FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR,
+    FOLLOWUP_ACK, HELP_REPLY, LIVE, SIMULATOR,
     TOO_MANY_LINES_REPLY, UNREGISTERED_REPLY, dashboard_link_line,
     dashboard_link_reply, draft_label, draft_reply, input_over_line_limit,
     is_stock_question, opname_reply, parse_payment_followup,
-    parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply,
+    parse_remove_request, payment_followup_prompt, resolve_supplier_index,
+    stock_reply, supplier_index_unknown_reply, unregistered_reply,
+    weekly_summary_reply,
 )
 
 
@@ -571,10 +573,11 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         purchase = {"id": purchase_id, "draft_id": draft["id"], "supplier": draft["supplier"],
                     "total_idr": draft["total_idr"], "items": draft["items"], "created_at": created_at,
                     "payment_status": "unknown"}
+        supplier_id = self._supplier_ensure(conn, restaurant_id, draft["supplier"])
         self._execute(
             conn,
-            "INSERT INTO purchases (id, slug, draft_id, supplier, created_at, body) VALUES (%s, %s, %s, %s, %s, %s)",
-            (purchase_id, restaurant_id, draft["id"], draft["supplier"], created_at, encode(purchase)),
+            "INSERT INTO purchases (id, slug, draft_id, supplier, supplier_id, created_at, body) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (purchase_id, restaurant_id, draft["id"], draft["supplier"], supplier_id, created_at, encode(purchase)),
         )
         deltas = {}
         for item in draft["items"]:
@@ -1404,11 +1407,26 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                 reply = "Foto/audio belum diproses. Kirim rincian pembelian sebagai teks atau gunakan dashboard. Tidak ada pembelian yang dicatat."
                 result["action"] = "media_unsupported"
             elif pending_purchase and not draft and (followup := parse_payment_followup(payload["text"])):
-                purchase, supplier_new = self._update_purchase_payment(conn, pending_purchase, followup["payment_status"], followup["supplier"], tenant)
-                if followup["skip"]:
+                index_error = None
+                if followup.get("supplier_index") is not None:
+                    suppliers = self.suppliers_list(tenant, conn=conn)
+                    name = resolve_supplier_index(followup["supplier_index"], suppliers)
+                    if name:
+                        followup["supplier"] = name
+                    else:
+                        index_error = supplier_index_unknown_reply(followup["supplier_index"], suppliers)
+                if index_error:
+                    # A wrong number gets the list back AND keeps the offer:
+                    # the reply invites a retry, so restore the one-shot
+                    # pending_followup that the generic intake cleared above.
+                    thread["pending_followup"] = pending_purchase
+                    reply = index_error
+                    result["action"] = "supplier_index_unknown"
+                elif followup["skip"]:
                     reply = FOLLOWUP_ACK
                     result["action"] = "followup_skipped"
                 else:
+                    purchase, supplier_new = self._update_purchase_payment(conn, pending_purchase, followup["payment_status"], followup["supplier"], tenant)
                     details = []
                     if followup["payment_status"] == "paid":
                         details.append("Pembayaran dicatat: lunas.")
@@ -1478,7 +1496,7 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                     if names_created:
                         confirmation += " " + ", ".join(f"'{name}'" for name in names_created) + " ditambahkan sebagai bahan baru."
                     thread["pending_followup"] = draft["purchase_id"]
-                    reply = confirmation + "\n" + PAYMENT_FOLLOWUP_PROMPT
+                    reply = confirmation + "\n" + payment_followup_prompt(self.suppliers_list(tenant, conn=conn))
                     result.update(action="approved", purchase_id=draft["purchase_id"])
             elif command in SUMMARY_COMMANDS or intent_hint == "summary":
                 summary = self._weekly_summary(conn, SUMMARY_WINDOW_DAYS, tenant)
@@ -1799,6 +1817,12 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         return supplier, False
 
     def _update_purchase_payment(self, conn, purchase_id, payment_status, supplier, restaurant_id=None):
+        """Persist payment/supplier details on one recorded purchase.
+
+        Returns (purchase, supplier_is_new). A supplier named here also becomes
+        a tenant-scoped suppliers entity linked via supplier_id, mirroring the
+        SQLite store and the supplier mixin's lifecycle contract.
+        """
         cur = self._execute(conn, "SELECT body, slug FROM purchases WHERE id=%s", (purchase_id,))
         row = cur.fetchone()
         if not row or row[1] != restaurant_id:
@@ -1811,11 +1835,18 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
             canonical, matched_existing = self._canonical_supplier(conn, supplier, exclude_id=purchase_id, restaurant_id=restaurant_id)
             purchase["supplier"] = canonical
             supplier_is_new = not matched_existing
-        self._execute(
-            conn,
-            "UPDATE purchases SET body=%s, supplier=%s WHERE id=%s",
-            (encode(purchase), purchase.get("supplier"), purchase_id),
-        )
+            supplier_id = self._supplier_ensure(conn, restaurant_id, canonical)
+            self._execute(
+                conn,
+                "UPDATE purchases SET body=%s, supplier=%s, supplier_id=%s WHERE id=%s",
+                (encode(purchase), canonical, supplier_id, purchase_id),
+            )
+        else:
+            self._execute(
+                conn,
+                "UPDATE purchases SET body=%s WHERE id=%s",
+                (encode(purchase), purchase_id),
+            )
         self._audit(conn, "purchase_updated", f"Purchase {purchase_id[:8]} payment details completed via WhatsApp follow-up.", restaurant_id)
         return purchase, supplier_is_new
 
