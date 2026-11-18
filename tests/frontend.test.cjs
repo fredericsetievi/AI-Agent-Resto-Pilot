@@ -603,6 +603,28 @@ test('overview keeps scoped stock estimates and flexible two-column phone metric
   assert.match(css, /\.metrics \{ grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
 });
 
+test('overview puts actionable drafts and low stock ahead of trends, and leads with trends when clear', () => {
+  const h=harness();
+  h.run(`state.data={metrics:{low_stock_count:1},drafts:[
+    {id:'draft',status:'pending_approval',items:[{raw_name:'<Cabai>',quantity:3,unit:'kg'}],total_idr:150000}
+  ],inventory:[{name:'<Beras>',quantity:8,unit:'kg',low_stock:true},{name:'Telur',quantity:40,unit:'pcs',low_stock:false}]}`);
+  h.run("window.setLang('id')");
+  const html=h.run('overview()');
+  const [review, stock, charts]=['Perlu ditinjau','Stok menipis','class="charts-grid"'].map(text => html.indexOf(text));
+  assert.ok(review>=0 && review<stock && stock<charts);
+  assert.match(html.slice(review,stock), /&lt;Cabai&gt;[^]*Rp150\.000/);
+  assert.match(html.slice(stock,charts), /&lt;Beras&gt; tersisa 8 kg[^]*href="#inventory">Cek stok/);
+  assert.doesNotMatch(html.slice(stock,charts), /Telur/);
+  h.run("window.setLang('en'); state.data.drafts=[]");
+  const stockOnly=h.run('overview()');
+  assert.match(stockOnly, /Running low[^]*Check stock[^]*14-day spending/);
+  assert.doesNotMatch(stockOnly, /Needs review/);
+  h.run("state.data.inventory=[]");
+  const calm=h.run('overview()');
+  assert.match(calm, /^<div class="charts-grid"/);
+  assert.doesNotMatch(calm, /overview-priorities/);
+});
+
 test('every draft warning is visible and escaped before the decision buttons', () => {
   const h = harness();
   const html = h.run("draftCard({id:'d',items:[],warnings:['a','b','c','d','<flag>'],status:'pending_approval'})");
@@ -613,6 +635,11 @@ test('every draft warning is visible and escaped before the decision buttons', (
 test('landing preserves its bilingual copy and groups the entry action before proof', () => {
   const html = fs.readFileSync('landing/index.html','utf8');
   assert.match(html, /data-i18n="hero.title"[^]*?data-i18n-html="hero.lede"[^]*?class="hero-actions"[^]*?class="hero-channels"[^]*?class="trust-strip"/);
+  const hero = html.slice(html.indexOf('<section class="hero">'), html.indexOf('<!-- ================= PROBLEM'));
+  assert.match(hero, /hero-actions[^]*demo\.message[^]*demo\.draft[^]*demo\.recorded[^]*demo\.reassurance/);
+  assert.equal((hero.match(/class="chat-message /g) || []).length, 3);
+  assert.match(hero, /Contoh · Perubahan harga/);
+  assert.doesNotMatch(html, /catatan suara|voice notes?/i);
   assert.ok(html.includes('Asisten AI'));
   assert.ok(html.indexOf('/assets/tokens.css') < html.indexOf('/landing-assets/styles.css'));
 });
