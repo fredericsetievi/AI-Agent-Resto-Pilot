@@ -1206,6 +1206,9 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         stock_answer = payload.get("stock_answer")
         if not isinstance(stock_answer, dict) or not isinstance(stock_answer.get("body"), str) or not stock_answer["body"].strip():
             stock_answer = None
+        biz_answer = payload.get("biz_answer")
+        if not isinstance(biz_answer, dict) or not isinstance(biz_answer.get("body"), str) or not biz_answer["body"].strip():
+            biz_answer = None
         opname_answer = payload.get("opname_answer")
         if not isinstance(opname_answer, dict) or not isinstance(opname_answer.get("body"), str) or not opname_answer["body"].strip():
             opname_answer = None
@@ -1528,6 +1531,12 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 # stays untouched and no purchase line is filed.
                 reply = stock_answer["body"]
                 result["action"] = "stock_answer"
+            elif biz_answer:
+                # An open business question the read-only tool agent answered
+                # before the ingest; read-only like the summary, so an active
+                # draft stays untouched and nothing is filed.
+                reply = biz_answer["body"]
+                result["action"] = "biz_agent_answer"
             elif draft:
                 # A follow-up during clarification usually answers the open
                 # questions ("bapao srikaya 2 4000" after "berapa harganya?").
