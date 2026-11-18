@@ -47,6 +47,21 @@ test('purchase totals panel renders rows, totals, and period buttons',()=>{
   assert.ok(panel.includes('data-pt-period="last_month"'));
 });
 
+test('inventory workspace restores sales, recipes, and order planning tools',()=>{
+  const h=harness();
+  h.run(`state.data={inventory:[{ingredient_id:'cabai',name:'Cabai merah',quantity:3,unit:'kg',low_stock:false,reorder_threshold:2}]};inventoryState.data={recipes:[],events:[{kind:'sale',note:'Lunch',portions:4,recipe:{name:'Nasi goreng'},items:[]}],forecasts:[],settings:{lead_days:2,safety_days:1}};inventoryState.loaded=true;`);
+  const html=h.run('inventoryWorkspace()');
+  assert.ok(html.includes('data-inventory-action="sale"'));
+  assert.ok(html.includes('data-inventory-action="recipe"'));
+  assert.ok(html.includes('data-inventory-action="settings"'));
+  assert.ok(html.includes('Log sales'));
+  assert.ok(html.includes('Nasi goreng'));
+  assert.ok(html.includes('4 portions'));
+  assert.ok(html.includes('data-count-stock="cabai"'));
+  assert.ok(!html.includes('disabled')); // workspace loaded → toolbar clickable
+  assert.ok(html.includes('Stock count history') || html.includes('Estimated stock'));
+});
+
 test('approval requires current validated draft, received goods, online state, and saved edits',()=>{
   const h=harness();h.run(`state.draft={status:'pending_approval'};state.online=true;`);
   h.run('updateApprovalButton()');assert.equal(h.element('#approve-draft').disabled,true);

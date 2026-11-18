@@ -59,6 +59,7 @@ from .extraction import (
     has_uncontextual_quantity_items,
     split_message_chunks,
 )
+from . import biz_agent
 from .suppliers import parse_supplier_command
 from .suppliers import supplier_alert_hint, supplier_inquiry_send
 from .intent_llm import classify_context, classify_intent
@@ -473,6 +474,9 @@ def create_app(
     text_llm_http_client=None,
     stock_llm_enabled=False,
     stock_llm_http_client=None,
+    biz_agent_enabled=False,
+    biz_agent_model=None,
+    biz_agent_http_client=None,
     kitchen_filter_enabled=True,
     intent_llm_enabled=False,
     intent_llm_http_client=None,
@@ -1442,6 +1446,21 @@ def create_app(
             return
         payload["stock_answer"] = await build_stock_answer(text, restaurant["id"])
         if payload["stock_answer"] is None:
+            # Nothing deterministic claimed the message. If it reads like an
+            # open question, the read-only business agent may compose an
+            # answer from store tools; any failure keeps the parse flow.
+            if biz_agent_enabled and vision_api_key and biz_agent.question_shaped(text):
+                try:
+                    answer = await biz_agent.answer_business_question(
+                        text, store=store, restaurant_id=restaurant["id"],
+                        api_key=vision_api_key, model=text_llm_model or None,
+                        base_url=vision_base_url, client=biz_agent_http_client or stock_llm_http_client,
+                    )
+                    if answer:
+                        payload["biz_answer"] = {"body": answer}
+                except biz_agent.BizAgentError as exc:
+                    logger.warning("Business agent kept the deterministic flow: %s", exc)
+        if payload["stock_answer"] is None and not payload.get("biz_answer"):
             extracted = await filter_kitchen_items(
                 await extract_text(text, restaurant["name"]), restaurant["id"])
             hint = await maybe_intent_hint(text, extracted)

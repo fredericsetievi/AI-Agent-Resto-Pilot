@@ -115,6 +115,7 @@ def main():
     asr_model_setting = (asr_model_override if custom_asr else None) or setting("STEPFUN_ASR_MODEL")
     stock_llm_enabled = bool(vision_api_key) and not llm_disabled("LLM_STOCK_ANSWER")
     intent_llm_enabled = bool(vision_api_key) and not llm_disabled("LLM_INTENT")
+    biz_agent_enabled = bool(vision_api_key) and not llm_disabled("BIZ_AGENT")
     # The forwarded-supplier-list router is the one language-model feature
     # that defaults OFF: it changes the over-20-line refusal into a model
     # read, so the pilot turns it on explicitly (LLM_FORWARDED_ROUTER=1).
@@ -167,6 +168,10 @@ def main():
         print(f"Intent routing: enabled (model {text_llm_model or 'default'}; exact commands stay first, purchases never routed; set LLM_INTENT=0 to disable)")
     else:
         print("Intent routing: disabled (STEPFUN_API_KEY missing or LLM_INTENT=0; exact commands stay first)")
+    if biz_agent_enabled:
+        print(f"Business analysis agent: enabled (model {text_llm_model or 'default'}; read-only tools, answers only; set BIZ_AGENT=0 to disable)")
+    else:
+        print("Business analysis agent: disabled (STEPFUN_API_KEY missing or BIZ_AGENT=0; open business questions fall back to help)")
     if forwarded_router_enabled:
         print(f"Forwarded-supplier-list router: enabled (model {text_llm_model or 'default'}; long forwards are read in chunks, rows stay flagged for confirmation; set LLM_FORWARDED_ROUTER=0 to disable)")
     else:
@@ -194,6 +199,7 @@ def main():
             text_llm_model=text_llm_model,
             stock_llm_enabled=bool(stock_llm_enabled),
             intent_llm_enabled=bool(intent_llm_enabled),
+            biz_agent_enabled=bool(biz_agent_enabled),
             forwarded_router_enabled=bool(forwarded_router_enabled),
             context_gate_enabled=bool(context_gate_enabled),
             public_demo=public_demo,
