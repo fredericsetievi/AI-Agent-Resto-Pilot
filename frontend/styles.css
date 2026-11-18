@@ -406,3 +406,17 @@ body { background:var(--paper); color:var(--ink); }
   .metric-label { align-items:flex-start; gap:var(--space-1); }
   .main-grid { grid-template-columns:minmax(0,1fr); }
 }
+
+.overview-priorities {
+  display:grid; gap:var(--space-3); margin-bottom:var(--space-3);
+  align-items:start;
+}
+.priority-stock-row {
+  display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between;
+  gap:var(--space-1); padding-block:var(--space-1);
+  border-bottom:var(--hairline) solid var(--line); overflow-wrap:anywhere;
+}
+.priority-stock-row:last-child { border-bottom:0; }
+@media (min-width:851px) {
+  .overview-priorities-paired { grid-template-columns:minmax(0,1.65fr) minmax(0,1fr); }
+}
