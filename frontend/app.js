@@ -422,21 +422,62 @@ function inventoryRows(inventory, editableUnits=false) {
   // owner counting a bin does not have to scroll down and re-find the item.
   return `<div class="inventory-list">${inventory.map(item => `<div class="inventory-row"><span class="ingredient-icon" aria-hidden="true">${ingredientIcon(item.name, item.ingredient_id)}</span><div><strong>${e(item.name)}</strong><small>${item.low_stock?`<span class="badge red">${t('stock_low_badge')}</span>`:`<span class="badge green">${t('badge_recorded')}</span>`}</small>${editableUnits?`<button type="button" class="text-button count-stock-action" data-count-stock="${e(item.ingredient_id)}">${t('btn_count_stock')}</button>`:''}</div><div class="stock ${item.low_stock?'low':''}">${number(item.quantity)} ${unitHtml(item)}<small>${t('w_threshold')} ${number(item.reorder_threshold)} ${e(item.unit)}</small></div></div>`).join('')}</div>`;
 }
-// Friendly activity outcomes: backend audit messages embed raw result tokens
-// ("WhatsApp message processed: media_unsupported.") and English boilerplate
-// that Indonesian owners cannot act on. Map the verified event kinds/tokens to
-// I18N keys; unmapped events keep the stored message unchanged. Presentation
-// only — event storage and semantics are untouched.
-const ACTIVITY_OUTCOME_KEYS = {draft_created:'act_draft_created',draft_rejected:'act_draft_rejected'};
-function activityOutcomeKey(item) {
-  const message=String(item.message||'');
-  if(message.includes('media_unsupported'))return 'act_media_unsupported';
-  if(message.includes('purchase_source_duplicate'))return 'act_duplicate_rejected';
-  return ACTIVITY_OUTCOME_KEYS[item.event] || null;
+// Localize audit event summaries while preserving user-entered and unknown messages.
+function activityMessage(item) {
+  const message=String(item.message || '');
+  if (message.includes('media_unsupported')) return t('act_media_unsupported');
+  if (message.includes('purchase_source_duplicate')) return t('act_duplicate_rejected');
+  switch (item.event) {
+    case 'draft_created': return t('act_draft_created');
+    case 'draft_rejected': return t('act_draft_rejected');
+    case 'draft_edited': return t('Draf ditinjau dan diedit.', 'Draft reviewed and edited.');
+    case 'draft_item_removed': return t('Barang non-dapur dihapus dari draf.', 'Non-kitchen items removed from the draft.');
+    case 'draft_updated_from_message': return t('Draf diperbarui dari pesan lanjutan.', 'Draft updated from a follow-up message.');
+    case 'purchase_recorded': {
+      const amount=message.match(/Rp (\d[\d,]*)/)?.[1];
+      if (!amount) return t('Pembelian dicatat dan stok ditambahkan.', 'Purchase recorded and stock added.');
+      const value=rupiah(Number(amount.replaceAll(',', '')));
+      return t(`Pembelian ${value} dicatat. Stok bertambah, status pembayaran belum diketahui.`, `Purchase of ${value} recorded. Stock added, payment status unknown.`);
+    }
+    case 'purchase_updated': return t('Detail pembayaran pembelian diperbarui.', 'Purchase payment details updated.');
+    case 'purchase_edited': return t('Pembelian diedit.', 'Purchase edited.');
+    case 'purchase_voided': return t('Pembelian dibatalkan.', 'Purchase voided.');
+    case 'demo_seeded': return t('Contoh riwayat dan estimasi stok awal dimuat.', 'Sample history and estimated opening stock loaded.');
+    case 'whatsapp_message_processed': return t('Pesan diproses.', 'Message processed.');
+    case 'whatsapp_unregistered': return t('Pesan dari pengirim yang belum terdaftar ditolak.', 'Message from an unregistered sender rejected.');
+    case 'phone_account_created': return t('Akun dan ruang kerja restoran dibuat.', 'Account and restaurant workspace created.');
+    case 'owner_phone_connected': return t('Nomor telepon pemilik dihubungkan.', 'Owner login phone connected.');
+    case 'owner_phone_enrolled': return t('Nomor telepon pemilik disetujui.', 'Owner login phone approved.');
+    case 'owner_phone_revoked': return t('Akses masuk dengan nomor telepon dicabut.', 'Login by phone revoked.');
+    case 'owner_password_reset': return t('Kata sandi pemilik diatur ulang.', 'Owner password reset.');
+    case 'restaurant_created': return t('Restoran dibuat.', 'Restaurant created.');
+    case 'restaurant_updated': return t('Detail restoran diperbarui.', 'Restaurant details updated.');
+    case 'sender_linked': return t('Pengirim dihubungkan ke restoran.', 'Sender linked to the restaurant.');
+    case 'sender_unlinked':
+    case 'whatsapp_number_unlinked': return t('Pengirim dilepas dari restoran.', 'Sender unlinked from the restaurant.');
+    case 'rule_added': return t('Aturan ditambahkan.', 'Rule added.');
+    case 'rule_edited': return t('Aturan diedit.', 'Rule edited.');
+    case 'rule_toggled': return t('Status aturan diubah.', 'Rule status changed.');
+    case 'rule_removed': return t('Aturan dihapus.', 'Rule removed.');
+    case 'opname_proposed': return t('Hitung stok diajukan.', 'Stock count proposed.');
+    case 'opname_cancelled': return t('Hitung stok dibatalkan.', 'Stock count cancelled.');
+    case 'opname_applied': return t('Hasil hitung stok diterapkan.', 'Stock count applied.');
+    case 'inventory_recipe_saved': return t('Resep disimpan.', 'Recipe saved.');
+    case 'inventory_settings_saved': return t('Pengaturan pemesanan diperbarui.', 'Reorder settings updated.');
+    case 'inventory_count': return t('Hitung stok dicatat.', 'Stock count recorded.');
+    case 'cloud_mirror_ok': return t('Salinan pembelian disimpan.', 'Purchase copy saved.');
+    case 'cloud_mirror_failed': return t('Salinan pembelian gagal disimpan.', 'Could not save purchase copy.');
+    case 'inventory_sale': return t('Penjualan dicatat.', 'Sale recorded.');
+    case 'inventory_usage': return t('Pemakaian bahan dicatat.', 'Ingredient usage recorded.');
+    case 'inventory_waste': return t('Bahan terbuang dicatat.', 'Ingredient waste recorded.');
+    case 'proactive_alert': return t('Peringatan stok rendah dikirim.', 'Low-stock alert sent.');
+    case 'proactive_message': return t('Pesan masuk antrean pengiriman.', 'Message queued for delivery.');
+    default: return message || item.event;
+  }
 }
 function activityRows(activity) {
   if (!activity.length) return `<div class="empty">${t('Aktivitas dapur Anda akan muncul di sini.','Your kitchen activity will appear here.')}</div>`;
-  return `<div class="activity-list">${activity.map(item => { const key=activityOutcomeKey(item); return `<div class="activity-row"><span class="activity-dot"></span><div><p>${e(key ? t(key) : (item.message || item.event))}</p><small>${e(date(item.created_at))}</small></div></div>`; }).join('')}</div>`;
+  return `<div class="activity-list">${activity.map(item => `<div class="activity-row"><span class="activity-dot"></span><div><p>${e(activityMessage(item))}</p><small>${e(date(item.created_at))}</small></div></div>`).join('')}</div>`;
 }
 function whatsappPage() {
   const numbers=state.data?.whatsapp_numbers || [];
@@ -532,7 +573,7 @@ function overview() {
   const delta=heroDelta(metrics);
   const metric=(label,value,detail,symbol,accent=false) => `<article class="metric ${accent?'metric-accent':''}"><div class="metric-label">${label}<span class="metric-symbol" aria-hidden="true">${symbol}</span></div><p class="metric-value money">${value}</p><small>${detail}</small></article>`;
   const hero=`<article class="metric metric-hero"><div class="metric-label">${t('Pembelian hari ini','Purchases today')}<span class="metric-symbol" aria-hidden="true">↗</span></div><p class="metric-value money">${rupiah(metrics.purchases_today_idr)}</p><small class="hero-delta ${delta.cls}">${e(delta.text)}</small><small>${t('Nilai invoice disetujui · WIB','Approved invoice value · WIB')}</small></article>`;
-  return `<div class="metrics">${hero}${metric(t('Menunggu Anda','Waiting for you'),number(drafts.length),t('Draf untuk ditinjau atau dilengkapi','Drafts to review or complete'),'☑',true)}${metric(t('Stok rendah','Low stock'),number(metrics.low_stock_count),t('Berdasar estimasi inventory','Based on estimated inventory'),'▦')}${metric(t('Pembelian tercatat','Recorded purchases'),number(metrics.recorded_purchases),t('Tersimpan di database lokal','Saved in your local database'),'▤')}</div><div class="main-grid"><div class="column"><section class="panel">${panelHeading(`${t('Perlu perhatian Anda','Needs your attention')} <span class="count-pill">${drafts.length}</span>`,t('Periksa cepat hari ini, besok lebih sedikit kejutan.','A quick check today, fewer surprises tomorrow.'), `<a class="text-button" href="#approvals">${t('Lihat semua →','View all →')}</a>`)}<div class="draft-list">${drafts.slice(0,3).map(draftCard).join('') || `<div class="empty"><strong>${t('Semua sudah beres.','You’re all caught up.')}</strong>${t('Draf pembelian baru akan muncul di sini.','New purchase drafts will appear here.')}</div>`}</div></section><section class="panel">${panelHeading(t('Pembelian terbaru','Recent purchases'),t('Terkonfirmasi, tercatat, mudah dicari.','Confirmed, recorded, and easy to find.'),`<a class="text-button" href="#purchases">${t('Semua pembelian →','All purchases →')}</a>`)}${purchaseTable(purchases.slice(0,5))}</section></div><div class="column"><section class="panel quick-panel"><div class="quick-icon" aria-hidden="true">✳</div><h2>${t('Satu pembelian. Satu pesan sederhana.','A purchase. A simple message.')}</h2><p>${t('Dapur tetap bergerak. Ubah catatan singkat menjadi pembelian siap tinjau.','Keep your kitchen moving. Turn a quick note into a purchase ready for your review.')}</p><div class="quick-sample">beli cabai 3 kg 150rb</div><button class="button" data-action="new-purchase">${t('Coba catat cepat →','Try a quick log →')}</button></section><section class="panel">${panelHeading(t('Stok dapur','Kitchen stock'),'',`<a class="text-button" href="#inventory">${t('Lihat semua →','View all →')}</a>`)}${inventoryRows(inventory.slice(0,3))}<div class="panel-note">${t('Estimasi dari nota yang disetujui. Hitungan fisik dan pemakaian dapur bisa berbeda.','Estimated from approved receipts. Physical counts and kitchen usage may differ.')}</div></section><section class="panel">${panelHeading(t('Aktivitas terbaru','Latest activity'))}${activityRows(activity.slice(0,3))}</section></div></div><div class="charts-grid"><section class="panel">${panelHeading(t('Pengeluaran 14 hari','14-day spending'),t('Total pembelian tercatat per hari (WIB).','Recorded purchase totals per day (WIB).'))}${dailySpendChart(state.data.charts?.daily_spend)}</section><section class="panel">${panelHeading(t('Bahan pengeluaran terbesar','Top ingredients by spend'),t('Dari pembelian 30 hari terakhir.','From purchases in the last 30 days.'))}${ingredientSpendChart(state.data.charts?.ingredient_spend)}</section></div>`;
+  return `<div class="metrics">${hero}${metric(t('Menunggu Anda','Waiting for you'),number(drafts.length),t('Draf untuk ditinjau atau dilengkapi','Drafts to review or complete'),'☑',true)}${metric(t('Stok rendah','Low stock'),number(metrics.low_stock_count),t('Berdasar estimasi inventory','Based on estimated inventory'),'▦')}${metric(t('Pembelian tercatat','Recorded purchases'),number(metrics.recorded_purchases),t('Tersimpan di database lokal','Saved in your local database'),'▤')}</div><div class="main-grid"><div class="column"><section class="panel">${panelHeading(`${t('Perlu perhatian Anda','Needs your attention')} <span class="count-pill">${drafts.length}</span>`,t('Periksa cepat hari ini, besok lebih sedikit kejutan.','A quick check today, fewer surprises tomorrow.'), `<a class="text-button" href="#approvals">${t('Lihat semua →','View all →')}</a>`)}<div class="draft-list">${drafts.slice(0,3).map(draftCard).join('') || `<div class="empty"><strong>${t('Semua sudah beres.','You’re all caught up.')}</strong>${t('Draf pembelian baru akan muncul di sini.','New purchase drafts will appear here.')}</div>`}</div></section><section class="panel">${panelHeading(t('Pembelian terbaru','Recent purchases'),t('Terkonfirmasi, tercatat, mudah dicari.','Confirmed, recorded, and easy to find.'),`<a class="text-button" href="#purchases">${t('Semua pembelian →','All purchases →')}</a>`)}${purchaseTable(purchases.slice(0,5))}</section></div><div class="column"><section class="panel quick-panel"><div class="quick-icon" aria-hidden="true">✳</div><h2>${t('Satu pembelian. Satu pesan sederhana.','A purchase. A simple message.')}</h2><p>${t('Dapur tetap bergerak. Ubah catatan singkat menjadi pembelian siap tinjau.','Keep your kitchen moving. Turn a quick note into a purchase ready for your review.')}</p><div class="quick-sample">${t('beli cabai 3 kg 150rb','bought 3 kg of chili for Rp150,000')}</div><button class="button" data-action="new-purchase">${t('Coba catat cepat →','Try a quick log →')}</button></section><section class="panel">${panelHeading(t('Stok dapur','Kitchen stock'),'',`<a class="text-button" href="#inventory">${t('Lihat semua →','View all →')}</a>`)}${inventoryRows(inventory.slice(0,3))}<div class="panel-note">${t('Estimasi dari nota yang disetujui. Hitungan fisik dan pemakaian dapur bisa berbeda.','Estimated from approved receipts. Physical counts and kitchen usage may differ.')}</div></section><section class="panel">${panelHeading(t('Aktivitas terbaru','Latest activity'))}${activityRows(activity.slice(0,3))}</section></div></div><div class="charts-grid"><section class="panel">${panelHeading(t('Pengeluaran 14 hari','14-day spending'),t('Total pembelian tercatat per hari (WIB).','Recorded purchase totals per day (WIB).'))}${dailySpendChart(state.data.charts?.daily_spend)}</section><section class="panel">${panelHeading(t('Bahan pengeluaran terbesar','Top ingredients by spend'),t('Dari pembelian 30 hari terakhir. Persentase dari total bahan yang ditampilkan.','From purchases in the last 30 days. Shares are of the ingredients shown.'))}${ingredientSpendChart(state.data.charts?.ingredient_spend)}</section></div>`;
 }
 function render() {
   renderIdentity();
@@ -616,14 +657,32 @@ function morePage() {
 }
 
 function dailySpendChart(daily) {
-  if(!daily || !daily.length) return '<div class="empty">Belum ada data grafik.</div>';
-  const max=Math.max(...daily.map(d=>d.total_idr), 1);
-  return `<div class="chart-bars">`+daily.map(d=>`<div class="chart-col"><div class="chart-bar" style="height:${Math.max(2, Math.round(d.total_idr/max*100))}%" title="${e(d.date)} · ${rupiah(d.total_idr)}"></div><small>${e(d.date.slice(8))}</small></div>`).join('')+`</div>`;
+  if (!daily?.length) return `<div class="empty">${t('Belum ada data grafik.','No chart data yet.')}</div>`;
+  const peak=Math.max(...daily.map(day => day.total_idr));
+  const max=Math.max(1, peak);
+  const dateFormat=new Intl.DateTimeFormat(LANG==='en' ? 'en-GB' : 'id-ID', {
+    dateStyle:'long', timeZone:'Asia/Jakarta'
+  });
+  const bars=daily.map(day => {
+    const amount=rupiah(day.total_idr);
+    const label=e(`${dateFormat.format(new Date(day.date))} · ${amount}`);
+    return `<div class="chart-col"><div class="chart-bar" role="img" aria-label="${label}" title="${label}" style="height:${day.total_idr/max*100}%">${day.total_idr>0 ? `<span class="chart-value" aria-hidden="true">${e(amount)}</span>` : ''}</div></div>`;
+  }).join('');
+  const dates=daily.map(day => `<small>${e(day.date.slice(8))}</small>`).join('');
+  return `<div class="daily-chart" style="--chart-value-length:${peak > 0 ? rupiah(peak).length : 0}"><div class="chart-bars">${bars}</div><div class="chart-dates" aria-hidden="true">${dates}</div></div>`;
 }
 function ingredientSpendChart(items) {
-  if(!items || !items.length) return '<div class="empty">Belum ada data grafik.</div>';
-  const max=Math.max(...items.map(i=>i.total_idr), 1);
-  return `<div class="hbars">`+items.map(i=>`<div class="hbar-row"><small class="hbar-name">${e(i.name)}</small><div class="hbar-track"><div class="hbar" style="width:${Math.max(2, Math.round(i.total_idr/max*100))}%"></div></div><span class="money hbar-value">${rupiah(i.total_idr)}</span></div>`).join('')+`</div>`;
+  if (!items?.length) return `<div class="empty">${t('Belum ada data grafik.','No chart data yet.')}</div>`;
+  const max=Math.max(1, ...items.map(item => item.total_idr));
+  const total=items.reduce((sum, item) => sum+Number(item.total_idr), 0);
+  const percent=new Intl.NumberFormat(LANG==='en' ? 'en-GB' : 'id-ID', {
+    style:'percent', maximumFractionDigits:1
+  });
+  return `<div class="hbars">${items.map(item => `<div class="hbar-row">
+    <span class="hbar-name">${e(item.name)}</span>
+    <div class="hbar-track" aria-hidden="true"><div class="hbar" style="width:${item.total_idr/max*100}%"></div></div>
+    <span class="hbar-value money">${e(rupiah(item.total_idr))} <small>${e(percent.format(total ? item.total_idr/total : 0))}</small></span>
+  </div>`).join('')}</div>`;
 }
 function opnameFormPanel() {
   const options=(state.data?.inventory || []).map(item=>`<option value="${e(item.ingredient_id)}">${e(item.name)} — sistem: ${e(number(item.quantity))} ${e(item.unit)}</option>`).join('');
