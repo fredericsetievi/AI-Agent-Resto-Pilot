@@ -1004,8 +1004,6 @@ def create_app(
             return {"restaurant_id": restaurant_id, "candidates": [], "body": None, "sent": [], "dry_run": bool(dry_run)}
         body_text = build_alert_text(candidates)
         hint = await run_in_threadpool(supplier_alert_hint, store, restaurant_id, candidates)
-        if hint:
-            body_text = body_text + "\n" + hint
         if stock_llm_enabled and vision_api_key:
             try:
                 body_text = await phrase_alert(
@@ -1018,6 +1016,10 @@ def create_app(
                 )
             except (StepFunTextError, ValueError) as exc:
                 logger.warning("StepFun stock alert phrasing failed; keeping the deterministic alert: %s", exc)
+        # The cheapest-source hint is ledger facts, not phrasing: it survives
+        # a successful model rewrite the same way the refill plan does below.
+        if hint:
+            body_text = body_text + "\n" + hint
         plan_text = build_refill_plan_text(candidates)
         if plan_text:
             body_text = (body_text or "").rstrip() + "\n\n" + plan_text

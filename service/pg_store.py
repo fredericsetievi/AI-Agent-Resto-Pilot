@@ -898,8 +898,16 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
                 "SELECT body FROM purchases WHERE slug=%s ORDER BY created_at, id", (restaurant_id,))
             for row in self._rows(cur):
                 for item in (row["body"] or {}).get("items") or []:
-                    ingredient_id, price = item.get("ingredient_id"), item.get("unit_price_idr")
-                    if ingredient_id and isinstance(price, int) and not isinstance(price, bool) and price > 0:
+                    ingredient_id, raw_price = item.get("ingredient_id"), item.get("unit_price_idr")
+                    # Normalized purchase items store the price as a decimal
+                    # string; accept any clean whole-rupiah number, never a bool.
+                    if isinstance(raw_price, bool):
+                        continue
+                    try:
+                        price = int(Decimal(str(raw_price)))
+                    except (InvalidOperation, TypeError, ValueError):
+                        continue
+                    if ingredient_id and price > 0:
                         prices[ingredient_id] = price
         return prices
 
