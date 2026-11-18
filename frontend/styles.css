@@ -185,3 +185,33 @@ body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-r
 .inventory-search:focus{outline:2px solid #1a7f37;outline-offset:1px;border-color:#1a7f37}
 .inventory-search-row .muted{white-space:nowrap}
 @media(max-width:620px){.inventory-search-row{margin:0 14px 12px}}
+
+/* --- P0 UI pass (Nov 18): compact header, clearer stock list, safer tabs ---
+   1) Mobile header: brand, session indicator, and logout share ONE compact
+      wrapping row; Keluar becomes a small secondary button (not full-width).
+      The utility strip (demo pill, language toggle, sync status, refresh)
+      stays compact in the adjacent topbar row. */
+@media(max-width:620px){
+  .sidebar{flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px 14px;padding:12px 18px 8px}
+  .sidebar-bottom{margin:0;padding:0;border-top:0;gap:6px}
+  #logout{width:auto;margin-top:0}
+}
+/* 2) Stok view: modest view title (smaller sans headline) instead of the large
+   serif hero headline, and the record-purchase button kept secondary. */
+.page-heading.modest h1{font-family:inherit;font-size:19px!important;font-weight:600;letter-spacing:-.2px;margin:0 0 4px}
+.page-heading.modest .eyebrow{margin-bottom:6px}
+@media(max-width:620px){.page-heading.modest .button{width:auto;margin-top:12px}}
+/* 3) Bottom tab strip already scrolls horizontally with safe-area padding and
+   visible labels; guarantee ~44px minimum tap targets for every tab. */
+@media(max-width:620px){nav a{min-height:44px;min-width:44px}}
+/* 4) Overview hero: the "vs kemarin" delta renders as its own line so it can
+   no longer merge into the invoice-value caption beside it. */
+.hero-delta{display:block}
+/* 5) Stock list: slightly tighter rows; quantity and unit stay paired and the
+   threshold text is darker so it reads beside the quantity. */
+.inventory-row{padding:10px 0}
+.inventory-row .stock{white-space:nowrap}
+.inventory-row .stock small{color:#51604f;font-size:10px;font-weight:550}
+/* 6) Purchase table: let secondary cell text (e.g. payment status) wrap inside
+   its cell instead of clipping mid-word; .table-wrap keeps horizontal scroll. */
+.table-wrap td small{white-space:normal;overflow-wrap:anywhere}
