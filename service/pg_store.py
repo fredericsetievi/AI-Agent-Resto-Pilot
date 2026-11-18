@@ -1209,6 +1209,39 @@ class PostgresStore(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, Inven
         items.sort(key=lambda item: item["total_idr"], reverse=True)
         return {"total_idr": agg["total_idr"], "purchase_count": agg["purchase_count"], "items": items}
 
+    def purchase_lines(self, restaurant_id, start=None, end=None, ingredient_id=None):
+        """Line-level purchase rows for the CSV export: one row per item line
+        from non-voided approved purchases, oldest first, WIB timestamps.
+        Same window rules and quantity protections as the totals strip."""
+        start_dt = self._as_datetime(start) if start else None
+        end_dt = self._as_datetime(end) if end else None
+        catalog = self._catalog_for(restaurant_id)["by_id"]
+        rows = []
+        with pg_connection() as conn:
+            cur = self._execute(conn,
+                "SELECT id, supplier, created_at, body FROM purchases WHERE slug=%s AND voided_at IS NULL ORDER BY created_at, id",
+                (restaurant_id,))
+            for row in self._rows(cur):
+                created = self._as_datetime(row["created_at"])
+                if start_dt and created < start_dt:
+                    continue
+                if end_dt and created >= end_dt:
+                    continue
+                purchase = row["body"]
+                for item in purchase.get("items") or []:
+                    if ingredient_id and item.get("ingredient_id") != ingredient_id:
+                        continue
+                    key = item.get("ingredient_id") or "unknown"
+                    name = (catalog.get(key) or {}).get("name") or item.get("raw_name") or str(key)
+                    price = item.get("unit_price_idr")
+                    if isinstance(price, str) and price.isdigit():
+                        price = int(price)
+                    rows.append({"purchase_id": row["id"], "created_at": created.astimezone(RESTAURANT_TIMEZONE).isoformat(),
+                                 "supplier": row["supplier"] or "", "item": name,
+                                 "quantity": item.get("quantity"), "unit": item.get("unit") or "",
+                                 "unit_price_idr": price, "line_total_idr": item.get("line_total_idr")})
+        return rows
+
     def restaurant_name(self, restaurant_id):
         with pg_connection() as conn:
             cur = self._execute(
