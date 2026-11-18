@@ -280,3 +280,18 @@ a.more-row::after,button.more-row:not(.more-row-logout)::after{content:"›";mar
   .purchase-table-wrap{display:none}
   .purchase-cards{display:grid;gap:10px}
 }
+
+/* Shared controls and surfaces */
+.button, .login-submit { border-radius:var(--button-radius); }
+.button.primary, .login-submit { min-height:var(--button-min-height); }
+.panel, .metric, .draft-card, .stock-card, .login-card { border-radius:var(--radius-l); }
+.panel, .draft-card, .stock-card { background-color:var(--card); }
+.panel td, .panel th { padding:var(--space-2); border-bottom:var(--hairline) solid var(--line); }
+input:not([type=checkbox]):not([type=radio]), select, textarea {
+  min-height:var(--button-min-height);
+  border-radius:var(--radius-m);
+}
+dialog { border-radius:var(--modal-radius); padding:var(--modal-inset); box-shadow:var(--shadow-2); }
+.toast { padding:var(--space-2); font:var(--text-body)/var(--text-title) var(--font-body); border-radius:var(--radius-m); }
+.badge, .count-pill { border-radius:var(--radius-s); }
+.metric:hover, .draft-card:hover { box-shadow:none; }

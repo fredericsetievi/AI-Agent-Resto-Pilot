@@ -524,3 +524,9 @@ test('base typography consumes approved tokens and preserves the legacy canvas',
   assert.ok(css.includes('--legacy-paper:#f6f7f2'));
   assert.ok(css.includes('--green-dark:var(--ink)'));
 });
+
+test('dialogs and primary actions share the approved dimensions', () => {
+  const css = fs.readFileSync('frontend/styles.css', 'utf8');
+  assert.match(css, /dialog \{ border-radius:var\(--modal-radius\); padding:var\(--modal-inset\)/);
+  assert.match(css, /\.button\.primary, \.login-submit \{ min-height:var\(--button-min-height\)/);
+});
