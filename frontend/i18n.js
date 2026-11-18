@@ -284,14 +284,14 @@ const I18N = {
     // Approvals page
     ap_queue:'Antrean tinjauan',
     ap_waiting:'draf menunggu keputusan Anda',
-    ap_clear_title:'Semua beres.',
+    ap_clear_title:'Tidak ada draf menunggu.',
     ap_clear_text:'Setiap draf sudah ada keputusannya.',
     // Purchases page
     pu_note:'Termasuk pembelian awal simulasi untuk menunjukkan perbandingan harga. Mencatat pembelian tidak menandai supplier sebagai sudah dibayar.',
     pu_history:'Riwayat pembelian',
     // Inventory page
     inv_title_h:'Estimasi stok',
-    inv_sub:'Hanya jumlah barang diterima yang disetujui. Koreksi angkanya lewat stok opname di chat atau lewat formulir di bawah.',
+    inv_sub:'Berdasarkan nota yang disetujui. Pemakaian dapur belum tercatat. Sesuaikan lewat stok opname.',
     inv_note:'Ambang stok rendah adalah konfigurasi demo. Cocokkan estimasi ini dengan hitungan fisik sebelum memesan.',
     opname_history_title:'Riwayat stok opname',
     opname_history_sub:'Koreksi stok fisik dari chat dan dashboard. Semua angka dari database.',
@@ -418,7 +418,7 @@ const I18N = {
     eyebrow_tagline:'A LITTLE CLARITY FOR YOUR KITCHEN',
     page_overview_title:'Your kitchen, in view.',
     page_overview_sub:'Purchases, stock, and the decisions that need you.',
-    btn_log_purchase:'Log a purchase',
+    btn_log_purchase:'Record purchase',
     loading_kitchen:'Loading your kitchen…',
     footer_tag:'RestoPilot · From purchase to peace of mind.',
     footer_features:'Manual intake · Rules parser · Persistent local database',
@@ -674,14 +674,14 @@ const I18N = {
     // Approvals page
     ap_queue:'Review queue',
     ap_waiting:'drafts waiting for your decision',
-    ap_clear_title:'All clear.',
+    ap_clear_title:'No drafts awaiting review.',
     ap_clear_text:'Every draft has a decision.',
     // Purchases page
     pu_note:'Includes synthetic opening purchases used to demonstrate price comparisons. Recording a purchase does not mark a supplier as paid.',
     pu_history:'Purchase history',
     // Inventory page
-    inv_title_h:'Estimated inventory',
-    inv_sub:'Approved received quantities only. Correct the numbers with a stock opname over chat or with the form below.',
+    inv_title_h:'Estimated stock',
+    inv_sub:'Based on approved purchases. Kitchen usage is untracked. Reconcile with a stock count.',
     inv_note:'Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.',
     opname_history_title:'Stock opname history',
     opname_history_sub:'Physical stock corrections from chat and dashboard. All numbers come from the database.',
