@@ -221,3 +221,62 @@ body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-r
    name/badge line and wraps below the name on narrow screens; tapping it
    scrolls to the stock opname form with that ingredient preselected. */
 .count-stock-action{margin-top:2px}
+
+/* --- P2 UI pass (Nov 18): four stable owner tabs + Lainnya page + mobile
+   purchase rows. Owner navigation collapses to exactly four tabs (Ringkasan,
+   Persetujuan, Stok, Lainnya): a fixed bottom bar up to 768px and the sidebar
+   list under the restaurant name on desktop, where the active tab gains a bold
+   label plus a left indicator line (never color alone). Admins keep the full
+   sidebar unchanged; all owner-scoped rules are gated on body:not(.is-admin). */
+body:not(.is-admin) nav a{position:relative}
+@media(min-width:769px){
+  body:not(.is-admin) nav a.active{font-weight:700;color:#f0f5e3}
+  body:not(.is-admin) nav a.active::before{content:"";position:absolute;left:0;top:22%;bottom:22%;width:3px;border-radius:2px;background:#dcedb4}
+}
+@media(max-width:768px){
+  body:not(.is-admin) nav{position:fixed;left:0;right:0;bottom:0;z-index:25;flex-direction:row;margin:0;gap:2px;padding:8px 10px calc(8px + env(safe-area-inset-bottom,0px));background:var(--green-dark);box-shadow:0 -8px 28px rgba(24,63,53,.22);overflow:hidden;scrollbar-width:none}
+  body:not(.is-admin) nav::-webkit-scrollbar{display:none}
+  body:not(.is-admin) nav a{position:relative;flex:1 1 0;min-width:0;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:48px;padding:8px 4px;font-size:10px;font-weight:550;letter-spacing:.2px;border-radius:9px;color:#9db5a8}
+  body:not(.is-admin) nav a>span:first-child{display:block;font-size:22px;width:auto;line-height:1;color:#b7cabe;transition:color .15s}
+  body:not(.is-admin) nav a.active{background:rgba(255,255,255,.10);color:#f0f5e3;font-weight:700}
+  body:not(.is-admin) nav a.active>span:first-child{color:#dcedb4}
+  body:not(.is-admin) nav a.active::before{content:"";position:absolute;top:0;left:18%;right:18%;height:3px;width:auto;border-radius:0 0 3px 3px;background:#dcedb4}
+  body:not(.is-admin) nav a:hover{background:rgba(255,255,255,.07);color:#e2ebdd}
+  body:not(.is-admin) .nav-count{margin-left:5px;font-size:8px;padding:2px 5px}
+  body:not(.is-admin) main{padding-bottom:96px}
+  body:not(.is-admin) .toast{bottom:100px}
+}
+@media(min-width:621px) and (max-width:768px){
+  /* Sidebar keeps its desktop shape here; reserve room above the fixed tab bar. */
+  body:not(.is-admin) .sidebar{padding-bottom:92px}
+}
+
+/* Lainnya page: simple list mapping every remaining owner destination to its
+   existing route or handler (language row reuses the topbar ID/EN toggle). */
+.more-list{display:grid;gap:10px;padding:0 22px 16px}
+.more-row{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:9px;padding:13px 15px;background:white;font-size:13px;color:var(--ink);text-decoration:none;text-align:left;min-height:48px;width:100%}
+a.more-row:hover,button.more-row:hover{border-color:#c8d4bd;background:#fbfcf8}
+.more-text{display:flex;flex-direction:column;gap:3px;min-width:0}
+.more-text strong{font-size:13px;font-weight:600}
+.more-text small{color:var(--muted);font-size:10px;line-height:1.5}
+a.more-row::after,button.more-row:not(.more-row-logout)::after{content:"›";margin-left:auto;color:var(--muted);font-size:18px;line-height:1}
+.more-row .lang-toggle{margin-left:auto}
+.more-row-logout .more-text strong{color:var(--red)}
+@media(max-width:620px){.more-list{padding:0 15px 15px}}
+
+/* Purchase history: two-line rows on mobile (≤768px); the desktop table stays
+   and renders LLM warnings inline. .purchase-cards is empty on desktop. */
+.purchase-cards{display:none}
+.purchase-row{border:1px solid var(--line);border-radius:9px;background:white;padding:13px 15px}
+.purchase-row-top{display:flex;align-items:baseline;gap:12px}
+.purchase-items{flex:1;min-width:0;font-size:12px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.purchase-amount{font-size:13px;font-weight:700;white-space:nowrap}
+.purchase-row-meta{display:flex;align-items:center;flex-wrap:wrap;gap:5px 7px;margin-top:6px;font-size:10px;color:var(--muted)}
+.purchase-detail-btn{margin-left:auto;min-height:44px;display:inline-flex;align-items:center;padding:6px 0 6px 12px}
+.purchase-warning{display:flex;gap:7px;align-items:flex-start;font-size:10px;line-height:1.6;color:#936525;background:var(--amber-bg);border-radius:6px;padding:8px 10px;margin-top:9px;white-space:normal}
+.purchase-warning span:first-child{flex-shrink:0}
+.purchase-table-wrap .purchase-warning{margin-top:6px}
+@media(max-width:768px){
+  .purchase-table-wrap{display:none}
+  .purchase-cards{display:grid;gap:10px}
+}
