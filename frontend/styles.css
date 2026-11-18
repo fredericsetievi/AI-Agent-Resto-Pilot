@@ -215,3 +215,9 @@ body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-r
 /* 6) Purchase table: let secondary cell text (e.g. payment status) wrap inside
    its cell instead of clipping mid-word; .table-wrap keeps horizontal scroll. */
 .table-wrap td small{white-space:normal;overflow-wrap:anywhere}
+
+/* --- P1 UI pass (Nov 18): per-row "Hitung fisik / Count stock" on the Stok
+   page. A compact text-button inside the ingredient-name block sits under the
+   name/badge line and wraps below the name on narrow screens; tapping it
+   scrolls to the stock opname form with that ingredient preselected. */
+.count-stock-action{margin-top:2px}

@@ -68,7 +68,9 @@ function toggleLang() {
 }
 const rupiah = value => value == null ? '—' : `Rp${new Intl.NumberFormat('id-ID', {maximumFractionDigits: 0}).format(Number(value))}`;
 const number = value => value == null ? '—' : new Intl.NumberFormat('id-ID', {maximumFractionDigits: 6}).format(Number(value));
-const date = value => value ? new Intl.DateTimeFormat('en-GB', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jakarta'}).format(new Date(value)) + ' WIB' : '';
+// Timestamps follow the selected language so Indonesian owners never see
+// mixed-locale output (e.g. an English connector between the date and "WIB").
+const date = value => value ? new Intl.DateTimeFormat(LANG === 'en' ? 'en-GB' : 'id-ID', {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Jakarta'}).format(new Date(value)) + ' WIB' : '';
 const icons = {cabai:'🌶',telur:'🥚',beras:'🌾',minyak:'🫙',bawang:'🧅'};
 // Name-keyword fallback so imported/custom items (Roti hitam, Gula merah,
 // Lemper lili, …) get a meaningful icon too. Specific phrases first —
@@ -330,7 +332,7 @@ function showError(id, message) { const element=$(`#${id}`); element.textContent
 function pendingDrafts() { return (state.data?.drafts || []).filter(draft => ['pending_approval','needs_clarification'].includes(draft.status) && !state.inlineDecisions.has(draft.id)); }
 function badge(status) { const text={pending_approval:t('badge_pending'),needs_clarification:t('badge_clarify'),recorded:t('badge_recorded'),rejected:t('badge_rejected')}; return `<span class="badge ${status==='recorded'?'green':status==='rejected'?'gray':'amber'}">${e(text[status] || status)}</span>`; }
 const WA_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg>';
-function timeHM(value) { return value ? new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Jakarta'}).format(new Date(value)) : ''; }
+function timeHM(value) { return value ? new Intl.DateTimeFormat(LANG === 'en' ? 'en-GB' : 'id-ID',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Jakarta'}).format(new Date(value)) : ''; }
 function sourceChip(draft) {
   const source=draft.source;
   if(!source)return '<span class="provenance">Manual</span>';
@@ -366,11 +368,26 @@ function purchaseTable(purchases) {
 function inventoryRows(inventory, editableUnits=false) {
   const unitOptions=item=>[...new Set([item.unit,'pcs','kg','g','liter','ml','buah','ikat','tray','dus'])].filter(Boolean).map(u=>`<option value="${e(u)}" ${u===item.unit?'selected':''}>${e(u)}</option>`).join('');
   const unitHtml=item=>editableUnits&&item.unit_editable?`<select class="unit-select" data-unit-select="${e(item.ingredient_id)}" aria-label="${t('Ubah satuan','Change unit')}" title="${t('Ubah satuan','Change unit')}">${unitOptions(item)}</select>`:`<span>${e(item.unit)}</span>`;
-  return `<div class="inventory-list">${inventory.map(item => `<div class="inventory-row"><span class="ingredient-icon" aria-hidden="true">${ingredientIcon(item.name, item.ingredient_id)}</span><div><strong>${e(item.name)}</strong><small>${item.low_stock?`<span class="badge red">${t('stock_low_badge')}</span>`:`<span class="badge green">${t('badge_recorded')}</span>`}</small></div><div class="stock ${item.low_stock?'low':''}">${number(item.quantity)} ${unitHtml(item)}<small>${t('w_threshold')} ${number(item.reorder_threshold)} ${e(item.unit)}</small></div></div>`).join('')}</div>`;
+  // Stok page rows (editableUnits=true) carry a per-row "Hitung fisik" shortcut
+  // that jumps to the opname form below with that ingredient preselected — an
+  // owner counting a bin does not have to scroll down and re-find the item.
+  return `<div class="inventory-list">${inventory.map(item => `<div class="inventory-row"><span class="ingredient-icon" aria-hidden="true">${ingredientIcon(item.name, item.ingredient_id)}</span><div><strong>${e(item.name)}</strong><small>${item.low_stock?`<span class="badge red">${t('stock_low_badge')}</span>`:`<span class="badge green">${t('badge_recorded')}</span>`}</small>${editableUnits?`<button type="button" class="text-button count-stock-action" data-count-stock="${e(item.ingredient_id)}">${t('btn_count_stock')}</button>`:''}</div><div class="stock ${item.low_stock?'low':''}">${number(item.quantity)} ${unitHtml(item)}<small>${t('w_threshold')} ${number(item.reorder_threshold)} ${e(item.unit)}</small></div></div>`).join('')}</div>`;
+}
+// Friendly activity outcomes: backend audit messages embed raw result tokens
+// ("WhatsApp message processed: media_unsupported.") and English boilerplate
+// that Indonesian owners cannot act on. Map the verified event kinds/tokens to
+// I18N keys; unmapped events keep the stored message unchanged. Presentation
+// only — event storage and semantics are untouched.
+const ACTIVITY_OUTCOME_KEYS = {draft_created:'act_draft_created',draft_rejected:'act_draft_rejected'};
+function activityOutcomeKey(item) {
+  const message=String(item.message||'');
+  if(message.includes('media_unsupported'))return 'act_media_unsupported';
+  if(message.includes('purchase_source_duplicate'))return 'act_duplicate_rejected';
+  return ACTIVITY_OUTCOME_KEYS[item.event] || null;
 }
 function activityRows(activity) {
   if (!activity.length) return `<div class="empty">${t('Aktivitas dapur Anda akan muncul di sini.','Your kitchen activity will appear here.')}</div>`;
-  return `<div class="activity-list">${activity.map(item => `<div class="activity-row"><span class="activity-dot"></span><div><p>${e(item.message || item.event)}</p><small>${e(date(item.created_at))}</small></div></div>`).join('')}</div>`;
+  return `<div class="activity-list">${activity.map(item => { const key=activityOutcomeKey(item); return `<div class="activity-row"><span class="activity-dot"></span><div><p>${e(key ? t(key) : (item.message || item.event))}</p><small>${e(date(item.created_at))}</small></div></div>`; }).join('')}</div>`;
 }
 function whatsappPage() {
   const numbers=state.data?.whatsapp_numbers || [];
@@ -549,6 +566,18 @@ async function applyOpname() {
   try { await api('/v1/stock-counts',{method:'POST',body:{ingredient_id:ingredient,counted_quantity:counted,note},key:newId()}); state.data=null; await refresh(); toast('Stok opname diterapkan.'); }
   catch(error) { showError('opname-error',error.message); }
   finally { state.opnameBusy=false; const b=document.querySelector('#opname-form button[type="submit"]'); if(b)b.disabled=false; }
+}
+// Per-row "Hitung fisik": reuse the single opname form — preselect the
+// ingredient, scroll its panel into view, then focus the counted field.
+// No new submit path: the existing #opname-form handler posts as before.
+function startStockCount(ingredientId) {
+  const select=$('#opname-ingredient');if(!select)return;
+  select.value=ingredientId;
+  select.dispatchEvent(new Event('change',{bubbles:true}));
+  const panel=select.closest('section.panel');
+  if(panel&&panel.scrollIntoView)panel.scrollIntoView({behavior:'smooth',block:'start'});
+  const counted=$('#opname-counted');
+  if(counted&&counted.focus)counted.focus({preventScroll:true});
 }
 function catalogImportPanel() {
   return `<section class="panel"><div class="panel-heading"><div><h2>Impor katalog bahan</h2><p>${t('Unggah file .xlsx atau .csv berisi daftar bahan: kolom nama wajib, sedangkan satuan, jumlah stok, kode, dan ambang minimum opsional. Baris tanpa nama dilewati.','Upload an .xlsx or .csv file listing ingredients: a name column is required, while unit, stock quantity, code, and minimum threshold are optional. Rows without a name are skipped.')}</p></div><button class="button mini primary" data-catalog-import ${state.catalogImportBusy?'disabled':''}>Impor katalog</button></div><input id="catalog-import-file" type="file" accept=".xlsx,.csv" hidden><div id="catalog-import-error" class="notice error" role="alert" hidden></div><div id="catalog-import-result" class="notice" role="status" hidden></div><div class="panel-note">${t('Nama yang sudah ada di katalog hanya diperbarui stoknya; bahan baru masuk ke katalog resto ini.','Names already in the catalog only get their stock updated; new ingredients are added to this restaurant\'s catalog.')}</div></section>`;
@@ -783,6 +812,7 @@ document.addEventListener('click',event => {
   if(button.dataset.whatsappReview){location.hash='#approvals';openReview(button.dataset.whatsappReview);}
   if(button.dataset.chatApprove)chatDecision(button.dataset.chatApprove,'approve');
   if(button.dataset.chatReject)chatDecision(button.dataset.chatReject,'reject');
+  if(button.dataset.countStock)startStockCount(button.dataset.countStock);
   if(button.dataset.openResto){state.adminSelected=button.dataset.openResto;location.hash='#admin-detail';window.scrollTo(0,0);}
   if(button.dataset.backTo){location.hash='#'+button.dataset.backTo;}
   if(button.dataset.adminAction)adminAction(button.dataset.adminAction,button);
