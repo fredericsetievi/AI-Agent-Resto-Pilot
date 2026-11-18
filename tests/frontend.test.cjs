@@ -377,28 +377,67 @@ test('review editor prefills mapped names and leaves new rows blank',()=>{
   assert.ok(!html.includes('value="Unmatched item"'));
 });
 
-test('daily spend chart scales bars to the max and labels dates', () => {
+test('daily spend bars expose localized dates and amounts, with visible values only for nonzero days', () => {
   const {run} = harness();
-  const html = run(`dailySpendChart([{date:'2026-11-01', total_idr: 50000},{date:'2026-11-02', total_idr: 100000}])`);
+  const chart = `dailySpendChart([
+    {date:'2026-11-01', total_idr: 50000},
+    {date:'2026-11-02', total_idr: 100000},
+    {date:'2026-11-03', total_idr: 0}
+  ])`;
+  const html = run(chart);
   assert.match(html, /height:50%/);
   assert.match(html, /height:100%/);
-  assert.match(html, /title="2026-11-02 · Rp100\.000"/);
-  assert.match(html, /2026-11-01/);
+  assert.match(html, /height:0%/);
+  assert.match(html, /aria-label="2 November 2026 · Rp100\.000"/);
+  assert.match(html, /aria-label="3 November 2026 · Rp0"/);
+  assert.equal((html.match(/class="chart-value"/g) || []).length, 2);
+  assert.match(html, /class="chart-dates"[^>]*><small>01<\/small>/);
+  run("LANG='id'");
+  assert.match(run(`dailySpendChart([{date:'2026-08-02',total_idr:1}])`), /aria-label="2 Agustus 2026 · Rp1"/);
 });
 
-test('ingredient spend chart lists names with amounts', () => {
+test('ingredient spend shows escaped names, amounts, and shares of the displayed total', () => {
   const {run} = harness();
-  const html = run(`ingredientSpendChart([{name:'Cabai merah', total_idr: 100000},{name:'Bawang merah', total_idr: 50000}])`);
-  assert.match(html, /Cabai merah/);
-  assert.match(html, /Rp100\.000/);
+  const chart = `ingredientSpendChart([{name:'<b>Cabai merah</b>', total_idr:100000},{name:'Bawang merah', total_idr:50000}])`;
+  const html = run(chart);
+  assert.match(html, /&lt;b&gt;Cabai merah&lt;\/b&gt;/);
+  assert.match(html, /Rp100\.000 <small>66\.7%/);
+  assert.match(html, /Rp50\.000 <small>33\.3%/);
   assert.match(html, /width:100%/);
   assert.match(html, /width:50%/);
+  run("LANG='id'");
+  assert.match(run(chart), /66,7%/);
+  assert.match(run(`ingredientSpendChart([{name:'Cabai',total_idr:0}])`), /<small>0%/);
 });
 
-test('empty chart data renders a friendly empty state', () => {
+test('both charts localize their empty state', () => {
   const {run} = harness();
-  assert.match(run(`dailySpendChart([])`), /Belum ada data grafik/);
-  assert.match(run(`ingredientSpendChart(null)`), /Belum ada data grafik/);
+  for (const chart of ['dailySpendChart([])', 'ingredientSpendChart(null)']) {
+    run("LANG='id'");
+    assert.match(run(chart), /Belum ada data grafik/);
+    run("LANG='en'");
+    assert.match(run(chart), /No chart data yet/);
+  }
+});
+
+test('activity localizes audit events and escapes original messages for unknown events', () => {
+  const {run} = harness();
+  const feed = `activityRows([
+    {event:'purchase_recorded',message:'Purchase recorded for Rp 150,000; received stock added. Payment status unknown.'},
+    {event:'draft_edited',message:'Draft reviewed and edited.'},
+    {event:'whatsapp_message_processed',message:'WhatsApp message processed: media_unsupported.'},
+    {event:'future_event',message:'<img src=x>'}
+  ])`;
+  run("LANG='id'");
+  const id = run(feed);
+  assert.match(id, /Pembelian Rp150\.000 dicatat/);
+  assert.match(id, /Draf ditinjau dan diedit/);
+  assert.match(id, /Foto\/audio belum bisa diproses/);
+  assert.doesNotMatch(id, /Purchase recorded|Draft reviewed|<img/);
+  assert.match(id, /&lt;img src=x&gt;/);
+  run("LANG='en'");
+  assert.match(run(feed), /Purchase of Rp150\.000 recorded/);
+  assert.match(run(feed), /Draft reviewed and edited/);
 });
 
 test('api calls send the ngrok skip header and report non-JSON gateway pages clearly', async () => {
