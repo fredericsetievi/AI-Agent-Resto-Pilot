@@ -54,6 +54,18 @@ def is_price_question(text):
     return bool(PRICE_MARKER.search(text))
 
 
+# "total pembelian gas 12 kg bulan ini" — a totals question, not a purchase
+# note: notes never open with "total pembelian", and the PURCHASE_INTENT guard
+# above does not apply because the phrase carries no purchase verb. "rekap
+# pengeluaran" stays a classic spend question; only "rekap pembelian" joins.
+PURCHASE_TOTAL_MARKER = re.compile(
+    r"(?i)\btotal\s+(?:pembelian|belanja|pengeluaran)\b|\brekap(?:itulasi)?\s+pembelian\b")
+
+
+def is_purchase_total_question(text):
+    return bool(isinstance(text, str) and text.strip() and PURCHASE_TOTAL_MARKER.search(text))
+
+
 # --- Time windows (v2): bounded Indonesian phrases, day boundaries in WIB ------
 
 _TZ = ZoneInfo("Asia/Jakarta")
@@ -157,6 +169,52 @@ def ingredient_spend_fact(name, total_idr, count, label):
             "purchase_count": count, "_require": [re.escape(name), money_pattern(total_idr)]}
 
 
+def purchase_total_fact(name, quantity, unit, total_idr, count, label):
+    """What was bought in a window: purchase-unit quantity + rupiah + count.
+
+    name=None means the whole ledger ("total pembelian bulan ini"). The
+    quantity is locked into any model rephrasing together with its unit so a
+    rewritten reply cannot drop or round the amount ("8 tabung").
+    """
+    fact = {"kind": "purchase_total", "label": label, "total_idr": total_idr,
+            "purchase_count": count, "_require": [money_pattern(total_idr)]}
+    if name:
+        fact["name"] = name
+        fact["_require"].append(re.escape(name))
+    if quantity:
+        fact["quantity"] = quantity
+        fact["unit"] = unit or ""
+        fact["_require"].append(re.escape(quantity) + (r"\s?" + re.escape(unit) if unit else ""))
+    return fact
+
+
+def purchase_total_payload(question, agg, named, catalog_by_id, window):
+    """Ledger-locked answer payload for a purchase-total question.
+
+    Both stores call this with their _spend_aggregate result so SQLite and
+    Postgres answer identically. Per-ingredient quantities already come in
+    purchase units (canonical_quantity falls back to the line quantity).
+    """
+    label = window["label"]
+    if named:
+        ingredient_id = named[0]
+        entry = agg["per_ingredient"].get(ingredient_id)
+        ingredient = catalog_by_id.get(ingredient_id) or {}
+        name = ingredient.get("name") or str(ingredient_id)
+        if not entry or entry["total"] == 0:
+            return {"question": question, "facts": [],
+                    "empty_text": f"Belum ada pembelian {name} tercatat {label}."}
+        quantity = entry.get("quantity")
+        qty_text = format(quantity.normalize(), "f") if quantity else ""
+        return {"question": question, "facts": [purchase_total_fact(
+            name, qty_text, entry.get("unit"), entry["total"], entry["count"], label)]}
+    if agg["purchase_count"] == 0:
+        return {"question": question, "facts": [],
+                "empty_text": f"Belum ada pembelian tercatat {label}."}
+    return {"question": question, "facts": [purchase_total_fact(
+        None, "", "", agg["total_idr"], agg["purchase_count"], label)]}
+
+
 def compare_fact(a_total, a_label, a_count, b_total, b_label, b_count):
     """Two windows side by side, with the percentage move of the first."""
     fact = {"kind": "spend_compare", "label_a": a_label, "label_b": b_label,
@@ -224,6 +282,15 @@ def build_answer(facts, days=None):
     if facts[0]["kind"] == "spend_ingredient":
         fact = facts[0]
         return f"Pengeluaran {fact['label']} untuk {fact['name']}: Rp{format_idr(fact['total_idr'])} (dari {fact['purchase_count']} catatan)."
+    if facts[0]["kind"] == "purchase_total":
+        fact = facts[0]
+        subject = f" untuk {fact['name']}" if fact.get("name") else ""
+        bits = []
+        if fact.get("quantity"):
+            bits.append(f"{fact['quantity']} {fact['unit']}".strip())
+        bits.append(f"Rp{format_idr(fact['total_idr'])}")
+        return (f"Total pembelian{subject} {fact['label']}: "
+                + " · ".join(bits) + f" · dari {fact['purchase_count']} pembelian.")
     if facts[0]["kind"] == "spend_compare":
         fact = facts[0]
         head = f"Pengeluaran {fact['label_a']}: Rp{format_idr(fact['total_a'])} ({fact['count_a']} pembelian) vs {fact['label_b']}: Rp{format_idr(fact['total_b'])} ({fact['count_b']})."

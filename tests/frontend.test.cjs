@@ -34,6 +34,19 @@ test('draft card escapes source-derived markup and unknown totals are not zero',
   assert.ok(!html.includes('Rp0'));
 });
 
+test('purchase totals panel renders rows, totals, and period buttons',()=>{
+  const h=harness();
+  assert.ok(h.run('purchaseTotalsPanel()').includes('Loading purchase totals'));
+  h.run(`purchaseTotalsState.data={total_idr:1240000,purchase_count:6,label:'bulan ini',items:[{ingredient_id:'gas_12',name:'<script>x</script>',quantity:8,unit:'tabung',total_idr:1240000,purchase_count:6}]}`);
+  const panel=h.run('purchaseTotalsPanel()');
+  assert.ok(!panel.includes('<script>'));
+  assert.ok(panel.includes('8 tabung'));
+  assert.ok(panel.includes('Rp1.240.000'));
+  assert.ok(panel.includes('6'));
+  assert.ok(panel.includes('data-pt-period="this_month"'));
+  assert.ok(panel.includes('data-pt-period="last_month"'));
+});
+
 test('approval requires current validated draft, received goods, online state, and saved edits',()=>{
   const h=harness();h.run(`state.draft={status:'pending_approval'};state.online=true;`);
   h.run('updateApprovalButton()');assert.equal(h.element('#approve-draft').disabled,true);

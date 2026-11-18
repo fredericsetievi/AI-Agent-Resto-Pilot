@@ -1,6 +1,7 @@
 """Data questions beyond stock: spending totals and last prices, ledger-locked."""
 
 import asyncio
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -13,10 +14,11 @@ from service.data_qa import (
     build_answer,
     format_idr,
     is_price_question,
+    is_purchase_total_question,
     is_spend_question,
     validate_data_reply,
 )
-from service.db import RESTAURANT, Store
+from service.db import RESTAURANT, RESTAURANT_TIMEZONE, Store
 from service.extraction import extract_purchase
 
 
@@ -57,6 +59,18 @@ def test_detection_splits_spend_price_and_purchases():
     assert not is_price_question("tolong catat harga cabai 50rb")  # purchase verb guard
     assert not is_price_question("berapa stok cabai?")
     assert not is_spend_question("halo siang")
+
+
+def test_purchase_total_question_detection():
+    # "total pembelian gas 12 kg bulan ini" — the interview pain point: how
+    # much of one item was bought in a period, not just what it cost.
+    assert is_purchase_total_question("total pembelian gas 12 kg bulan ini")
+    assert is_purchase_total_question("total pembelian bulan lalu?")
+    assert is_purchase_total_question("rekap pembelian telur bulan ini")
+    assert not is_purchase_total_question("beli cabai 3 kg 150rb")  # a note
+    assert not is_purchase_total_question("berapa pengeluaran minggu ini?")  # classic spend
+    assert not is_purchase_total_question("rekap pengeluaran minggu ini")  # stays a spend question
+    assert not is_purchase_total_question("halo siang")
 
 
 # --- Facts from the seed ledger -------------------------------------------------
@@ -106,6 +120,45 @@ def test_questions_without_a_match_stay_none(tmp_path):
     assert store.data_facts(SPEND_QUESTION, None) is None
     assert store.data_facts("harga bahan yang belum pernah dibeli naik?", TENANT) is None  # no catalog match
     assert store.data_facts("berapa stok cabai?", TENANT) is None  # stock question, not data
+
+
+# --- Purchase totals per item (quantity + rupiah + count) -----------------------
+
+
+def test_purchase_total_per_item_carries_quantity(tmp_path):
+    store = seeded_store(tmp_path)
+    result = store.data_facts("total pembelian cabai 30 hari terakhir", TENANT)
+    fact = result["facts"][0]
+    assert fact["kind"] == "purchase_total"
+    assert fact["name"] == "Cabai merah"
+    assert fact["quantity"] == "3" and fact["unit"] == "kg"  # seed: 3 kg @129.000
+    assert fact["total_idr"] == 129000 and fact["purchase_count"] == 1
+
+
+def test_purchase_total_whole_ledger_when_no_item_named(tmp_path):
+    store = seeded_store(tmp_path)
+    result = store.data_facts("total pembelian 30 hari terakhir", TENANT)
+    fact = result["facts"][0]
+    assert fact["kind"] == "purchase_total"
+    assert fact["total_idr"] == 559000 and fact["purchase_count"] == 2
+    assert "name" not in fact and "quantity" not in fact
+
+
+def test_purchase_total_unknown_item_answers_empty(tmp_path):
+    store = seeded_store(tmp_path)
+    result = store.data_facts("total pembelian bawang 30 hari terakhir", TENANT)
+    assert result["facts"] == []
+    assert "Bawang merah" in result["empty_text"]
+
+
+def test_build_answer_purchase_total():
+    answer = build_answer([{"kind": "purchase_total", "label": "bulan ini", "name": "Gas 12 kg",
+                            "quantity": "8", "unit": "tabung", "total_idr": 1240000,
+                            "purchase_count": 6, "_require": []}])
+    assert answer == "Total pembelian untuk Gas 12 kg bulan ini: 8 tabung · Rp1.240.000 · dari 6 pembelian."
+    whole = build_answer([{"kind": "purchase_total", "label": "bulan ini", "total_idr": 3770000,
+                           "purchase_count": 12, "_require": []}])
+    assert whole == "Total pembelian bulan ini: Rp3.770.000 · dari 12 pembelian."
 
 
 # --- Deterministic answer text ---------------------------------------------------
@@ -190,6 +243,35 @@ def test_llm_rephrase_keeps_or_drops_figures(tmp_path):
     result = simulate(bad, SPEND_QUESTION).json()["data"]["messages"][-1]["body"]
     assert "Rp999.000" not in result and "Rp559.000" in result  # deterministic fallback
     assert len(fake.calls) == 1
+
+
+def test_simulator_answers_purchase_total_per_item(tmp_path):
+    client, _fake = qa_client(tmp_path)
+    response = simulate(client, "total pembelian cabai 30 hari terakhir")
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["result"]["action"] == "stock_answer"
+    body = data["messages"][-1]["body"]
+    assert "3 kg" in body and "Rp129.000" in body and "1 pembelian" in body
+
+
+def test_purchase_totals_endpoint_period_and_custom(tmp_path):
+    client, _fake = qa_client(tmp_path)
+    start = (datetime.now(RESTAURANT_TIMEZONE) - timedelta(days=30)).strftime("%Y-%m-%d")
+    today = datetime.now(RESTAURANT_TIMEZONE).strftime("%Y-%m-%d")
+    data = client.get(f"/v1/purchase-totals?period=custom&start={start}&end={today}").json()["data"]
+    assert data["total_idr"] == 559000 and data["purchase_count"] == 2
+    assert [item["name"] for item in data["items"]] == ["Telur ayam", "Cabai merah"]  # biggest spend first
+    assert data["items"][0]["quantity"] == 10.0 and data["items"][0]["unit"] == "kg"
+    # "bulan ini" may be empty early in a month; the endpoint must still answer.
+    this_month = client.get("/v1/purchase-totals?period=this_month")
+    assert this_month.status_code == 200 and "total_idr" in this_month.json()["data"]
+
+
+def test_purchase_totals_endpoint_rejects_incomplete_custom_period(tmp_path):
+    client, _fake = qa_client(tmp_path)
+    assert client.get("/v1/purchase-totals?period=custom&start=2026-11-01").status_code == 422
+    assert client.get("/v1/purchase-totals?period=custom&start=not-a-date&end=2026-11-18").status_code == 422
 
 
 def test_format_idr_indonesian_style():

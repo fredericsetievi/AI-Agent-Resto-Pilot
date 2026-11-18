@@ -31,7 +31,7 @@ from .purchase_edits import PurchaseEditsMixin, parse_purchase_edit_command
 from .suppliers import SupplierMixin, parse_supplier_command
 from .reminders import ReminderMixin, SQLITE_SCHEMA as REMINDERS_SQLITE_SCHEMA, parse_reminder_command, parse_reminder_request
 from .cash_envelope import CashEnvelopeMixin, SQLITE_SCHEMA as ENVELOPE_SQLITE_SCHEMA, parse_envelope_command
-from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, rank_fact, spend_fact
+from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_purchase_total_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, purchase_total_payload, rank_fact, spend_fact
 from .onboarding import restaurant_selection
 from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, TOO_MANY_LINES_REPLY, UNREGISTERED_REPLY, dashboard_link_line, dashboard_link_reply, draft_label, draft_reply, input_over_line_limit, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
 
@@ -1056,6 +1056,13 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         """
         if not restaurant_id:
             return None
+        if is_purchase_total_question(text):
+            windows = find_windows(text, limit=1)
+            window = windows[0] if windows else parse_window(text)
+            with self.transaction() as conn:
+                agg = self._spend_aggregate(conn, restaurant_id, window.get("start"), window.get("end"))
+            return purchase_total_payload(str(text).strip(), agg, self._stock_ingredient_ids(text, restaurant_id),
+                                          self._catalog_for(restaurant_id)["by_id"], window)
         if is_price_question(text):
             named = self._stock_ingredient_ids(text, restaurant_id)
             if not named:
@@ -1096,7 +1103,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
         end_dt = datetime.fromisoformat(end) if end else None
         total, count, first = 0, 0, None
         per_ingredient = {}
-        for row in conn.execute("SELECT body, created_at FROM purchases WHERE restaurant_id=? ORDER BY created_at, id", (restaurant_id,)):
+        for row in conn.execute("SELECT body, created_at FROM purchases WHERE restaurant_id=? AND voided_at IS NULL ORDER BY created_at, id", (restaurant_id,)):
             created = datetime.fromisoformat(row["created_at"])
             if start_dt and created < start_dt:
                 continue
@@ -1177,6 +1184,25 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
             top_name, top_entry = ranked[0]
             top = {"name": top_name, "quantity": format(top_entry["quantity"].normalize(), "f"), "unit": top_entry["unit"] or ""}
             return {"question": str(text).strip(), "facts": [spend_fact(agg["total_idr"], agg["purchase_count"], label, top=top)]}
+
+    def purchase_item_totals(self, restaurant_id, start=None, end=None):
+        """Per-item purchase totals for the dashboard Purchases tab strip.
+
+        Quantity in purchase units (tabung, sak, kg — whatever the line
+        recorded), rupiah, and how many purchases mentioned the item, biggest
+        spend first. Same figures the chat answers, same window rules.
+        """
+        with self.transaction() as conn:
+            agg = self._spend_aggregate(conn, restaurant_id, start, end)
+        catalog = self._catalog_for(restaurant_id)["by_id"]
+        items = []
+        for key, entry in agg["per_ingredient"].items():
+            ingredient = catalog.get(key) or {}
+            items.append({"ingredient_id": str(key), "name": ingredient.get("name") or str(key),
+                          "quantity": float(entry["quantity"]), "unit": entry.get("unit") or ingredient.get("unit") or "",
+                          "total_idr": entry["total"], "purchase_count": entry["count"]})
+        items.sort(key=lambda item: item["total_idr"], reverse=True)
+        return {"total_idr": agg["total_idr"], "purchase_count": agg["purchase_count"], "items": items}
 
     def whatsapp_ingest(self, key, payload, *, transport=SIMULATOR, channel=None, outbound_status=None, restaurant_id=None, platform="whatsapp", open_onboarding=False):
         """Persist inbound, decision/ledger, outbound and dedupe in one commit.
