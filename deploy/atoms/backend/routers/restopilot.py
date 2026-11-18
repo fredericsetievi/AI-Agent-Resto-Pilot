@@ -75,9 +75,13 @@ def _restopilot_app():
             vision_api_key=env("STEPFUN_API_KEY"),
             vision_model=env("STEPFUN_VISION_MODEL"),
             vision_base_url=env("STEPFUN_BASE_URL"),
-            asr_model=(env("AUDIO_ASR_MODEL") if env("AUDIO_ASR_API_KEY") and env("AUDIO_ASR_BASE_URL") else None) or env("STEPFUN_ASR_MODEL"),
-            asr_api_key=env("AUDIO_ASR_API_KEY"),
-            asr_base_url=env("AUDIO_ASR_BASE_URL"),
+            # Voice-note ASR override: AUDIO_ASR_* with RESTOPILOT_ASR_*
+            # aliases (some platform key names did not reach the runtime).
+            asr_model=((env("AUDIO_ASR_MODEL") or env("RESTOPILOT_ASR_MODEL"))
+                       if (env("AUDIO_ASR_API_KEY") or env("RESTOPILOT_ASR_API_KEY"))
+                       and (env("AUDIO_ASR_BASE_URL") or env("RESTOPILOT_ASR_BASE_URL")) else None) or env("STEPFUN_ASR_MODEL"),
+            asr_api_key=env("AUDIO_ASR_API_KEY") or env("RESTOPILOT_ASR_API_KEY"),
+            asr_base_url=env("AUDIO_ASR_BASE_URL") or env("RESTOPILOT_ASR_BASE_URL"),
             asr_language=(env("AUDIO_ASR_LANGUAGE") or "").strip() or None,
             asr_prompt=(env("AUDIO_ASR_PROMPT") or "").strip() or None,
             text_llm_enabled=bool(env("STEPFUN_API_KEY")) and (env("LLM_TEXT_EXTRACTION", "1").strip().casefold() not in _LLM_OFF),
