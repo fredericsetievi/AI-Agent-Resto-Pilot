@@ -91,8 +91,8 @@ function ingredientIcon(name, ingredientId) {
   return letter ? `<span class="icon-letter">${e(letter)}</span>` : '▦';
 }
 const TITLES = {
-  id: {overview:['Dapur Anda, dalam pandangan, Bos.','Pembelian, stok, dan keputusan yang menunggu Anda.'],approvals:['Saatnya meninjau, Bos.','Periksa detailnya. Anda yang memutuskan menjadi catatan.'],purchases:['Setiap pembelian tercatat, Bos.','Pembelian yang disetujui beserta sumber catatannya. Status pembayaran terpisah.'],inventory:['Tahu apa yang masuk, Bos.','Stok estimasi dari pembelian tercatat. Pemakaian dapur belum dilacak.'],rules:['Peraturan asisten resto Anda, Bos.','Aturan khusus per resto — asisten menaatinya, resto lain tidak terpengaruh.'],links:['Hubungkan nomor/chat resto Anda, Bos.','Satu nomor bisa aktif di WhatsApp dan Telegram sekaligus — per resto.'],activity:['Kisah di balik tiap catatan, Bos.','Jejak permanen draf, koreksi, dan keputusan pemilik.'],whatsapp:['Chat dengan asisten, Bos.','Catatan pembelian dan keputusan draf di satu tempat — tanpa pindah aplikasi.']},
-  en: {overview:['Your kitchen, in view, Boss.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review, Boss.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for, Boss.','Approved purchases and their source records. Payment status is separate.'],inventory:['Know what came in, Boss.','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],rules:['Rules for your restaurant assistant, Boss.','Per-restaurant rules — the assistant obeys them, other restaurants are unaffected.'],links:['Connect your restaurant numbers, Boss.','One number can be active on WhatsApp and Telegram at once — per restaurant.'],activity:['The story behind each record, Boss.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['Chat with your assistant, Boss.','Purchase notes and draft decisions in one place — without switching apps.']}
+  id: {overview:['Dapur Anda, dalam pandangan, Bos.','Pembelian, stok, dan keputusan yang menunggu Anda.'],approvals:['Saatnya meninjau, Bos.','Periksa detailnya. Anda yang memutuskan menjadi catatan.'],purchases:['Setiap pembelian tercatat, Bos.','Pembelian yang disetujui beserta sumber catatannya. Status pembayaran terpisah.'],inventory:['Tahu apa yang masuk, Bos.','Stok estimasi dari pembelian tercatat. Pemakaian dapur belum dilacak.'],rules:['Peraturan asisten resto Anda, Bos.','Aturan khusus per resto — asisten menaatinya, resto lain tidak terpengaruh.'],links:['Hubungkan nomor/chat resto Anda, Bos.','Satu nomor bisa aktif di WhatsApp dan Telegram sekaligus — per resto.'],activity:['Kisah di balik tiap catatan, Bos.','Jejak permanen draf, koreksi, dan keputusan pemilik.'],whatsapp:['Chat dengan asisten, Bos.','Catatan pembelian dan keputusan draf di satu tempat — tanpa pindah aplikasi.'],suppliers:['Harga semua supplier dalam satu tabel, Bos.','Kutipan terbaru per bahan dan harga beli terakhirmu.'],insights:['Penjualan menu dalam angka, Bos.','Terlaris, paling sepi, dan perbandingan periode.']},
+  en: {overview:['Your kitchen, in view, Boss.','Purchases, stock, and the decisions that need you.'],approvals:['A moment for your review, Boss.','Check the details. You decide what becomes a record.'],purchases:['Every purchase, accounted for, Boss.','Approved purchases and their source records. Payment status is separate.'],inventory:['Know what came in, Boss.','Estimated stock from recorded purchases. Kitchen usage is not tracked yet.'],rules:['Rules for your restaurant assistant, Boss.','Per-restaurant rules — the assistant obeys them, other restaurants are unaffected.'],links:['Connect your restaurant numbers, Boss.','One number can be active on WhatsApp and Telegram at once — per restaurant.'],activity:['The story behind each record, Boss.','A persistent trail of drafts, corrections, and owner decisions.'],whatsapp:['Chat with your assistant, Boss.','Purchase notes and draft decisions in one place — without switching apps.'],suppliers:['Every supplier price in one table, Boss.','Latest quotes per ingredient and your last purchase price.'],insights:['Menu sales in numbers, Boss.','Best sellers, slow movers, and the period comparison.']}
 };
 const titles = () => TITLES[LANG] || TITLES.id;
 let WHATSAPP_SENDER = '';
@@ -483,6 +483,8 @@ function render() {
   if (page==='approvals') html=`<section class="panel">${panelHeading(t('Antrean peninjauan','Review queue'),`${pendingDrafts().length} ${t('draf menunggu keputusan Anda','drafts waiting for your decision')}`)}<div class="full-list">${pendingDrafts().map(draftCard).join('') || `<div class="empty"><strong>${t('Semua beres.','All clear.')}</strong>${t('Setiap draf sudah punya keputusan.','Every draft has a decision.')}</div>`}</div></section>`;
   if (page==='purchases') html=`<p class="subtle-note">${t('Termasuk pembelian pembuka sintetis untuk demo perbandingan harga. Mencatat pembelian tidak menandai pemasok sebagai dibayar.','Includes synthetic opening purchases used to demonstrate price comparisons. Recording a purchase does not mark a supplier as paid.')}</p><section class="panel">${panelHeading(t('Riwayat pembelian','Purchase history'))}${purchaseTable(state.data.purchases)}</section>`;
   if (page==='inventory') html=`<section class="panel">${panelHeading(t('Estimasi stok','Estimated inventory'),t('Hanya jumlah barang yang diterima dan disetujui. Koreksi angkanya dengan stok opname lewat chat atau formulir di bawah.','Approved received quantities only. Correct the numbers with a stock opname over chat or with the form below.'))}${inventoryRows(state.data.inventory, true)}<div class="panel-note">${t('Ambang stok rendah adalah konfigurasi demo. Bandingkan dengan hitungan fisik sebelum memesan.','Low-stock thresholds are demo configuration. Compare these estimates with a physical count before ordering.')}</div></section>` + opnameFormPanel() + catalogImportPanel() + (state.data.stock_counts?.length ? `<section class="panel">${panelHeading(t('Riwayat stok opname','Stock count history'),t('Koreksi stok fisik dari chat dan dashboard. Semua angka dari database.','Physical corrections from chat and the dashboard. Every figure comes from the database.'))}${state.data.stock_counts.map(item=>`<div class="number-row"><code>${e(item.name)}</code><span>${e(item.estimated_quantity)} → ${e(item.counted_quantity)} (${t('selisih','delta')} ${e(item.delta)})</span><span class="spacer"></span><small>${e(date(item.applied_at))}</small></div>`).join('')}</section>` : '');
+  if (page==='suppliers') html=suppliersPage();
+  if (page==='insights') html=insightsPage();
   if (page==='activity') html=`<section class="panel">${panelHeading(t('Riwayat aktivitas','Activity history'),t('Termasuk catatan pembuka sintetis. Semua tindakan baru tersimpan.','Includes synthetic setup records. All new actions are persisted.'))}${activityRows(state.data.activity)}</section>`;
   if (page==='whatsapp') html=whatsappPage();
   if (page==='rules') html=rulesPage();
@@ -492,6 +494,8 @@ function render() {
   if(page==='whatsapp' && !state.whatsappLoaded && !state.whatsappLoading)loadWhatsAppMessages();
   if(page==='rules' && !state.rulesLoaded && !state.rulesBusy)loadRules();
   if(page==='links' && !state.linksLoaded && !state.linksBusy)loadLinks();
+  if(page==='suppliers' && !supplierState.loaded && !supplierState.loading)loadSupplierOverview();
+  if(page==='insights' && !insightsState.loaded && !insightsState.loading)loadSalesInsights();
 }
 
 function linksPage() {
@@ -829,6 +833,8 @@ $('#logout').addEventListener('click',logout);
 
 // Inventory dialogs live outside the polling content area, preserving unsaved input.
 const inventoryState={data:null,loaded:false,loading:false,error:'',busy:false,formId:null,snapshot:[],recipesSnapshot:[],search:''};
+const supplierState={data:null,loaded:false,loading:false,error:''};
+const insightsState={data:null,loaded:false,loading:false,error:'',days:7};
 async function loadInventoryWorkspace(){
   if(inventoryState.loading || state.user?.role!=='owner')return;
   inventoryState.loading=true;const restaurantId=state.user.restaurant_id;
@@ -946,3 +952,63 @@ document.addEventListener('change',event=>{
 $('#inventory-dialog').addEventListener('cancel',event=>{if(inventoryState.busy)event.preventDefault();});
 
 boot();
+
+// ---- Supplier & insights pages (owner) ----------------------------------
+async function loadSupplierOverview(){
+  if(supplierState.loading || state.user?.role!=='owner')return;
+  supplierState.loading=true;const restaurantId=state.user.restaurant_id;
+  try{const data=await api('/v1/suppliers/overview');if(state.user?.restaurant_id!==restaurantId)return;supplierState.data=data;supplierState.error='';}
+  catch(error){supplierState.error=`${error.message}`;}
+  finally{supplierState.loading=false;supplierState.loaded=true;if(state.page==='suppliers')render();}
+}
+function supplierRowsHtml(){
+  const suppliers=supplierState.data?.suppliers||[];
+  return suppliers.map(s=>`<div class="admin-row"><div><strong>${e(s.name)}</strong><small>${s.contact_phone?` · ${e(s.contact_platform||'wa')} ${e(s.contact_phone)}`:` · ${t('tanpa kontak','no contact')}`}${s.purchase_count?` · ${s.purchase_count}× ${t('beli','purchases')}`:''}${s.unpaid_count?` · ${t('utang','unpaid')} ${s.unpaid_count} ${t('nota','notes')}`:''}</small></div></div>`).join('') || `<div class="empty"><strong>${t('Belum ada supplier terdaftar.','No suppliers registered.')}</strong>${t('Tambahkan lewat chat: tambah supplier <nama> wa <nomor>.','Add through chat: tambah supplier <name> wa <number>.')}</div>`;
+}
+function bestPriceRowsHtml(){
+  const quotes=supplierState.data?.quotes||[];
+  const best={};
+  for(const q of quotes){
+    if(q.unit_price_idr==null)continue;
+    const key=q.ingredient_name;
+    if(!best[key]||q.unit_price_idr<best[key].unit_price_idr)best[key]=q;
+  }
+  const rows=Object.values(best).sort((a,b)=>a.ingredient_name.localeCompare(b.ingredient_name)).map(q=>`<div class="number-row"><code>${e(q.ingredient_name)}</code><span class="money">${rupiah(q.unit_price_idr)}${q.note?` <small>(${e(q.note)})</small>`:''}</span><span class="spacer"></span><span>${e(q.supplier_name)} · <small>${e(date(q.created_at))}</small></span></div>`).join('');
+  return rows || `<div class="empty"><strong>${t('Belum ada kutipan harga.','No price quotes yet.')}</strong>${t('Minta lewat chat: tanya harga <bahan> ke supplier.','Ask through chat: tanya harga <ingredient> ke supplier.')}</div>`;
+}
+function latestQuoteRowsHtml(){
+  const quotes=(supplierState.data?.quotes||[]).slice(0,15);
+  return quotes.map(q=>`<div class="number-row"><code>${e(q.ingredient_name)}</code><span class="money">${rupiah(q.unit_price_idr)}</span><span class="spacer"></span><span>${e(q.supplier_name)} · <small>${e(date(q.created_at))}</small></span></div>`).join('') || `<div class="empty">${t('Belum ada kutipan tercatat.','No quotes recorded yet.')}</div>`;
+}
+function suppliersPage(){
+  if(supplierState.loading && !supplierState.loaded)return `<section class="panel"><div class="empty">${t('Memuat data supplier…','Loading supplier data…')}</div></section>`;
+  if(supplierState.error)return `<section class="panel"><div class="notice error" role="alert">${e(supplierState.error)}</div><button class="button" data-action="reload-suppliers">${t('Coba lagi','Try again')}</button></section>`;
+  return `<section class="panel">${panelHeading(t('Supplier terdaftar','Registered suppliers'),t('Dibuat otomatis dari pembelian atau lewat chat.','Created automatically from purchases or through chat.'))}${supplierRowsHtml()}</section><section class="panel">${panelHeading(t('Harga terbaik per bahan','Best price per ingredient'),t('Dari kutipan supplier terbaru. Bandingkan sebelum membeli.','From the latest supplier quotes. Compare before you buy.'))}${bestPriceRowsHtml()}</section><section class="panel">${panelHeading(t('Kutipan harga terbaru','Latest price quotes'),t('15 kutipan terakhir dari semua supplier.','15 latest quotes across suppliers.'))}${latestQuoteRowsHtml()}<div class="panel-note">${t('Minta harga baru lewat chat: tanya harga <bahan> ke supplier.','Request fresh prices through chat: tanya harga <ingredient> ke supplier.')}</div></section>`;
+}
+async function loadSalesInsights(days){
+  const target=Number(days)||insightsState.days;
+  if(insightsState.loading || state.user?.role!=='owner')return;
+  insightsState.loading=true;insightsState.days=target;const restaurantId=state.user.restaurant_id;
+  try{const data=await api(`/v1/insights/sales?days=${target}`);if(state.user?.restaurant_id!==restaurantId)return;if(insightsState.days===target){insightsState.data=data;insightsState.error='';}}
+  catch(error){if(insightsState.days===target)insightsState.error=`${error.message}`;}
+  finally{insightsState.loading=false;insightsState.loaded=true;if(state.page==='insights')render();}
+}
+function insightsPage(){
+  const periodTabs=[7,30].map(days=>`<button type="button" class="button mini${insightsState.days===days?' primary':''}" data-insight-days="${days}">${days===7?t('7 hari','7 days'):t('30 hari','30 days')}</button>`).join('');
+  if(insightsState.loading && !insightsState.loaded)return `<section class="panel"><div class="empty">${t('Memuat insight penjualan…','Loading sales insights…')}</div></section>`;
+  if(insightsState.error)return `<section class="panel"><div class="notice error" role="alert">${e(insightsState.error)}</div><button class="button" data-action="reload-insights">${t('Coba lagi','Try again')}</button></section>`;
+  const d=insightsState.data;
+  const menus=d?.menus||[];
+  const delta=d?.delta_percent;
+  const deltaText=delta==null?t('belum cukup data untuk membandingkan','not enough data to compare'):`${delta>0?'▲':delta<0?'▼':'—'} ${Math.abs(delta)}% ${t('vs periode sebelumnya','vs previous period')}`;
+  const rows=menus.map((m,i)=>`<div class="number-row"><span>${i+1}. <strong>${e(m.name)}</strong></span><span>${number(m.portions)} ${t('porsi','portions')}</span><span class="spacer"></span><span class="money">${m.revenue!=null?rupiah(m.revenue):t('omzet tidak dicatat','revenue not recorded')}</span></div>`).join('') || `<div class="empty"><strong>${t('Belum ada penjualan tercatat.','No recorded sales yet.')}</strong>${t('Catat lewat chat: terjual 4 nasi goreng.','Record through chat: terjual 4 nasi goreng.')}</div>`;
+  const windowLabel=d?`${d.days} ${t('hari terakhir','last days')}`:'';
+  return `<div class="panel-heading"><div></div><div class="lang-toggle" role="group">${periodTabs}</div></div><section class="panel">${panelHeading(t('Ringkasan penjualan menu','Menu sales summary'),windowLabel)}<div class="metrics"><div class="metric"><div class="metric-label">${t('Total porsi','Total portions')}</div><p class="metric-value">${number(d?.total_portions)}</p></div><div class="metric"><div class="metric-label">${t('Total omzet','Total revenue')}</div><p class="metric-value money">${d?.total_revenue!=null?rupiah(d.total_revenue):'—'}</p></div><div class="metric"><div class="metric-label">${t('Perubahan','Change')}</div><p class="metric-value">${delta==null?'—':`${delta>0?'+':''}${delta}%`}</p><small>${e(deltaText)}</small></div></div></section><section class="panel">${panelHeading(t('Peringkat menu','Menu ranking'),t('Diurutkan dari porsi terbanyak.','Sorted by most portions.'))}${rows}</section>`;
+}
+document.addEventListener('click',event => {
+  const daysButton=event.target.closest('[data-insight-days]');
+  if(daysButton){loadSalesInsights(Number(daysButton.dataset.insightDays));return;}
+  const action=event.target.closest('[data-action]');
+  if(action && action.dataset.action==='reload-suppliers'){supplierState.loaded=false;supplierState.error='';loadSupplierOverview();return;}
+  if(action && action.dataset.action==='reload-insights'){insightsState.loaded=false;insightsState.error='';loadSalesInsights();}
+});

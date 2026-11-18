@@ -169,8 +169,16 @@ def effective_asr_config(asr_api_key, asr_base_url, vision_api_key, vision_base_
     """Resolve the voice-note ASR provider: an explicit AUDIO_ASR_* override
     (e.g. a multilingual speech service) wins; otherwise ASR shares the StepFun
     account and base URL with vision, exactly as before."""
-    key = (asr_api_key or "").strip() or vision_api_key
-    base = validate_vision_base_url(asr_base_url) if asr_base_url else vision_base_url
+    key = (asr_api_key or "").strip()
+    base = (asr_base_url or "").strip()
+    # Pair the override atomically. A key without its own base URL would be
+    # sent to the StepFun endpoint, which rejects foreign credentials with
+    # 401 (the 2026-11-18 voice-note failure); fall back to the shared
+    # StepFun account instead of a guaranteed-broken hybrid.
+    if key and not base:
+        key = ""
+    key = key or vision_api_key
+    base = validate_vision_base_url(base) if base else vision_base_url
     return key, base
 
 
@@ -396,13 +404,16 @@ def _storage_cause(exc):
 
 
 def _boot_env_presence():
-    """Names-only diagnostic: which authority keys reached this runtime.
-    Presence booleans land in the public fail-closed error so a dropped key
-    is obvious without log access; values are never read here."""
+    """Names-only diagnostic: which authority and ASR-override keys reached
+    this runtime. Presence booleans land in /health/ready and the public
+    fail-closed error so a dropped key is obvious without log access; values
+    are never read here."""
     import os
     names = ("SUPABASE_URL", "SUPABASE_DB_HOST", "SUPABASE_DB_PORT", "SUPABASE_DB_USER",
              "SUPABASE_DB_PASSWORD", "RESTOPILOT_DB_HOST", "RESTOPILOT_DB_PORT",
-             "RESTOPILOT_DB_USER", "RESTOPILOT_DB_PASSWORD")
+             "RESTOPILOT_DB_USER", "RESTOPILOT_DB_PASSWORD",
+             "AUDIO_ASR_API_KEY", "AUDIO_ASR_BASE_URL", "AUDIO_ASR_MODEL", "AUDIO_ASR_LANGUAGE",
+             "RESTOPILOT_ASR_API_KEY", "RESTOPILOT_ASR_BASE_URL", "RESTOPILOT_ASR_MODEL")
     return {name: bool((os.environ.get(name) or "").strip()) for name in names}
 
 
@@ -1231,7 +1242,12 @@ def create_app(
         else:
             with store.transaction() as conn:
                 conn.execute("SELECT 1 FROM metadata").fetchone()
-        return {"data": {"status": "ready", "storage": storage}}
+        data = {"status": "ready", "storage": storage}
+        if boot_env is not None:
+            # Hosted diagnostic: names + presence only, so a key the platform
+            # failed to inject is visible without runtime log access.
+            data["boot_env"] = boot_env
+        return {"data": data}
 
     @app.get("/v1/overview")
     def overview(actor=Depends(current_user)):
@@ -1521,6 +1537,15 @@ def create_app(
     @app.get("/v1/suppliers")
     def suppliers_list(actor=Depends(owner_actor)):
         return {"data": {"suppliers": store.suppliers_list(actor["restaurant_id"])}}
+
+    @app.get("/v1/suppliers/overview")
+    def suppliers_overview(actor=Depends(owner_actor)):
+        return {"data": store.supplier_overview(actor["restaurant_id"])}
+
+    @app.get("/v1/insights/sales")
+    def insights_sales(days: int = 7, actor=Depends(owner_actor)):
+        window = max(1, min(int(days), 90))
+        return {"data": store.sales_insights(actor["restaurant_id"], window)}
 
     @app.post("/v1/suppliers", status_code=201)
     def suppliers_add(body: Annotated[SupplierContact, Body()], actor=Depends(owner_actor), idempotency_key=Depends(key)):

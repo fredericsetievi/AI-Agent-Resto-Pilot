@@ -181,6 +181,26 @@ def test_restopilot_alias_password_satisfies_authority(hosted_env):
     assert pg.db_config()["password"] == PLACEHOLDER_PASSWORD
 
 
+def test_ready_reports_boot_env_presence(hosted_env, monkeypatch):
+    """The hosted health/ready body carries names + presence flags for the
+    authority and ASR-override keys, so a key the platform failed to inject
+    is diagnosable without runtime log access. Values never appear."""
+    hosted_env.setenv("SUPABASE_DB_PASSWORD", PLACEHOLDER_PASSWORD)
+    hosted_env.setenv("AUDIO_ASR_API_KEY", "di-vault-key")
+    hosted_env.setenv("RESTOPILOT_ASR_BASE_URL", "https://api.deepinfra.com/v1/openai")
+    install_fake_pool(monkeypatch, full_schema())
+    app = create_app("unused-db-path", hosted=True, public_demo=True, public_base_url="https://restopilot.test")
+    with anon(app) as client:
+        body = client.get("/health/ready")
+    assert body.status_code == 200
+    flags = body.json()["data"]["boot_env"]
+    assert flags["SUPABASE_DB_PASSWORD"] is True
+    assert flags["AUDIO_ASR_API_KEY"] is True
+    assert flags["AUDIO_ASR_BASE_URL"] is False
+    assert flags["RESTOPILOT_ASR_BASE_URL"] is True
+    assert "di-vault-key" not in str(body.json()), "key values must never leak into the report"
+
+
 def test_hosted_mode_ignores_dotenv_files(hosted_env):
     with pytest.raises(RuntimeError):
         pg.db_config()

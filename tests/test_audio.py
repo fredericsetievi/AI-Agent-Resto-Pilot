@@ -195,3 +195,9 @@ def test_effective_asr_config_prefers_the_explicit_provider_and_falls_back():
     assert effective_asr_config(None, None, "stepfun-key", "https://api.stepfun.com/v1") == (
         "stepfun-key", "https://api.stepfun.com/v1",
     )
+    # An override key without its own base URL is never sent to StepFun's
+    # endpoint (foreign credentials get 401 there — the 2026-11-18 voice-note
+    # failure); the shared StepFun account wins instead of a broken hybrid.
+    assert effective_asr_config("foreign-key", None, "stepfun-key", "https://api.stepfun.com/v1") == (
+        "stepfun-key", "https://api.stepfun.com/v1",
+    )
