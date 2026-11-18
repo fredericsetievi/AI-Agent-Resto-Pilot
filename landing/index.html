@@ -46,7 +46,7 @@
     <nav aria-label="Site navigation">
       <a href="#problem" data-i18n="nav.problem">Masalahnya</a>
       <a href="#solution" data-i18n="nav.solution">Solusinya</a>
-      <a href="#agents" data-i18n="nav.agents">Agen</a>
+      <a href="#agents" data-i18n="nav.agents">Asisten</a>
       <a href="#dashboard" data-i18n="nav.dashboard">Dashboard</a>
       <a href="#principles" data-i18n="nav.principles">Kenapa aman</a>
       <a href="#faq" data-i18n="nav.faq">FAQ</a>
@@ -165,7 +165,7 @@
     <div class="container">
       <p class="eyebrow eyebrow-light" data-i18n="solution.eyebrow">SOLUSINYA</p>
       <h2 class="section-title" data-i18n="solution.title">Tetap pakai POS Anda. RestoPilot yang urus uang keluar.</h2>
-      <p class="section-lede" data-i18n-html="solution.lede">POS dan QRIS sudah menguasai uang masuk — penjualan pelanggan. RestoPilot mengambil separuh lainnya: <strong>apa yang dibeli, dari siapa, berapa harga satuannya, sisa stoknya, dan siapa yang masih berhutang.</strong> Agen AI WhatsApp plus dashboard web sederhana, dibuat untuk input nyata yang berantakan.</p>
+      <p class="section-lede" data-i18n-html="solution.lede">POS dan QRIS sudah menguasai uang masuk — penjualan pelanggan. RestoPilot mengambil separuh lainnya: <strong>apa yang dibeli, dari siapa, berapa harga satuannya, sisa stoknya, dan siapa yang masih berhutang.</strong> Asisten AI WhatsApp plus dashboard web sederhana, dibuat untuk input nyata yang berantakan.</p>
       <div class="solution-grid">
         <article class="solution-card">
           <span class="card-icon card-icon-dark"><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg></span>
@@ -205,15 +205,15 @@
   <!-- ================= AGENTS / FEATURES ================= -->
   <section class="section" id="agents">
     <div class="container">
-      <p class="eyebrow" data-i18n="agents.eyebrow">AGENT-AGENTNYA</p>
-      <h2 class="section-title" data-i18n="agents.title">Dua agen, dibuat untuk rutinitas harian.</h2>
-      <p class="section-lede" data-i18n="agents.lede">RestoPilot mulai dari titik yang paling terasa sakitnya. Setiap agen punya disiplin yang sama: baca input berantakan, ajukan draf, tunggu pemilik, baru catat — dan semua hitungan selalu dikerjakan kode tervalidasi, bukan oleh model.</p>
+      <p class="eyebrow" data-i18n="agents.eyebrow">ASISTEN AI</p>
+      <h2 class="section-title" data-i18n="agents.title">Asisten AI untuk rutinitas harian Anda.</h2>
+      <p class="section-lede" data-i18n="agents.lede">RestoPilot mulai dari titik yang paling terasa sakitnya. Setiap asisten punya disiplin yang sama: baca input berantakan, ajukan draf, tunggu pemilik, baru catat — dan semua hitungan dikerjakan kode tervalidasi, bukan dikarang AI.</p>
 
       <article class="agent-card">
         <div class="agent-head">
           <div>
             <p class="agent-flag" data-i18n="agents.flag1">UTAMA · AKTIF</p>
-            <h3 data-i18n="agents.a1t">1 · Agen Pengadaan, Persediaan &amp; Manajemen Supplier</h3>
+            <h3 data-i18n="agents.a1t">1 · Asisten Pembelian, Stok &amp; Supplier</h3>
             <p class="agent-sub" data-i18n="agents.a1s">Kelola pembelian, nota, stok, dan keputusan pesan ulang — dari catatan cepat ala chat sampai bukti harga.</p>
           </div>
           <div class="agent-illustration" aria-hidden="true">
@@ -254,14 +254,19 @@
           <li data-i18n="agents.a1b8">Impor katalog bahan massal dari Excel sekali jalan</li>
           <li data-i18n="agents.a1b9">Buat rekomendasi pembelian dengan bukti</li>
           <li data-i18n="agents.a1b10">Minta konfirmasi pemilik sebelum apa pun dicatat</li>
+          <li data-i18n="agents.a1b11">Perbaiki atau batalkan pembelian lewat chat — ubah pembelian, batal pembelian</li>
+          <li data-i18n="agents.a1b12">Riwayat harga per supplier: riwayat harga supplier budi</li>
+          <li data-i18n="agents.a1b13">Baca kutipan balasan supplier — beberapa bahan sekaligus, satuan otomatis dinormalisasi</li>
+          <li data-i18n="agents.a1b14">Daftar belanja pasar multi-bahan dengan estimasi modal</li>
+          <li data-i18n="agents.a1b15">Ubah kontak &amp; hapus supplier lewat chat — selalu dengan konfirmasi</li>
         </ul>
       </article>
 
-      <article class="agent-card agent-planned">
+      <article class="agent-card">
         <div class="agent-head">
           <div>
-            <p class="agent-flag agent-flag-plain" data-i18n="agents.flag2">DIRENCANAKAN</p>
-            <h3 data-i18n="agents.a2t">2 · Agen Penjualan &amp; Manajemen Menu</h3>
+            <p class="agent-flag agent-flag-plain" data-i18n="agents.flag2">AKTIF</p>
+            <h3 data-i18n="agents.a2t">2 · Asisten Penjualan &amp; Menu</h3>
             <p class="agent-sub" data-i18n="agents.a2s">Analisis penjualan, performa menu, biaya, dan tren — jawaban sederhana, bukan spreadsheet.</p>
           </div>
           <div class="agent-illustration" aria-hidden="true">
@@ -282,10 +287,64 @@
           <li data-i18n="agents.a2b2">Analisis tren penjualan dari waktu ke waktu</li>
           <li data-i18n="agents.a2b3">Urutkan item menu berdasarkan performa</li>
           <li data-i18n="agents.a2b4">Analisis profitabilitas menu terhadap biaya bahan</li>
-          <li data-i18n="agents.a2b5">Deteksi perubahan penjualan tak biasa dan beri peringatan dini</li>
-          <li data-i18n="agents.a2b6">Ekstraksi kata kunci dan sentimen, dipetakan ke menu atau perubahan staf</li>
-          <li data-i18n="agents.a2b7">Identifikasi kombinasi menu populer</li>
-          <li data-i18n="agents.a2b8">Rekomendasikan aksi menu yang benar-benar bisa dijalankan pemilik</li>
+          <li data-i18n="agents.a2b5">Perbandingan dua menu favorit Anda head-to-head</li>
+          <li data-i18n="agents.a2b6">Ringkasan omzet &amp; perubahan vs periode sebelumnya</li>
+          <li data-i18n="agents.a2b7">Panel Insight di dashboard — pilih periode 7 atau 30 hari</li>
+        </ul>
+      </article>
+
+      <article class="agent-card">
+        <div class="agent-head">
+          <div>
+            <p class="agent-flag" data-i18n="agents.flag3">BARU · AKTIF</p>
+            <h3 data-i18n="agents.a3t">3 · Asisten Analisis Bisnis (AI)</h3>
+            <p class="agent-sub" data-i18n="agents.a3s">Tanya apa saja tentang bisnis Anda dengan bahasa bebas — AI menjawab dengan angka asli dari database Anda sendiri. Baca-saja: tidak bisa mengubah data.</p>
+          </div>
+          <div class="agent-illustration" aria-hidden="true">
+            <svg viewBox="0 0 320 120" class="agent-scene agent-scene-muted">
+              <rect x="100" y="14" width="120" height="92" rx="10" fill="#fff" stroke="#dce3d6"/>
+              <path d="M120 84c14-8 20-30 34-32s22 10 34-2" stroke="#c9d6bd" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-dasharray="5"/>
+              <rect x="120" y="28" width="34" height="7" rx="3.5" fill="#eef1e6"/>
+              <rect x="164" y="22" width="10" height="42" rx="4" fill="#d8e6ba" opacity=".55"/>
+              <rect x="178" y="34" width="10" height="30" rx="4" fill="#d8e6ba" opacity=".4"/>
+              <rect x="192" y="16" width="10" height="48" rx="4" fill="#d8e6ba" opacity=".7"/>
+              <circle cx="132" cy="52" r="6" fill="none" stroke="#c9d6bd" stroke-width="2" stroke-dasharray="3 3"/>
+            </svg>
+          </div>
+        </div>
+        <p class="agent-flow" data-i18n="agents.a3flow">Pertanyaan bebas <span aria-hidden="true">→</span> AI membaca data Anda <span aria-hidden="true">→</span> Jawaban berangka</p>
+        <ul class="agent-steps">
+          <li data-i18n="agents.a3b1">Tanya bebas: &ldquo;apakah kondisi kas hari ini sehat?&rdquo;, &ldquo;kenapa omzet turun?&rdquo;</li>
+          <li data-i18n="agents.a3b2">Angka selalu dari database Anda — penjualan, stok, harga supplier, amplop kas</li>
+          <li data-i18n="agents.a3b3">Baca-saja: asisten ini tidak bisa mengubah data apa pun</li>
+          <li data-i18n="agents.a3b4">Jika AI tidak yakin, otomatis kembali ke jawaban deterministik</li>
+        </ul>
+      </article>
+
+      <article class="agent-card">
+        <div class="agent-head">
+          <div>
+            <p class="agent-flag" data-i18n="agents.flag4">AKTIF</p>
+            <h3 data-i18n="agents.a4t">4 · Asisten Harian</h3>
+            <p class="agent-sub" data-i18n="agents.a4s">Ritual harian warung: amplop kas, pengingat, dan pre-order pelanggan — semuanya lewat chat.</p>
+          </div>
+          <div class="agent-illustration" aria-hidden="true">
+            <svg viewBox="0 0 320 120" class="agent-scene agent-scene-muted">
+              <rect x="100" y="14" width="120" height="92" rx="10" fill="#fff" stroke="#dce3d6"/>
+              <rect x="118" y="24" width="40" height="26" rx="6" fill="#eef1e6"/>
+              <rect x="166" y="24" width="36" height="26" rx="6" fill="#eef1e6"/>
+              <rect x="118" y="58" width="84" height="7" rx="3.5" fill="#d8e6ba" opacity=".7"/>
+              <rect x="118" y="72" width="64" height="7" rx="3.5" fill="#d8e6ba" opacity=".5"/>
+              <circle cx="238" cy="44" r="14" fill="none" stroke="#c9d6bd" stroke-width="2" stroke-dasharray="3 3"/>
+            </svg>
+          </div>
+        </div>
+        <p class="agent-flow" data-i18n="agents.a4flow">Pagi <span aria-hidden="true">→</span> Pasar / pre-order <span aria-hidden="true">→</span> Sore <span aria-hidden="true">→</span> Rapi</p>
+        <ul class="agent-steps">
+          <li data-i18n="agents.a4b1">Amplop kas harian: budget pagi, uang kembali sore, selisih dihitung</li>
+          <li data-i18n="agents.a4b2">Pengingat pagi &amp; sore — jadwal bisa diatur lewat chat, peka keheningan</li>
+          <li data-i18n="agents.a4b3">Tempel pre-order pelanggan — jadi draf belanja berharga total</li>
+          <li data-i18n="agents.a4b4">Chat widget di dashboard — tanpa pindah aplikasi</li>
         </ul>
       </article>
     </div>
@@ -296,7 +355,7 @@
     <div class="container">
       <p class="eyebrow" data-i18n="dash.eyebrow">DASBOR</p>
       <h2 class="section-title" data-i18n="dash.title">Kebenaran yang sama, dalam satu tampilan tenang.</h2>
-      <p class="section-lede" data-i18n="dash.lede">Semua yang dicatat agen bisa Anda periksa: persetujuan menunggu, riwayat pembelian, estimasi persediaan, tren pengeluaran, dan bukti harga — dalam Bahasa Indonesia atau Inggris.</p>
+      <p class="section-lede" data-i18n="dash.lede">Semua yang dicatat asisten bisa Anda periksa: persetujuan menunggu, riwayat pembelian, estimasi persediaan, tren pengeluaran, dan bukti harga — dalam Bahasa Indonesia atau Inggris.</p>
       <div class="browser" role="img" aria-label="The RestoPilot dashboard: sidebar with Overview and Inventory pages, stat tiles, a 14-day spending chart, top ingredients, and an approval card">
         <div class="browser-bar"><span></span><span></span><span></span><em>restopilot-dashboard.pub.atoms.world/app.html</em></div>
         <div class="browser-body">
@@ -437,7 +496,7 @@
   var KEY = 'restopilot_lang';
   var EN = {
     'lang.aria': 'Language',
-    'nav.problem': 'The problem', 'nav.solution': 'The solution', 'nav.agents': 'Agents',
+    'nav.problem': 'The problem', 'nav.solution': 'The solution', 'nav.agents': 'Assistants',
     'nav.dashboard': 'Dashboard', 'nav.principles': "Why it's safe", 'nav.faq': 'FAQ',
     'nav.signin': 'Sign in', 'nav.cta': 'Open the dashboard',
     'hero.eyebrow': 'FOR INDONESIAN SMALL & MEDIUM RESTAURANTS',
@@ -480,11 +539,11 @@
     'loop.s3': 'Owner approval', 'loop.s3s': 'correlated \u201cYA\u201d — human decides',
     'loop.s4': 'Recorded purchase', 'loop.s4s': 'purchase + stock + audit, atomically',
     'loop.s5': 'Dashboard truth', 'loop.s5s': 'inventory estimate · price evidence',
-    'agents.eyebrow': 'THE AGENTS',
-    'agents.title': 'Two agents, built for the daily grind.',
-    'agents.lede': 'RestoPilot starts where the pain is greatest. Each agent follows the same discipline: parse the mess, propose a draft, wait for the owner, then record — and the math is always done by validated code, never by the model.',
+    'agents.eyebrow': 'THE AI ASSISTANTS',
+    'agents.title': 'AI assistants for the daily grind.',
+    'agents.lede': 'RestoPilot starts where the pain is greatest. Each assistant follows the same discipline: parse the mess, propose a draft, wait for the owner, then record — and the math is always done by validated code, never by the model.',
     'agents.flag1': 'FLAGSHIP · LIVE',
-    'agents.a1t': '1 · Procurement, Inventory & Supplier Management Agent',
+    'agents.a1t': '1 · Purchasing, Stock & Supplier Assistant',
     'agents.a1s': 'Manage purchases, invoices, stock and reorder decisions — from conversational quick-log to price evidence.',
     'agents.a1flow': 'Invoice / conversational log <span aria-hidden="true">\u2192</span> Purchase <span aria-hidden="true">\u2192</span> Inventory <span aria-hidden="true">\u2192</span> Reorder',
     'agents.a1b1': 'Extract purchases from invoice photos or conversational quick-log',
@@ -497,21 +556,41 @@
     'agents.a1b8': 'Bulk-import your ingredient catalog from Excel in one pass',
     'agents.a1b9': 'Generate purchase recommendations with evidence',
     'agents.a1b10': 'Ask for owner confirmation before anything records',
-    'agents.flag2': 'PLANNED',
-    'agents.a2t': '2 · Sales & Menu Management Agent',
+    'agents.a1b11': 'Correct or void purchases through chat — ubah pembelian, batal pembelian',
+    'agents.a1b12': 'Per-supplier price history: riwayat harga supplier budi',
+    'agents.a1b13': 'Read supplier replies — multiple ingredients at once, units auto-normalized',
+    'agents.a1b14': 'Multi-ingredient market shopping list with a cash estimate',
+    'agents.a1b15': 'Update contacts & remove suppliers through chat — always with confirmation',
+    'agents.flag2': 'LIVE',
+    'agents.a2t': '2 · Sales & Menu Assistant',
     'agents.a2s': 'Analyze sales, menu performance, costs and trends — simple answers, not spreadsheets.',
     'agents.a2flow': 'Sales data <span aria-hidden="true">\u2192</span> Trend analysis <span aria-hidden="true">\u2192</span> Menu performance <span aria-hidden="true">\u2192</span> Business insights',
     'agents.a2b1': 'Import sales data from existing records',
     'agents.a2b2': 'Analyze sales trends over time',
     'agents.a2b3': 'Rank menu items by performance',
     'agents.a2b4': 'Analyze menu profitability against ingredient costs',
-    'agents.a2b5': 'Detect unusual sales changes and flag them early',
-    'agents.a2b6': 'Extract keywords and sentiment, mapped to menu items or staff changes',
-    'agents.a2b7': 'Identify popular menu combinations',
-    'agents.a2b8': 'Recommend menu actions owners can actually take',
+    'agents.a2b5': 'Head-to-head comparison of two favorite menus',
+    'agents.a2b6': 'Revenue summary and change vs the previous period',
+    'agents.a2b7': 'Insights panel on the dashboard — pick 7 or 30 days',
+    'agents.flag3': 'NEW · LIVE',
+    'agents.a3t': '3 · Business Analysis Assistant (AI)',
+    'agents.a3s': 'Ask anything about your business in plain language — the AI answers with real numbers from your own database. Read-only: it cannot change data.',
+    'agents.a3flow': 'Free question <span aria-hidden="true">\u2192</span> AI reads your data <span aria-hidden="true">\u2192</span> Answer with numbers',
+    'agents.a3b1': 'Ask freely: \u201chow is my cash today?\u201d, \u201cwhy did revenue drop?\u201d',
+    'agents.a3b2': 'Numbers always come from your database — sales, stock, supplier prices, cash envelope',
+    'agents.a3b3': 'Read-only: this assistant cannot change any data',
+    'agents.a3b4': 'If the AI is unsure, it falls back to the deterministic answer',
+    'agents.flag4': 'LIVE',
+    'agents.a4t': '4 · Daily Assistant',
+    'agents.a4s': 'The warung daily ritual: cash envelope, reminders, and customer pre-orders — all through chat.',
+    'agents.a4flow': 'Morning <span aria-hidden="true">\u2192</span> Market / pre-orders <span aria-hidden="true">\u2192</span> Evening <span aria-hidden="true">\u2192</span> Settled',
+    'agents.a4b1': 'Daily cash envelope: budget in the morning, change back in the evening, the gap is computed',
+    'agents.a4b2': 'Morning & evening reminders — adjustable through chat, silence-aware',
+    'agents.a4b3': 'Paste customer pre-orders — become a priced shopping draft with a total',
+    'agents.a4b4': 'Chat widget on the dashboard — without switching apps',
     'dash.eyebrow': 'THE DASHBOARD',
     'dash.title': 'The same truth, in one calm view.',
-    'dash.lede': 'Everything the agent records is yours to inspect: pending approvals, purchase history, inventory estimates, spending trends and price evidence — in Indonesian or English.',
+    'dash.lede': 'Everything your assistants record is yours to inspect: pending approvals, purchase history, inventory estimates, spending trends and price evidence — in Indonesian or English.',
     'dash.p1t': 'Charts with provenance.', 'dash.p1s': '14-day spending trend and top ingredients — computed only from approved purchases.',
     'dash.p2t': 'Stock opname.', 'dash.p2s': 'Physical counts reconcile the estimate; every stock write is confirmed, audited and retry-safe.',
     'dash.p3t': 'ID / EN, one toggle.', 'dash.p3s': 'The whole dashboard switches language and remembers your choice.',
