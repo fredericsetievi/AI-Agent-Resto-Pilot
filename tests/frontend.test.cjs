@@ -650,4 +650,3 @@ test('landing preserves its bilingual copy and groups the entry action before pr
   assert.ok(html.includes('Asisten AI'));
   assert.ok(html.indexOf('/assets/tokens.css') < html.indexOf('/landing-assets/styles.css'));
 });
-
