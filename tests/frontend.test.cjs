@@ -638,8 +638,10 @@ test('landing preserves its bilingual copy and groups the entry action before pr
   const hero = html.slice(html.indexOf('<section class="hero">'), html.indexOf('<!-- ================= PROBLEM'));
   assert.match(hero, /hero-actions[^]*demo\.message[^]*demo\.draft[^]*demo\.recorded[^]*demo\.reassurance/);
   assert.equal((hero.match(/class="chat-message /g) || []).length, 3);
-  assert.match(hero, /Contoh · Perubahan harga/);
-  assert.doesNotMatch(html, /catatan suara|voice notes?/i);
+  assert.match(hero, /Contoh: Bukti harga/);
+  assert.match(html, /Sample: Price evidence/);
+  assert.match(html, /Contoh: Peringatan stok/);
+  assert.match(html, /Sample: Proactive alert/);
   assert.ok(html.includes('Asisten AI'));
   assert.ok(html.indexOf('/assets/tokens.css') < html.indexOf('/landing-assets/styles.css'));
 });
