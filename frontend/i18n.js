@@ -217,6 +217,10 @@ const I18N = {
     payment_unknown:'Pembayaran belum diketahui',
     // Activity
     empty_activity:'Aktivitas dapur Anda akan muncul di sini.',
+    act_media_unsupported:'Foto/audio belum bisa diproses. Kirim ulang sebagai foto nota atau teks.',
+    act_duplicate_rejected:'Duplikat ditolak — tidak dicatat dua kali.',
+    act_draft_created:'Draf pembelian dibuat — menunggu tinjauan Anda.',
+    act_draft_rejected:'Draf pembelian dibatalkan — tidak ada yang dicatat.',
     // Chat assistant page
     sim_eyebrow:'ASISTEN PEMBELIAN',
     simulated_badge:'CHAT',
@@ -324,6 +328,7 @@ const I18N = {
     btn_apply:'Terapkan',
     opname_note_panel:'Stok sistem langsung disamakan dengan hasil hitung fisik, dengan catatan selisih di riwayat.',
     toast_opname:'Stok opname diterapkan.',
+    btn_count_stock:'Hitung fisik',
     // Rules page
     rules_title_h:'Peraturan asisten',
     rules_sub:'Aturan ini hanya berlaku untuk resto ini. Contoh: "kabari kalau cabai di bawah 3 kg" mengubah ambang notifikasi, "jangan ingatkan stok telur" mematikan notifikasi telur, dan catatan lain diikuti asisten sebagai konteks gaya notifikasi.',
@@ -607,6 +612,10 @@ const I18N = {
     payment_unknown:'Payment unknown',
     // Activity
     empty_activity:'Your kitchen activity will appear here.',
+    act_media_unsupported:'Photo/audio couldn’t be processed. Resend as a receipt photo or text.',
+    act_duplicate_rejected:'Duplicate rejected — not recorded twice.',
+    act_draft_created:'Purchase draft created — waiting for your review.',
+    act_draft_rejected:'Purchase draft rejected — nothing was recorded.',
     // Chat assistant page
     sim_eyebrow:'PURCHASE ASSISTANT',
     simulated_badge:'CHAT',
@@ -714,6 +723,7 @@ const I18N = {
     btn_apply:'Apply',
     opname_note_panel:'System stock is set straight to the physical count, with the difference noted in the history.',
     toast_opname:'Stock opname applied.',
+    btn_count_stock:'Count stock',
     // Rules page
     rules_title_h:'Assistant rules',
     rules_sub:'These rules apply only to this restaurant. Example: "tell me when cabai is below 3 kg" changes the notification threshold, "don’t remind me about telur stock" turns off egg notifications, and other notes are followed by the assistant as notification-style context.',
