@@ -106,9 +106,9 @@ def main():
         return (setting(name) or "").strip().casefold() in {"0", "false", "no", "off"}
     text_llm_enabled = bool(vision_api_key) and not llm_disabled("LLM_TEXT_EXTRACTION")
     text_llm_model = setting("STEPFUN_TEXT_MODEL")
-    asr_api_key = setting("AUDIO_ASR_API_KEY")
-    asr_base_url = setting("AUDIO_ASR_BASE_URL")
-    asr_model_override = setting("AUDIO_ASR_MODEL")
+    asr_api_key = setting("AUDIO_ASR_API_KEY") or setting("RESTOPILOT_ASR_API_KEY")
+    asr_base_url = setting("AUDIO_ASR_BASE_URL") or setting("RESTOPILOT_ASR_BASE_URL")
+    asr_model_override = setting("AUDIO_ASR_MODEL") or setting("RESTOPILOT_ASR_MODEL")
     asr_language = (setting("AUDIO_ASR_LANGUAGE") or "").strip() or None
     asr_prompt = (setting("AUDIO_ASR_PROMPT") or "").strip() or None
     custom_asr = bool(asr_api_key and asr_base_url)
