@@ -33,7 +33,7 @@ from .reminders import ReminderMixin, SQLITE_SCHEMA as REMINDERS_SQLITE_SCHEMA, 
 from .cash_envelope import CashEnvelopeMixin, SQLITE_SCHEMA as ENVELOPE_SQLITE_SCHEMA, parse_envelope_command
 from .data_qa import average_fact, compare_fact, ingredient_spend_fact, is_average_question, is_compare_question, is_price_question, is_purchase_total_question, is_rank_question, is_spend_question, parse_window, find_windows, price_fact, purchase_total_payload, rank_fact, spend_fact
 from .onboarding import restaurant_selection
-from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, PAYMENT_FOLLOWUP_PROMPT, SIMULATOR, TOO_MANY_LINES_REPLY, UNREGISTERED_REPLY, dashboard_link_line, dashboard_link_reply, draft_label, draft_reply, input_over_line_limit, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, stock_reply, unregistered_reply, weekly_summary_reply
+from .whatsapp import FOLLOWUP_ACK, HELP_REPLY, LIVE, SIMULATOR, TOO_MANY_LINES_REPLY, UNREGISTERED_REPLY, dashboard_link_line, dashboard_link_reply, draft_label, draft_reply, input_over_line_limit, is_stock_question, opname_reply, parse_payment_followup, parse_remove_request, payment_followup_prompt, resolve_supplier_index, stock_reply, supplier_index_unknown_reply, unregistered_reply, weekly_summary_reply
 
 
 CATALOG = [
@@ -1413,8 +1413,22 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                 reply = "Foto/audio belum diproses. Kirim rincian pembelian sebagai teks atau gunakan dashboard. Tidak ada pembelian yang dicatat."
                 result["action"] = "media_unsupported"
             elif pending_purchase and not draft and (followup := parse_payment_followup(payload["text"])):
-                purchase, supplier_new = self._update_purchase_payment(conn, pending_purchase, followup["payment_status"], followup["supplier"], tenant)
-                if followup["skip"]:
+                index_error = None
+                if followup.get("supplier_index") is not None:
+                    suppliers = self.suppliers_list(tenant, conn=conn)
+                    name = resolve_supplier_index(followup["supplier_index"], suppliers)
+                    if name:
+                        followup["supplier"] = name
+                    else:
+                        index_error = supplier_index_unknown_reply(followup["supplier_index"], suppliers)
+                if index_error:
+                    # A wrong number gets the list back AND keeps the offer:
+                    # the reply invites a retry, so restore the one-shot
+                    # pending_followup that the generic intake cleared above.
+                    thread["pending_followup"] = pending_purchase
+                    reply = index_error
+                    result["action"] = "supplier_index_unknown"
+                elif followup["skip"]:
                     reply = FOLLOWUP_ACK
                     result["action"] = "followup_skipped"
                     # The offer lapses on skip: without clearing it, the next
@@ -1422,6 +1436,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                     # correction of the previous purchase.
                     thread["pending_followup"] = None
                 else:
+                    purchase, supplier_new = self._update_purchase_payment(conn, pending_purchase, followup["payment_status"], followup["supplier"], tenant)
                     details = []
                     if followup["payment_status"] == "paid":
                         details.append("Pembayaran dicatat: lunas.")
@@ -1483,7 +1498,7 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
                     if names_created:
                         confirmation += " " + ", ".join(f"'{name}'" for name in names_created) + " ditambahkan sebagai bahan baru."
                     thread["pending_followup"] = draft["purchase_id"]
-                    reply = confirmation + "\n" + PAYMENT_FOLLOWUP_PROMPT
+                    reply = confirmation + "\n" + payment_followup_prompt(self.suppliers_list(tenant, conn=conn))
                     result.update(action="approved", purchase_id=draft["purchase_id"])
             elif command in SUMMARY_COMMANDS or intent_hint == "summary":
                 # A read-only report: never creates or disturbs an active draft.
@@ -1844,8 +1859,16 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
             except (TypeError, ValueError):
                 continue
             for item in (body or {}).get("items") or []:
-                ingredient_id, price = item.get("ingredient_id"), item.get("unit_price_idr")
-                if ingredient_id and isinstance(price, int) and not isinstance(price, bool) and price > 0:
+                ingredient_id, raw_price = item.get("ingredient_id"), item.get("unit_price_idr")
+                # _normalize stores unit_price_idr as a decimal string; accept
+                # any clean whole-rupiah number, never a bool.
+                if isinstance(raw_price, bool):
+                    continue
+                try:
+                    price = int(Decimal(str(raw_price)))
+                except (InvalidOperation, TypeError, ValueError):
+                    continue
+                if ingredient_id and price > 0:
                     prices[ingredient_id] = price
         return prices
 
@@ -2106,7 +2129,9 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
 
         Returns (purchase, supplier_new) where supplier_new is True when the
         supplier text was stored as a brand-new ledger name instead of
-        resolving to an existing one.
+        resolving to an existing one. A supplier named here also becomes a
+        tenant-scoped suppliers entity linked via supplier_id, so price
+        history and unpaid counts attach to it like any recorded purchase.
         """
         row = conn.execute("SELECT body, restaurant_id FROM purchases WHERE id=?", (purchase_id,)).fetchone()
         if not row or row["restaurant_id"] != restaurant_id:
@@ -2119,7 +2144,11 @@ class Store(PhoneAuthMixin, PurchaseSourcesMixin, OperationsMixin, InventoryMixi
             canonical, matched_existing = self._canonical_supplier(conn, supplier, exclude_id=purchase_id, restaurant_id=restaurant_id)
             purchase["supplier"] = canonical
             supplier_is_new = not matched_existing
-        conn.execute("UPDATE purchases SET body=?, supplier=? WHERE id=?", (encode(purchase), purchase.get("supplier"), purchase_id))
+            supplier_id = self._supplier_ensure(conn, restaurant_id, canonical)
+            conn.execute("UPDATE purchases SET body=?, supplier=?, supplier_id=? WHERE id=?",
+                         (encode(purchase), canonical, supplier_id, purchase_id))
+        else:
+            conn.execute("UPDATE purchases SET body=? WHERE id=?", (encode(purchase), purchase_id))
         self._audit(conn, "purchase_updated", f"Purchase {purchase_id[:8]} payment details completed via WhatsApp follow-up.", restaurant_id)
         return purchase, supplier_is_new
 

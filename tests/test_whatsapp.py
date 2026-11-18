@@ -325,7 +325,35 @@ def test_payment_followup_parser_matches_spec_examples():
     assert parse_payment_followup("ya") is None
 
 
-def test_parse_remove_request_modes():
+def test_payment_followup_supplier_index_examples():
+    """A trailing number after dari/di or a supplier noun points at the
+    numbered list attached to the follow-up prompt, not at a name."""
+    assert parse_payment_followup("lunas dari toko 1") == {"payment_status": "paid", "supplier": None, "supplier_index": 1, "skip": False}
+    assert parse_payment_followup("utang di toko 2")["supplier_index"] == 2
+    assert parse_payment_followup("lunas dari 3")["supplier_index"] == 3
+    assert parse_payment_followup("lunas toko 2")["supplier_index"] == 2
+    assert parse_payment_followup("lunas supplier 2")["supplier_index"] == 2
+    assert parse_payment_followup("dari toko 1") == {"payment_status": None, "supplier": None, "supplier_index": 1, "skip": False}
+    # Prices and durations never read as list positions, name replies keep working.
+    assert parse_payment_followup("utang 30rb dulu") == {"payment_status": "unpaid", "supplier": None, "skip": False}
+    assert parse_payment_followup("lunas, dari Pasar Pagi") == {"payment_status": "paid", "supplier": "Pasar Pagi", "skip": False}
+
+
+def test_payment_followup_prompt_lists_suppliers_numbered():
+    from service.whatsapp import payment_followup_prompt, resolve_supplier_index, supplier_index_unknown_reply
+    suppliers = [{"name": "Bu Siti"}, {"name": "Toko Amanah"}]
+    prompt = payment_followup_prompt(suppliers)
+    assert "1. Bu Siti" in prompt and "2. Toko Amanah" in prompt
+    assert "lunas dari toko 1" in prompt
+    assert payment_followup_prompt(None).startswith("Untuk melengkapi catatan")
+    assert resolve_supplier_index(2, suppliers) == "Toko Amanah"
+    assert resolve_supplier_index(5, suppliers) is None
+    unknown = supplier_index_unknown_reply(5, suppliers)
+    assert "tidak ada di daftar" in unknown and "Bu Siti" in unknown
+    assert "Belum ada supplier terdaftar" in supplier_index_unknown_reply(1, [])
+
+
+
     assert parse_remove_request("hapus semua") == {"mode": "all"}
     assert parse_remove_request("Hapus semuanya") == {"mode": "all"}
     assert parse_remove_request("remove all") == {"mode": "all"}

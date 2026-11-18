@@ -258,11 +258,13 @@ class SupplierMixin:
         return row is not None
 
     def _phone_is_supplier_contact(self, conn, phone):
-        """True when the phone is a registered supplier contact."""
-        tc = self._tenant_col()
-        row = self._inventory_query(conn, f"SELECT 1 FROM suppliers WHERE {tc}=? AND contact_phone=? LIMIT 1",
-                                    (restaurant_id_dummy, phone)).fetchone() if False else \
-            self._inventory_query(conn, "SELECT 1 FROM suppliers WHERE contact_phone=? LIMIT 1", (str(phone),)).fetchone()
+        """True when the phone is a registered supplier contact.
+
+        Deliberately global, not tenant-scoped: a phone number is one
+        identity, and both owner-linking guards and inbound supplier-reply
+        routing resolve it to the one supplier entity that owns it.
+        """
+        row = self._inventory_query(conn, "SELECT 1 FROM suppliers WHERE contact_phone=? LIMIT 1", (str(phone),)).fetchone()
         return row is not None
 
     def supplier_add(self, key, payload, restaurant_id, conn=None):
@@ -619,7 +621,8 @@ class SupplierMixin:
         result = self.supplier_quote_record(key, {"supplier_id": supplier_hit["id"], "ingredient_id": ingredient_id,
                                                   "ingredient_name": ingredient_name, "unit_price_idr": price,
                                                   "raw_message": command_text}, tenant, conn=conn)
-        return (f"Harga {ingredient_name} dari {supplier_hit['name']}: Rp{price:,}/satuan. Tercatat.",
+        price_text = f"Rp{price:,}".replace(",", ".")
+        return (f"Harga {ingredient_name} dari {supplier_hit['name']}: {price_text}/satuan. Tercatat.",
                 {"action": "supplier_quote_recorded", "result": result})
 
     def _resolve_supplier_from_text(self, conn, tenant, text):

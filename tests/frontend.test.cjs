@@ -645,3 +645,13 @@ test('landing preserves its bilingual copy and groups the entry action before pr
   assert.ok(html.includes('Asisten AI'));
   assert.ok(html.indexOf('/assets/tokens.css') < html.indexOf('/landing-assets/styles.css'));
 });
+
+test('approved tokens ship before styles and the translated dashboard scripts', () => {
+  const tokens = fs.readFileSync('frontend/tokens.css');
+  assert.equal(crypto.createHash('sha256').update(tokens).digest('hex'), '87b57d13a1cfb96aecda44d57164953d2402b07d7b235deaf856bd90e7a92e25');
+  const html = fs.readFileSync('frontend/index.html', 'utf8');
+  assert.match(html, /\/assets\/tokens\.css[^]*\/assets\/styles\.css[^]*\/assets\/i18n\.js[^]*\/assets\/app\.js/);
+  const plugin = fs.readFileSync('deploy/atoms/frontend/plugins/restopilot-dashboard.ts', 'utf8');
+  assert.ok(plugin.includes("'/assets/tokens.css': { file: path.join(frontendDir, 'tokens.css')"));
+  assert.match(plugin, /generateBundle\(\)[^]*Object\.entries\(allAssets\(\)\)[^]*this\.emitFile/);
+});
