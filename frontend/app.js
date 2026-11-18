@@ -659,17 +659,23 @@ function morePage() {
 function dailySpendChart(daily) {
   if (!daily?.length) return `<div class="empty">${t('Belum ada data grafik.','No chart data yet.')}</div>`;
   const peak=Math.max(...daily.map(day => day.total_idr));
+  const peakIndex=daily.findIndex(day => Number(day.total_idr)===peak);
   const max=Math.max(1, peak);
   const dateFormat=new Intl.DateTimeFormat(LANG==='en' ? 'en-GB' : 'id-ID', {
     dateStyle:'long', timeZone:'Asia/Jakarta'
   });
-  const bars=daily.map(day => {
+  const bars=daily.map((day, index) => {
     const amount=rupiah(day.total_idr);
     const label=e(`${dateFormat.format(new Date(day.date))} · ${amount}`);
-    return `<div class="chart-col"><div class="chart-bar" role="img" aria-label="${label}" title="${label}" style="height:${day.total_idr/max*100}%">${day.total_idr>0 ? `<span class="chart-value" aria-hidden="true">${e(amount)}</span>` : ''}</div></div>`;
+    const value=day.total_idr>0
+      ? `<span class="chart-value${index===peakIndex ? ' chart-value-peak' : ''}" aria-hidden="true">${e(amount)}</span>`
+      : '';
+    return `<div class="chart-col" style="--chart-bar-height:${day.total_idr/max*100}%">
+      <div class="chart-bar" role="img" aria-label="${label}" title="${label}"></div>
+      ${value}<small class="chart-date" aria-hidden="true">${e(day.date.slice(8))}</small>
+    </div>`;
   }).join('');
-  const dates=daily.map(day => `<small>${e(day.date.slice(8))}</small>`).join('');
-  return `<div class="daily-chart" style="--chart-value-length:${peak > 0 ? rupiah(peak).length : 0}"><div class="chart-bars">${bars}</div><div class="chart-dates" aria-hidden="true">${dates}</div></div>`;
+  return `<div class="daily-chart" role="region" tabindex="0" aria-label="${e(t('Grafik pengeluaran harian','Daily spending chart'))}"><div class="chart-bars">${bars}</div></div>`;
 }
 function ingredientSpendChart(items) {
   if (!items?.length) return `<div class="empty">${t('Belum ada data grafik.','No chart data yet.')}</div>`;

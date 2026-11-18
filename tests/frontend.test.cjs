@@ -390,10 +390,29 @@ test('daily spend bars expose localized dates and amounts, with visible values o
   assert.match(html, /height:0%/);
   assert.match(html, /aria-label="2 November 2026 · Rp100\.000"/);
   assert.match(html, /aria-label="3 November 2026 · Rp0"/);
-  assert.equal((html.match(/class="chart-value"/g) || []).length, 2);
-  assert.match(html, /class="chart-dates"[^>]*><small>01<\/small>/);
+  assert.equal((html.match(/class="chart-value(?: chart-value-peak)?"/g) || []).length, 2);
+  assert.match(html, /class="chart-date"[^>]*>01<\/small>/);
   run("LANG='id'");
   assert.match(run(`dailySpendChart([{date:'2026-08-02',total_idr:1}])`), /aria-label="2 Agustus 2026 · Rp1"/);
+});
+
+test('small charts show only the first peak value and keep labels horizontal', () => {
+  const {run} = harness();
+  const html = run(`dailySpendChart([
+    {date:'2026-11-01',total_idr:50000},
+    {date:'2026-11-02',total_idr:100000},
+    {date:'2026-11-03',total_idr:100000}
+  ])`);
+  assert.equal((html.match(/chart-value-peak/g) || []).length, 1);
+  assert.match(html, /aria-label="2 November 2026 · Rp100\.000"[^>]*><\/div>\s*<span class="chart-value chart-value-peak"/);
+  assert.doesNotMatch(run(`dailySpendChart([{date:'2026-11-01',total_idr:0}])`), /chart-value/);
+  const css = fs.readFileSync('frontend/styles.css','utf8');
+  const mobile = css.split('@media (max-width:480px) {')[1].split('.hbars')[0];
+  assert.match(mobile, /\.chart-value\s*\{\s*display:none/);
+  assert.match(mobile, /\.chart-value-peak[^{}]*\{[^{}]*display:block/);
+  for (const rule of css.match(/[^{}]*\.chart-value[^{}]*\{[^{}]*\}/g)) {
+    assert.doesNotMatch(rule, /writing-mode|rotate/);
+  }
 });
 
 test('ingredient spend shows escaped names, amounts, and shares of the displayed total', () => {
