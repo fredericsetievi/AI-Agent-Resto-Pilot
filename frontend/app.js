@@ -168,7 +168,7 @@ async function refreshAdminOverview() {
 }
 function draftCardReadOnly(draft) {
   const item=draft.items?.[0] || {};
-  return `<article class="draft-card"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">${ingredientIcon(item.raw_name || item.name, item.ingredient_id)}</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || t('Pemasok tidak disebutkan','Supplier unspecified'))} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} ${t('bahan','items')}`)}</p></div><div class="price money">${rupiah(draft.total_idr)}</div></div><div class="draft-bottom">${badge(draft.status)}</div></article>`;
+  return `<article class="draft-card"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">${ingredientIcon(item.raw_name || item.name, item.ingredient_id)}</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || t('Pemasok tidak disebutkan','Supplier unspecified'))} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} ${t('bahan','items')}`)}</p></div><div class="price money">${rupiah(draft.total_idr)}</div></div>${purchaseWarningHtml(draft)}<div class="draft-bottom">${badge(draft.status)}</div></article>`;
 }
 function adminDialogForm(title, fields, action) {
   const dialog=$('#admin-dialog');if(!dialog)return;
@@ -379,7 +379,7 @@ function itemSummary(items) { return (items || []).map(item => nameFor(item)).jo
 function warningFor(draft) { return draft.items?.find(item => item.comparison?.status==='price_increase'); }
 function draftCard(draft) {
   const item=draft.items?.[0] || {}, spike=warningFor(draft), clarify=draft.status==='needs_clarification';
-  return `<article class="draft-card ${spike?'alert':''}"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">${ingredientIcon(item.raw_name || item.name, item.ingredient_id)}</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || t('Pemasok tidak disebutkan','Supplier unspecified'))} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} ${t('bahan','items')}`)}</p>${sourceChip(draft)}</div><div class="price money">${rupiah(draft.total_idr)}<small>${t('Total pembelian','Purchase total')}</small></div></div>${spike ? `<div class="price-alert"><span aria-hidden="true">↗</span><span><strong>${number(Number(spike.comparison.change_percent).toFixed(1))}% ${t('kenaikan harga','price increase')}</strong> · ${rupiah(spike.unit_price_idr)}/${e(spike.canonical_unit)} vs ${rupiah(spike.comparison.baseline_unit_price_idr)}</span></div>` : clarify ? t('<div class="price-alert"><span aria-hidden="true">⚠</span><span>Ada detail yang perlu diperhatikan sebelum dicatat.</span></div>','<div class="price-alert"><span aria-hidden="true">⚠</span><span>Some details need your attention before this can be recorded.</span></div>') : ''}<div class="draft-bottom">${badge(draft.status)}<div class="draft-actions"><button class="text-button" data-review="${e(draft.id)}">${t('Tinjau pembelian','Review purchase')} <span aria-hidden="true">→</span></button><button class="button mini primary" data-approve="${e(draft.id)}"${clarify?' disabled title="Lengkapi detailnya lewat Review dulu"':''}>${t('Setujui','Approve')}</button><button class="button mini" data-reject="${e(draft.id)}">${t('Batalkan','Reject')}</button></div></div></article>`;
+  return `<article class="draft-card ${spike?'alert':''}"><div class="draft-top"><span class="ingredient-icon" aria-hidden="true">${ingredientIcon(item.raw_name || item.name, item.ingredient_id)}</span><div><h3>${e(itemSummary(draft.items))}</h3><p>${e(draft.supplier || t('Pemasok tidak disebutkan','Supplier unspecified'))} · ${e(draft.items?.length===1 ? `${number(item.quantity)} ${item.unit || ''}` : `${draft.items?.length || 0} ${t('bahan','items')}`)}</p>${sourceChip(draft)}</div><div class="price money">${rupiah(draft.total_idr)}<small>${t('Total pembelian','Purchase total')}</small></div></div>${spike ? `<div class="price-alert"><span aria-hidden="true">↗</span><span><strong>${number(Number(spike.comparison.change_percent).toFixed(1))}% ${t('kenaikan harga','price increase')}</strong> · ${rupiah(spike.unit_price_idr)}/${e(spike.canonical_unit)} vs ${rupiah(spike.comparison.baseline_unit_price_idr)}</span></div>` : clarify ? t('<div class="price-alert"><span aria-hidden="true">⚠</span><span>Ada detail yang perlu diperhatikan sebelum dicatat.</span></div>','<div class="price-alert"><span aria-hidden="true">⚠</span><span>Some details need your attention before this can be recorded.</span></div>') : ''}${purchaseWarningHtml(draft)}<div class="draft-bottom">${badge(draft.status)}<div class="draft-actions"><button class="text-button" data-review="${e(draft.id)}">${t('Tinjau pembelian','Review purchase')} <span aria-hidden="true">→</span></button><button class="button mini primary" data-approve="${e(draft.id)}"${clarify ? ` disabled title="${e(t('Lengkapi detailnya lewat Tinjau dulu','Review and complete the details first'))}"` : ''}>${t('Setujui','Approve')}</button><button class="button mini" data-reject="${e(draft.id)}">${t('Batalkan','Reject')}</button></div></div></article>`;
 }
 // Relative day label for purchase rows: Hari ini/Kemarin, otherwise a short
 // locale date in the selected language.
@@ -463,7 +463,7 @@ function localizeWarning(text){
 // visible (icon + text, never color-only) wherever purchases render: an
 // always-visible line on mobile rows, inline under the purchase cell in the
 // desktop table. Never truncated, never hidden inside the details dialog.
-function purchaseWarnings(purchase){return [...new Set((purchase.warnings||[]).map(w=>localizeWarning(String(w))))].slice(0,3);}
+function purchaseWarnings(purchase){return [...new Set((purchase.warnings||[]).map(w=>localizeWarning(String(w))))];}
 function purchaseWarningHtml(purchase){return purchaseWarnings(purchase).map(text=>`<div class="purchase-warning"><span aria-hidden="true">⚠</span><span>${e(text)}</span></div>`).join('');}
 // Mobile line 1: first two ingredients with quantities, then "+N" for the rest.
 function purchaseItemSummary(items){
@@ -489,21 +489,62 @@ function inventoryRows(inventory, editableUnits=false) {
   // owner counting a bin does not have to scroll down and re-find the item.
   return `<div class="inventory-list">${inventory.map(item => `<div class="inventory-row"><span class="ingredient-icon" aria-hidden="true">${ingredientIcon(item.name, item.ingredient_id)}</span><div><strong>${e(item.name)}</strong><small>${item.low_stock?`<span class="badge red">${t('stock_low_badge')}</span>`:`<span class="badge green">${t('badge_recorded')}</span>`}</small>${editableUnits?`<button type="button" class="text-button count-stock-action" data-count-stock="${e(item.ingredient_id)}">${t('btn_count_stock')}</button>`:''}</div><div class="stock ${item.low_stock?'low':''}">${number(item.quantity)} ${unitHtml(item)}<small>${t('w_threshold')} ${number(item.reorder_threshold)} ${e(item.unit)}</small></div></div>`).join('')}</div>`;
 }
-// Friendly activity outcomes: backend audit messages embed raw result tokens
-// ("WhatsApp message processed: media_unsupported.") and English boilerplate
-// that Indonesian owners cannot act on. Map the verified event kinds/tokens to
-// I18N keys; unmapped events keep the stored message unchanged. Presentation
-// only — event storage and semantics are untouched.
-const ACTIVITY_OUTCOME_KEYS = {draft_created:'act_draft_created',draft_rejected:'act_draft_rejected'};
-function activityOutcomeKey(item) {
-  const message=String(item.message||'');
-  if(message.includes('media_unsupported'))return 'act_media_unsupported';
-  if(message.includes('purchase_source_duplicate'))return 'act_duplicate_rejected';
-  return ACTIVITY_OUTCOME_KEYS[item.event] || null;
+// Localize audit event summaries while preserving user-entered and unknown messages.
+function activityMessage(item) {
+  const message=String(item.message || '');
+  if (message.includes('media_unsupported')) return t('act_media_unsupported');
+  if (message.includes('purchase_source_duplicate')) return t('act_duplicate_rejected');
+  switch (item.event) {
+    case 'draft_created': return t('act_draft_created');
+    case 'draft_rejected': return t('act_draft_rejected');
+    case 'draft_edited': return t('Draf ditinjau dan diedit.', 'Draft reviewed and edited.');
+    case 'draft_item_removed': return t('Barang non-dapur dihapus dari draf.', 'Non-kitchen items removed from the draft.');
+    case 'draft_updated_from_message': return t('Draf diperbarui dari pesan lanjutan.', 'Draft updated from a follow-up message.');
+    case 'purchase_recorded': {
+      const amount=message.match(/Rp (\d[\d,]*)/)?.[1];
+      if (!amount) return t('Pembelian dicatat dan stok ditambahkan.', 'Purchase recorded and stock added.');
+      const value=rupiah(Number(amount.replaceAll(',', '')));
+      return t(`Pembelian ${value} dicatat. Stok bertambah, status pembayaran belum diketahui.`, `Purchase of ${value} recorded. Stock added, payment status unknown.`);
+    }
+    case 'purchase_updated': return t('Detail pembayaran pembelian diperbarui.', 'Purchase payment details updated.');
+    case 'purchase_edited': return t('Pembelian diedit.', 'Purchase edited.');
+    case 'purchase_voided': return t('Pembelian dibatalkan.', 'Purchase voided.');
+    case 'demo_seeded': return t('Contoh riwayat dan estimasi stok awal dimuat.', 'Sample history and estimated opening stock loaded.');
+    case 'whatsapp_message_processed': return t('Pesan diproses.', 'Message processed.');
+    case 'whatsapp_unregistered': return t('Pesan dari pengirim yang belum terdaftar ditolak.', 'Message from an unregistered sender rejected.');
+    case 'phone_account_created': return t('Akun dan ruang kerja restoran dibuat.', 'Account and restaurant workspace created.');
+    case 'owner_phone_connected': return t('Nomor telepon pemilik dihubungkan.', 'Owner login phone connected.');
+    case 'owner_phone_enrolled': return t('Nomor telepon pemilik disetujui.', 'Owner login phone approved.');
+    case 'owner_phone_revoked': return t('Akses masuk dengan nomor telepon dicabut.', 'Login by phone revoked.');
+    case 'owner_password_reset': return t('Kata sandi pemilik diatur ulang.', 'Owner password reset.');
+    case 'restaurant_created': return t('Restoran dibuat.', 'Restaurant created.');
+    case 'restaurant_updated': return t('Detail restoran diperbarui.', 'Restaurant details updated.');
+    case 'sender_linked': return t('Pengirim dihubungkan ke restoran.', 'Sender linked to the restaurant.');
+    case 'sender_unlinked':
+    case 'whatsapp_number_unlinked': return t('Pengirim dilepas dari restoran.', 'Sender unlinked from the restaurant.');
+    case 'rule_added': return t('Aturan ditambahkan.', 'Rule added.');
+    case 'rule_edited': return t('Aturan diedit.', 'Rule edited.');
+    case 'rule_toggled': return t('Status aturan diubah.', 'Rule status changed.');
+    case 'rule_removed': return t('Aturan dihapus.', 'Rule removed.');
+    case 'opname_proposed': return t('Hitung stok diajukan.', 'Stock count proposed.');
+    case 'opname_cancelled': return t('Hitung stok dibatalkan.', 'Stock count cancelled.');
+    case 'opname_applied': return t('Hasil hitung stok diterapkan.', 'Stock count applied.');
+    case 'inventory_recipe_saved': return t('Resep disimpan.', 'Recipe saved.');
+    case 'inventory_settings_saved': return t('Pengaturan pemesanan diperbarui.', 'Reorder settings updated.');
+    case 'inventory_count': return t('Hitung stok dicatat.', 'Stock count recorded.');
+    case 'cloud_mirror_ok': return t('Salinan pembelian disimpan.', 'Purchase copy saved.');
+    case 'cloud_mirror_failed': return t('Salinan pembelian gagal disimpan.', 'Could not save purchase copy.');
+    case 'inventory_sale': return t('Penjualan dicatat.', 'Sale recorded.');
+    case 'inventory_usage': return t('Pemakaian bahan dicatat.', 'Ingredient usage recorded.');
+    case 'inventory_waste': return t('Bahan terbuang dicatat.', 'Ingredient waste recorded.');
+    case 'proactive_alert': return t('Peringatan stok rendah dikirim.', 'Low-stock alert sent.');
+    case 'proactive_message': return t('Pesan masuk antrean pengiriman.', 'Message queued for delivery.');
+    default: return message || item.event;
+  }
 }
 function activityRows(activity) {
   if (!activity.length) return `<div class="empty">${t('Aktivitas dapur Anda akan muncul di sini.','Your kitchen activity will appear here.')}</div>`;
-  return `<div class="activity-list">${activity.map(item => { const key=activityOutcomeKey(item); return `<div class="activity-row"><span class="activity-dot"></span><div><p>${e(key ? t(key) : (item.message || item.event))}</p><small>${e(date(item.created_at))}</small></div></div>`; }).join('')}</div>`;
+  return `<div class="activity-list">${activity.map(item => `<div class="activity-row"><span class="activity-dot"></span><div><p>${e(activityMessage(item))}</p><small>${e(date(item.created_at))}</small></div></div>`).join('')}</div>`;
 }
 function whatsappPage() {
   const numbers=state.data?.whatsapp_numbers || [];
@@ -599,7 +640,27 @@ function overview() {
   const delta=heroDelta(metrics);
   const metric=(label,value,detail,symbol,accent=false) => `<article class="metric ${accent?'metric-accent':''}"><div class="metric-label">${label}<span class="metric-symbol" aria-hidden="true">${symbol}</span></div><p class="metric-value money">${value}</p><small>${detail}</small></article>`;
   const hero=`<article class="metric metric-hero"><div class="metric-label">${t('Pembelian hari ini','Purchases today')}<span class="metric-symbol" aria-hidden="true">↗</span></div><p class="metric-value money">${rupiah(metrics.purchases_today_idr)}</p><small class="hero-delta ${delta.cls}">${e(delta.text)}</small><small>${t('Nilai invoice disetujui · WIB','Approved invoice value · WIB')}</small></article>`;
-  return `<div class="metrics">${hero}${metric(t('Menunggu Anda','Waiting for you'),number(drafts.length),t('Draf untuk ditinjau atau dilengkapi','Drafts to review or complete'),'☑',true)}${metric(t('Stok rendah','Low stock'),number(metrics.low_stock_count),t('Berdasar estimasi inventory','Based on estimated inventory'),'▦')}${metric(t('Pembelian tercatat','Recorded purchases'),number(metrics.recorded_purchases),t('Tersimpan di database lokal','Saved in your local database'),'▤')}</div><div class="main-grid"><div class="column"><section class="panel">${panelHeading(`${t('Perlu perhatian Anda','Needs your attention')} <span class="count-pill">${drafts.length}</span>`,t('Periksa cepat hari ini, besok lebih sedikit kejutan.','A quick check today, fewer surprises tomorrow.'), `<a class="text-button" href="#approvals">${t('Lihat semua →','View all →')}</a>`)}<div class="draft-list">${drafts.slice(0,3).map(draftCard).join('') || `<div class="empty"><strong>${t('Semua sudah beres.','You’re all caught up.')}</strong>${t('Draf pembelian baru akan muncul di sini.','New purchase drafts will appear here.')}</div>`}</div></section><section class="panel">${panelHeading(t('Pembelian terbaru','Recent purchases'),t('Terkonfirmasi, tercatat, mudah dicari.','Confirmed, recorded, and easy to find.'),`<a class="text-button" href="#purchases">${t('Semua pembelian →','All purchases →')}</a>`)}${purchaseTable(purchases.slice(0,5))}</section></div><div class="column"><section class="panel quick-panel"><div class="quick-icon" aria-hidden="true">✳</div><h2>${t('Satu pembelian. Satu pesan sederhana.','A purchase. A simple message.')}</h2><p>${t('Dapur tetap bergerak. Ubah catatan singkat menjadi pembelian siap tinjau.','Keep your kitchen moving. Turn a quick note into a purchase ready for your review.')}</p><div class="quick-sample">beli cabai 3 kg 150rb</div><button class="button" data-action="new-purchase">${t('Coba catat cepat →','Try a quick log →')}</button></section><section class="panel">${panelHeading(t('Stok dapur','Kitchen stock'),'',`<a class="text-button" href="#inventory">${t('Lihat semua →','View all →')}</a>`)}${inventoryRows(inventory.slice(0,3))}<div class="panel-note">${t('Estimasi dari nota yang disetujui. Hitungan fisik dan pemakaian dapur bisa berbeda.','Estimated from approved receipts. Physical counts and kitchen usage may differ.')}</div></section><section class="panel">${panelHeading(t('Aktivitas terbaru','Latest activity'))}${activityRows(activity.slice(0,3))}</section></div></div><div class="charts-grid"><section class="panel">${panelHeading(t('Pengeluaran 14 hari','14-day spending'),t('Total pembelian tercatat per hari (WIB).','Recorded purchase totals per day (WIB).'))}${dailySpendChart(state.data.charts?.daily_spend)}</section><section class="panel">${panelHeading(t('Bahan pengeluaran terbesar','Top ingredients by spend'),t('Dari pembelian 30 hari terakhir.','From purchases in the last 30 days.'))}${ingredientSpendChart(state.data.charts?.ingredient_spend)}</section></div>`;
+  const lowStock=inventory.filter(item => item.low_stock);
+  const reviewPanel=drafts.length ? `<section class="panel">
+    ${panelHeading(`${t('Perlu ditinjau','Needs review')} <span class="count-pill">${drafts.length}</span>`,'',
+      `<a class="text-button" href="#approvals">${t('Lihat semua →','View all →')}</a>`)}
+    <div class="draft-list">${drafts.slice(0,3).map(draftCard).join('')}</div>
+  </section>` : '';
+  const lowStockPanel=lowStock.length ? `<section class="panel">
+    ${panelHeading(t('Stok menipis','Running low'),t('Berdasarkan estimasi stok.','Based on estimated stock.'))}
+    <div class="inventory-list">${lowStock.slice(0,3).map(item => {
+      const name=e(item.name), remaining=e(`${number(item.quantity)} ${item.unit || ''}`.trim());
+      return `<div class="priority-stock-row"><strong>${t(`${name} tersisa ${remaining}`,`${name}: ${remaining} left`)}</strong>
+        <a class="text-button" href="#inventory">${t('Cek stok','Check stock')}</a></div>`;
+    }).join('')}</div>
+  </section>` : '';
+  const priorities=reviewPanel || lowStockPanel
+    ? `<div class="overview-priorities${reviewPanel && lowStockPanel ? ' overview-priorities-paired' : ''}">${reviewPanel}${lowStockPanel}</div>`
+    : '';
+  const summary=`<div class="metrics">${hero}${metric(t('Menunggu Anda','Waiting for you'),number(drafts.length),t('Draf untuk ditinjau atau dilengkapi','Drafts to review or complete'),'☑',true)}${metric(t('Stok rendah','Low stock'),number(metrics.low_stock_count),t('Berdasar estimasi inventory','Based on estimated inventory'),'▦')}${metric(t('Pembelian tercatat','Recorded purchases'),number(metrics.recorded_purchases),t('Tersimpan di database lokal','Saved in your local database'),'▤')}</div>`;
+  const trends=`<div class="charts-grid"><section class="panel">${panelHeading(t('Pengeluaran 14 hari','14-day spending'),t('Total pembelian tercatat per hari (WIB).','Recorded purchase totals per day (WIB).'))}${dailySpendChart(state.data.charts?.daily_spend)}</section><section class="panel">${panelHeading(t('Bahan pengeluaran terbesar','Top ingredients by spend'),t('Dari pembelian 30 hari terakhir. Persentase dari total bahan yang ditampilkan.','From purchases in the last 30 days. Shares are of the ingredients shown.'))}${ingredientSpendChart(state.data.charts?.ingredient_spend)}</section></div>`;
+  const details=`<div class="main-grid"><div class="column"><section class="panel">${panelHeading(t('Pembelian terbaru','Recent purchases'),t('Terkonfirmasi, tercatat, mudah dicari.','Confirmed, recorded, and easy to find.'),`<a class="text-button" href="#purchases">${t('Semua pembelian →','All purchases →')}</a>`)}${purchaseTable(purchases.slice(0,5))}</section></div><div class="column"><section class="panel quick-panel"><div class="quick-icon" aria-hidden="true">✳</div><h2>${t('Satu pembelian. Satu pesan sederhana.','A purchase. A simple message.')}</h2><p>${t('Dapur tetap bergerak. Ubah catatan singkat menjadi pembelian siap tinjau.','Keep your kitchen moving. Turn a quick note into a purchase ready for your review.')}</p><div class="quick-sample">${t('beli cabai 3 kg 150rb','bought 3 kg of chili for Rp150,000')}</div><button class="button" data-action="new-purchase">${t('Coba catat cepat →','Try a quick log →')}</button></section><section class="panel">${panelHeading(t('Stok dapur','Kitchen stock'),'',`<a class="text-button" href="#inventory">${t('Lihat semua →','View all →')}</a>`)}${inventoryRows(inventory.slice(0,3))}<div class="panel-note">${t('Estimasi dari nota yang disetujui. Hitungan fisik dan pemakaian dapur bisa berbeda.','Estimated from approved receipts. Physical counts and kitchen usage may differ.')}</div></section><section class="panel">${panelHeading(t('Aktivitas terbaru','Latest activity'))}${activityRows(activity.slice(0,3))}</section></div></div>`;
+  return priorities ? priorities+summary+trends+details : trends+summary+details;
 }
 function render() {
   renderIdentity();
@@ -613,7 +674,13 @@ function render() {
   $('.page-heading').classList.toggle('modest',modestHeading);
   const headingButton=$('.page-heading .button');
   if(headingButton){headingButton.classList.toggle('primary',!modestHeading);headingButton.classList.toggle('secondary',modestHeading);}
-  document.querySelectorAll('[data-page]').forEach(link => { link.classList.toggle('active',link.dataset.page===page); if(link.dataset.page===page)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current'); });
+  const activeTab = ['overview', 'approvals', 'inventory'].includes(page) ? page : 'more';
+  document.querySelectorAll('[data-page]').forEach(link => {
+    const active = link.dataset.page === activeTab;
+    link.classList.toggle('active', active);
+    if (active) link.setAttribute('aria-current', page === activeTab ? 'page' : 'location');
+    else link.removeAttribute('aria-current');
+  });
   updateApprovalsBadge();
   if (!state.data) return;
   $('#restaurant-name').textContent=state.data.restaurant.name;
@@ -677,14 +744,38 @@ function morePage() {
 }
 
 function dailySpendChart(daily) {
-  if(!daily || !daily.length) return '<div class="empty">Belum ada data grafik.</div>';
-  const max=Math.max(...daily.map(d=>d.total_idr), 1);
-  return `<div class="chart-bars">`+daily.map(d=>`<div class="chart-col"><div class="chart-bar" style="height:${Math.max(2, Math.round(d.total_idr/max*100))}%" title="${e(d.date)} · ${rupiah(d.total_idr)}"></div><small>${e(d.date.slice(8))}</small></div>`).join('')+`</div>`;
+  if (!daily?.length) return `<div class="empty">${t('Belum ada data grafik.','No chart data yet.')}</div>`;
+  const peak=Math.max(...daily.map(day => day.total_idr));
+  const peakIndex=daily.findIndex(day => Number(day.total_idr)===peak);
+  const max=Math.max(1, peak);
+  const dateFormat=new Intl.DateTimeFormat(LANG==='en' ? 'en-GB' : 'id-ID', {
+    dateStyle:'long', timeZone:'Asia/Jakarta'
+  });
+  const bars=daily.map((day, index) => {
+    const amount=rupiah(day.total_idr);
+    const label=e(`${dateFormat.format(new Date(day.date))} · ${amount}`);
+    const value=day.total_idr>0
+      ? `<span class="chart-value${index===peakIndex ? ' chart-value-peak' : ''}" aria-hidden="true">${e(amount)}</span>`
+      : '';
+    return `<div class="chart-col" style="--chart-bar-height:${day.total_idr/max*100}%">
+      <div class="chart-bar" role="img" aria-label="${label}" title="${label}"></div>
+      ${value}<small class="chart-date" aria-hidden="true">${e(day.date.slice(8))}</small>
+    </div>`;
+  }).join('');
+  return `<div class="daily-chart" role="region" tabindex="0" aria-label="${e(t('Grafik pengeluaran harian','Daily spending chart'))}"><div class="chart-bars">${bars}</div></div>`;
 }
 function ingredientSpendChart(items) {
-  if(!items || !items.length) return '<div class="empty">Belum ada data grafik.</div>';
-  const max=Math.max(...items.map(i=>i.total_idr), 1);
-  return `<div class="hbars">`+items.map(i=>`<div class="hbar-row"><small class="hbar-name">${e(i.name)}</small><div class="hbar-track"><div class="hbar" style="width:${Math.max(2, Math.round(i.total_idr/max*100))}%"></div></div><span class="money hbar-value">${rupiah(i.total_idr)}</span></div>`).join('')+`</div>`;
+  if (!items?.length) return `<div class="empty">${t('Belum ada data grafik.','No chart data yet.')}</div>`;
+  const max=Math.max(1, ...items.map(item => item.total_idr));
+  const total=items.reduce((sum, item) => sum+Number(item.total_idr), 0);
+  const percent=new Intl.NumberFormat(LANG==='en' ? 'en-GB' : 'id-ID', {
+    style:'percent', maximumFractionDigits:1
+  });
+  return `<div class="hbars">${items.map(item => `<div class="hbar-row">
+    <span class="hbar-name">${e(item.name)}</span>
+    <div class="hbar-track" aria-hidden="true"><div class="hbar" style="width:${item.total_idr/max*100}%"></div></div>
+    <span class="hbar-value money">${e(rupiah(item.total_idr))} <small>${e(percent.format(total ? item.total_idr/total : 0))}</small></span>
+  </div>`).join('')}</div>`;
 }
 function opnameFormPanel() {
   const options=(state.data?.inventory || []).map(item=>`<option value="${e(item.ingredient_id)}">${e(item.name)} — sistem: ${e(number(item.quantity))} ${e(item.unit)}</option>`).join('');
@@ -807,8 +898,8 @@ function renderReview() {
   const draft=state.draft, editable=['pending_approval','needs_clarification'].includes(draft.status);
   const ingredients=state.data?.ingredients || [];
   const editors=draft.items.map((item,index) => `<div class="item-editor" data-item="${index}"><div><label for="item-${index}">${t('lbl_ingredient')}</label><input id="item-${index}" name="ingredient_query" list="ingredient-options" value="${e(editorNameFor(item))}" placeholder="${t('ph_ingredient')}" maxlength="200" autocomplete="off" ${editable?'':'disabled'}></div><div><label for="quantity-${index}">${t('lbl_quantity')}</label><input id="quantity-${index}" name="quantity" inputmode="decimal" value="${e(item.quantity)}" placeholder="${t('ph_quantity')}" ${editable?'':'disabled'}></div><div><label for="unit-${index}">${t('lbl_unit')}</label><input id="unit-${index}" name="unit" value="${e(item.unit)}" placeholder="kg, g, l, ml" ${editable?'':'disabled'}></div><div><label for="total-${index}">${t('lbl_line_total')}</label><input id="total-${index}" name="line_total_idr" inputmode="numeric" value="${e(item.line_total_idr)}" placeholder="${t('ph_line_total')}" ${editable?'':'disabled'}></div></div><div class="item-evidence">${item.matched_from ? `<br>${t('typed_name_prefix')}'${e(item.matched_from)}' — ${t('confirm_ingredient')}` : ''}${item.unit_price_idr ? `${rupiah(item.unit_price_idr)} / ${e(item.canonical_unit)} · ${t('w_normalized')} ${number(item.canonical_quantity)} ${e(item.canonical_unit)}` : t('review_calc_hint')}${item.comparison?.baseline_purchase_id ? `<br>${t('w_previous')}${rupiah(item.comparison.baseline_unit_price_idr)} / ${e(item.canonical_unit)} · ${e(item.comparison.baseline_supplier || t('supplier_unspecified'))} · ${e(date(item.comparison.baseline_created_at))}<br>${t('w_evidence')}<span class="inline-id">${e(item.comparison.baseline_purchase_id)}</span>` : `<br>${t('no_baseline')}`}${editable?`<br><button type="button" class="text-button danger" data-remove-item="${index}">${t('btn_remove_item')}</button>`:''}</div>${item.comparison?.status==='price_increase'?`<div class="price-alert">↗ ${number(Number(item.comparison.change_percent).toFixed(1))}% ${t('above_previous')}</div>`:''}`).join('');
-  const distinctWarnings=[...new Set((draft.warnings||[]).map(w=>localizeWarning(String(w))))], visibleWarnings=distinctWarnings.slice(0,4);
-  const warningMarkup=distinctWarnings.length?`<div class="notice">${visibleWarnings.map(e).join('<br>')}${distinctWarnings.length>4?`<br>${t('review_more')}`:''}<br>${t('review_validate')}</div>`:'';
+  const distinctWarnings=[...new Set((draft.warnings||[]).map(w=>localizeWarning(String(w))))];
+  const warningMarkup=distinctWarnings.length?`<div class="notice">${distinctWarnings.map(e).join('<br>')}<br>${t('review_validate')}</div>`:'';
   $('#review-content').innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">${t('review_eyebrow')} · ${t('w_version')} ${e(draft.version)}</p><h2 id="review-title">${e(itemSummary(draft.items))}</h2></div><button class="icon-button" data-close="review-dialog" aria-label="${t('close_review_aria')}">×</button></div>${badge(draft.status)}<p class="source-caption">${t('source_caption')}</p><div class="source-quote">${e(draft.source_text)}</div><form id="review-form"><datalist id="ingredient-options">${ingredients.map(ingredient => `<option value="${e(ingredient.name)}">`).join('')}</datalist><label for="review-supplier">${t('lbl_supplier')}</label><input id="review-supplier" name="supplier" value="${e(draft.supplier)}" placeholder="${t('supplier_blank')}" maxlength="100" ${editable?'':'disabled'}>${editors}<div class="review-total"><span>${t('review_total_label')}</span><strong class="money">${rupiah(draft.total_idr)}</strong></div>${warningMarkup}<div id="review-error" class="notice error" role="alert" hidden></div>${editable?`<p id="unsaved" class="notice" hidden>${t('unsaved_notice')}</p><label class="receipt-check"><input type="checkbox" id="goods-received"> <span>${t('receipt_confirm')}</span></label><div class="dialog-footer review-actions"><button class="button danger" type="button" id="reject-draft">${t('btn_reject')}</button><button class="button secondary" type="submit" id="save-draft">${t('btn_save_corrections')}</button><span class="spacer"></span><button class="button primary" type="button" id="approve-draft" disabled>${t('btn_approve_record')}</button></div>`:`<p class="muted">${t('readonly_decision')}</p>`}</form><p class="inline-id">${t('w_draft')} ${e(draft.id)}</p>`;
   if(editable) {
     const add=document.createElement('button');add.type='button';add.className='text-button';add.textContent=t('btn_add_item');add.id='add-item';add.disabled=draft.items.length>=20;
@@ -976,6 +1067,14 @@ document.addEventListener('submit',async event=>{
     const button=document.querySelector('#links-form button[type="submit"]');if(button)button.disabled=true;
     $('#links-phone').value='';$('#links-label').value='';await addLink(phone,platform,label);
   }
+  if(event.target.id==='supplier-form'){
+    event.preventDefault();
+    const name=$('#supplier-name').value.trim();if(!name)return;
+    const phone=$('#supplier-phone').value.trim(),platform=$('#supplier-platform').value,notes=$('#supplier-notes').value.trim();
+    const button=document.querySelector('#supplier-form button[type="submit"]');if(button)button.disabled=true;
+    $('#supplier-name').value='';$('#supplier-phone').value='';$('#supplier-notes').value='';
+    await addSupplier(name,phone,platform,notes);
+  }
 });
 document.addEventListener('submit',event=>{if(event.target.id==='whatsapp-form'){event.preventDefault();sendWhatsAppMessage($('#whatsapp-text').value);}});
 // Live inventory search: re-render only the card grid so the input keeps focus.
@@ -1115,20 +1214,20 @@ function inventoryWorkspace(){
   return `<div class="inventory-toolbar">${action('usage','Catat pemakaian','Record usage')}${action('waste','Catat susut','Record waste')}${action('count','Hitung sisa','Count remaining')}${action('sale','Catat penjualan','Log sales')}${action('recipe','Kelola resep','Manage recipes')}${action('settings','Rencana pemesanan','Order planning')}</div>${inventoryState.error?`<div class="notice error" role="alert">${e(inventoryState.error)} <button class="text-button" data-inventory-reload>${t('Coba lagi','Retry')}</button></div>`:''}${!inventoryState.loaded?`<p role="status">${t('Memuat perkakas stok…','Loading stock tools…')}</p>`:''}<section class="panel">${panelHeading(t('Estimasi stok','Estimated stock'),t('Penerimaan menambah stok. Pemakaian yang dikonfirmasi dan penjualan berbasis resep menguranginya. Hitungan fisik menyelaraskan.','Receipts add stock. Confirmed usage and recipe-based sales reduce it. Counts reconcile it.'))}<div class="inventory-search-row"><input class="inventory-search" type="search" data-inventory-search value="${e(inventoryState.search)}" placeholder="${t('Cari bahan…','Search ingredients…')}" aria-label="${t('Cari bahan','Search ingredients')}"><span class="muted" data-inventory-count>${inventorySearchCount()}</span></div><div class="stock-card-grid" data-inventory-cards>${inventoryCardsHtml()}</div><div class="panel-note">${t('Tanggal pesan memakai estimasi harian Anda atau periode sejarah lengkap yang dikonfirmasi,','Order dates use your daily estimates or a confirmed complete history period,')} ${e(data?.settings?.lead_days??2)} ${t('hari waktu tunggu pemasok, dan','days supplier lead time, and')} ${e(data?.settings?.safety_days??1)} ${t('hari stok pengaman. Ini estimasi perencanaan, bukan pesanan otomatis. Periksa stok fisik secara rutin.','safety days. They are planning estimates, not automatic orders. Check physical stock regularly.')}</div></section><section class="panel inventory-history">${panelHeading(t('Pemakaian, hitungan & penjualan','Usage, counts & sales'),t('Jejak audit perubahan stok yang dikonfirmasi.','An audit trail of confirmed stock changes.'))}<div class="inventory-events">${events||`<div class="empty"><strong>${t('Belum ada pemakaian, hitungan, atau penjualan dicatat.','No usage, counts, or sales recorded yet.')}</strong></div>`}</div></section>`;
 }
 function inventoryOptions(selected=''){return inventoryState.snapshot.map(item=>`<option value="${e(item.ingredient_id)}" ${selected===item.ingredient_id?'selected':''}>${e(item.name)} (${e(item.unit)})</option>`).join('');}
-function recipeLine(){return `<div class="recipe-line"><label>Ingredient<select name="recipe_ingredient">${inventoryOptions()}</select></label><label>Amount per portion<input name="recipe_quantity" type="number" min="0.000001" step="any" required placeholder="e.g. 0.15"></label><button type="button" class="button mini" data-remove-recipe-line aria-label="Remove ingredient">Remove</button></div>`;}
+function recipeLine(){return `<div class="recipe-line"><label>${t("Bahan", "Ingredient")}<select name="recipe_ingredient">${inventoryOptions()}</select></label><label>${t("Jumlah per porsi", "Amount per portion")}<input name="recipe_quantity" type="number" min="0.000001" step="any" required placeholder="${t("mis. 0,15", "e.g. 0.15")}"></label><button type="button" class="button mini" data-remove-recipe-line aria-label="${t("Hapus bahan", "Remove ingredient")}">${t("Hapus", "Remove")}</button></div>`;}
 function openInventoryForm(kind){
   if(!inventoryState.data || state.user?.role!=='owner')return;
   inventoryState.formId=newId();inventoryState.snapshot=(state.data.inventory||[]).map(item=>({...item}));
   inventoryState.recipesSnapshot=(inventoryState.data.recipes||[]).map(recipe=>({...recipe,items:recipe.items.map(item=>({...item}))}));
   const settings=inventoryState.data.settings||{}, recipes=inventoryState.recipesSnapshot;
-  const names={usage:'Record kitchen usage',waste:'Record waste',count:'Count remaining stock',sale:'Log sales',recipe:'Recipes for sales',settings:'Plan your next order'};
+  const names={usage:t("Catat pemakaian dapur", "Record kitchen usage"),waste:t("Catat susut", "Record waste"),count:t("Hitung sisa stok", "Count remaining stock"),sale:t("Catat penjualan", "Log sales"),recipe:t("Resep penjualan", "Recipes for sales"),settings:t("Rencana pemesanan", "Plan your next order")};
   let fields='';
-  if(['usage','waste','count'].includes(kind))fields=`<label>Ingredient<select name="ingredient_id">${inventoryOptions()}</select></label><div class="form-grid"><label>${kind==='count'?'Quantity remaining':'Quantity used'}<input name="quantity" type="number" min="${kind==='count'?'0':'0.000001'}" step="any" required placeholder="e.g. 0.5"></label><label>Units in one package<input name="pack_size" type="number" min="0.000001" step="any" value="1" required></label></div><p class="field-help">Use 1 for the ingredient’s normal unit. For half a 12 kg box, enter quantity 0.5 and package size 12. Package sizes are always supplied by you.</p>`;
-  if(kind==='sale')fields=`<label>Recipe (optional)<select name="recipe_id"><option value="">Sales record only — do not change stock</option>${recipes.map(recipe=>`<option value="${e(recipe.id)}">${e(recipe.name)}</option>`).join('')}</select></label><div class="form-grid"><label>Portions sold<input name="portions" type="number" min="0.000001" step="any" placeholder="e.g. 20"></label><label>Revenue, IDR (optional)<input name="revenue_idr" type="number" min="0" step="1" placeholder="e.g. 300000"></label></div><p class="field-help">Select a recipe to deduct its ingredients. Revenue alone does not change stock. Do not also record the same ingredients as kitchen usage.</p>`;
-  if(kind==='recipe')fields=`<label>Saved recipe<select name="saved_recipe"><option value="">Create a new recipe</option>${recipes.map(recipe=>`<option value="${e(recipe.id)}">${e(recipe.name)}</option>`).join('')}</select></label><label>Recipe name<input name="recipe_name" maxlength="100" required placeholder="e.g. Nasi goreng"></label><p class="field-help">Amounts use each ingredient’s normal unit (kg, l, etc.) for one portion. For 150 g of rice enter 0.15 kg.</p><div id="recipe-lines">${recipeLine()}</div><button type="button" class="button secondary" data-add-recipe-line>Add ingredient</button>`;
-  if(kind==='settings')fields=`<p class="muted">Use a complete period of recorded consumption, or enter your own daily estimate for each ingredient. Manual estimates override recorded averages. Neither deducts stock automatically.</p><div class="form-grid"><label>Supplier lead time (days)<input name="lead_days" type="number" min="0" max="365" step="1" required value="${e(settings.lead_days??2)}"></label><label>Safety stock (days)<input name="safety_days" type="number" min="0" max="365" step="1" required value="${e(settings.safety_days??1)}"></label></div><fieldset class="forecast-history"><legend>Recorded usage period (optional)</legend><div class="form-grid"><label>From<input type="date" name="history_start" value="${e(settings.history_start||'')}"></label><label>Through<input type="date" name="history_end" value="${e(settings.history_end||'')}"></label></div><p class="field-help">Choose 3–90 complete calendar days ending before today. The average includes every day in this period, including days with no usage.</p><label class="receipt-check"><input type="checkbox" name="history_confirmed"><span>All consumption in this period has been recorded; do not count recipe sales again as usage.</span></label></fieldset>${inventoryState.snapshot.map(item=>`<label>${e(item.name)} · ${e(item.unit)} per day<input data-daily-ingredient="${e(item.ingredient_id)}" type="number" min="0" step="any" value="${e(settings.daily_usage?.[item.ingredient_id]??'')}" placeholder="Leave empty if unknown"></label>`).join('')}<p class="field-help">Days left = stock ÷ daily usage. Order in = days left − lead time − safety days, with a minimum of zero. Leave a daily estimate blank to use the confirmed history period, if available. Without either source, no projection is shown.</p>`;
-  if(!['recipe','settings'].includes(kind))fields+=`<label>Note<input name="note" maxlength="500" required placeholder="e.g. Lunch service, 28 October"></label><div id="inventory-preview" class="inventory-preview" aria-live="polite"></div><label class="receipt-check"><input type="checkbox" name="confirmed" required><span>I checked these quantities and confirm this record. ${kind==='count'?'The count will replace the recorded balance.':'Only record each usage once.'}</span></label>`;
-  $('#inventory-dialog-content').innerHTML=`<div class="dialog-heading"><h2 id="inventory-dialog-title">${names[kind]}</h2><button type="button" class="icon-button" data-close-inventory aria-label="Close stock form">×</button></div><form id="inventory-form" data-kind="${kind}">${fields}<div id="inventory-form-error" class="notice error" role="alert" hidden></div><div class="dialog-footer"><button type="button" class="button secondary" data-close-inventory>Cancel</button><button class="button primary" type="submit">${kind==='settings'?'Save plan':kind==='recipe'?'Save recipe':'Confirm & save'}</button></div></form>`;
+  if(['usage','waste','count'].includes(kind))fields=`<label>${t("Bahan", "Ingredient")}<select name="ingredient_id">${inventoryOptions()}</select></label><div class="form-grid"><label>${kind==='count'?t("Jumlah tersisa", "Quantity remaining"):t("Jumlah terpakai", "Quantity used")}<input name="quantity" type="number" min="${kind==='count'?'0':'0.000001'}" step="any" required placeholder="${t("mis. 0,5", "e.g. 0.5")}"></label><label>${t("Jumlah satuan per kemasan", "Units in one package")}<input name="pack_size" type="number" min="0.000001" step="any" value="1" required></label></div><p class="field-help">${t("Isi 1 untuk satuan biasa. Untuk setengah dus berisi 12 kg, masukkan jumlah 0,5 dan isi kemasan 12. Tentukan ukuran kemasan sesuai barang.", "Use 1 for the ingredient’s normal unit. For half a 12 kg box, enter quantity 0.5 and package size 12. Package sizes are always supplied by you.")}</p>`;
+  if(kind==='sale')fields=`<label>${t("Resep (opsional)", "Recipe (optional)")}<select name="recipe_id"><option value="">${t("Catat penjualan saja tanpa mengubah stok", "Sales record only — do not change stock")}</option>${recipes.map(recipe=>`<option value="${e(recipe.id)}">${e(recipe.name)}</option>`).join('')}</select></label><div class="form-grid"><label>${t("Porsi terjual", "Portions sold")}<input name="portions" type="number" min="0.000001" step="any" placeholder="${t("mis. 20", "e.g. 20")}"></label><label>${t("Pendapatan, rupiah (opsional)", "Revenue, IDR (optional)")}<input name="revenue_idr" type="number" min="0" step="1" placeholder="${t("mis. 300000", "e.g. 300000")}"></label></div><p class="field-help">${t("Pilih resep untuk mengurangi stok bahannya. Pendapatan saja tidak mengubah stok. Hindari mencatat bahan yang sama lagi sebagai pemakaian dapur.", "Select a recipe to deduct its ingredients. Revenue alone does not change stock. Do not also record the same ingredients as kitchen usage.")}</p>`;
+  if(kind==='recipe')fields=`<label>${t("Resep tersimpan", "Saved recipe")}<select name="saved_recipe"><option value="">${t("Buat resep baru", "Create a new recipe")}</option>${recipes.map(recipe=>`<option value="${e(recipe.id)}">${e(recipe.name)}</option>`).join('')}</select></label><label>${t("Nama resep", "Recipe name")}<input name="recipe_name" maxlength="100" required placeholder="${t("mis. Nasi goreng", "e.g. Nasi goreng")}"></label><p class="field-help">${t("Masukkan jumlah per porsi dalam satuan bahan. Untuk 150 g beras, isi 0,15 kg.", "Amounts use each ingredient’s normal unit (kg, l, etc.) for one portion. For 150 g of rice enter 0.15 kg.")}</p><div id="recipe-lines">${recipeLine()}</div><button type="button" class="button secondary" data-add-recipe-line>${t("Tambah bahan", "Add ingredient")}</button>`;
+  if(kind==='settings')fields=`<p class="muted">${t("Gunakan periode pemakaian yang tercatat lengkap atau isi estimasi harian tiap bahan. Estimasi manual menggantikan rata-rata tercatat. Keduanya tidak mengurangi stok otomatis.", "Use a complete period of recorded consumption, or enter your own daily estimate for each ingredient. Manual estimates override recorded averages. Neither deducts stock automatically.")}</p><div class="form-grid"><label>${t("Waktu pengiriman pemasok (hari)", "Supplier lead time (days)")}<input name="lead_days" type="number" min="0" max="365" step="1" required value="${e(settings.lead_days??2)}"></label><label>${t("Cadangan stok (hari)", "Safety stock (days)")}<input name="safety_days" type="number" min="0" max="365" step="1" required value="${e(settings.safety_days??1)}"></label></div><fieldset class="forecast-history"><legend>${t("Periode pemakaian tercatat (opsional)", "Recorded usage period (optional)")}</legend><div class="form-grid"><label>${t("Mulai", "From")}<input type="date" name="history_start" value="${e(settings.history_start||'')}"></label><label>${t("Sampai", "Through")}<input type="date" name="history_end" value="${e(settings.history_end||'')}"></label></div><p class="field-help">${t("Pilih 3–90 hari kalender penuh hingga paling lambat kemarin. Rata-rata mencakup hari tanpa pemakaian.", "Choose 3–90 complete calendar days ending before today. The average includes every day in this period, including days with no usage.")}</p><label class="receipt-check"><input type="checkbox" name="history_confirmed"><span>${t("Semua pemakaian pada periode ini sudah tercatat. Penjualan berbasis resep tidak dihitung lagi sebagai pemakaian.", "All consumption in this period has been recorded; do not count recipe sales again as usage.")}</span></label></fieldset>${inventoryState.snapshot.map(item=>`<label>${e(item.name)} · ${e(item.unit)} ${t("per hari", "per day")}<input data-daily-ingredient="${e(item.ingredient_id)}" type="number" min="0" step="any" value="${e(settings.daily_usage?.[item.ingredient_id]??'')}" placeholder="${t("Kosongkan jika belum diketahui", "Leave empty if unknown")}"></label>`).join('')}<p class="field-help">${t("Sisa hari = stok ÷ pemakaian harian. Waktu pesan = sisa hari dikurangi waktu pengiriman dan hari cadangan, minimal nol. Kosongkan estimasi untuk memakai riwayat terkonfirmasi. Proyeksi muncul jika salah satu sumber tersedia.", "Days left = stock ÷ daily usage. Order in = days left − lead time − safety days, with a minimum of zero. Leave a daily estimate blank to use the confirmed history period, if available. Without either source, no projection is shown.")}</p>`;
+  if(!['recipe','settings'].includes(kind))fields+=`<label>${t("Catatan", "Note")}<input name="note" maxlength="500" required placeholder="${t("mis. Layanan makan siang, 28 Oktober", "e.g. Lunch service, 28 October")}"></label><div id="inventory-preview" class="inventory-preview" aria-live="polite"></div><label class="receipt-check"><input type="checkbox" name="confirmed" required><span>${t("Saya sudah memeriksa jumlah dan mengonfirmasi catatan ini.", "I checked these quantities and confirm this record.")} ${kind==='count'?t("Hasil hitung akan menggantikan saldo tercatat.", "The count will replace the recorded balance."):t("Catat setiap pemakaian satu kali.", "Only record each usage once.")}</span></label>`;
+  $('#inventory-dialog-content').innerHTML=`<div class="dialog-heading"><h2 id="inventory-dialog-title">${names[kind]}</h2><button type="button" class="icon-button" data-close-inventory aria-label="${t("Tutup formulir stok", "Close stock form")}">×</button></div><form id="inventory-form" data-kind="${kind}">${fields}<div id="inventory-form-error" class="notice error" role="alert" hidden></div><div class="dialog-footer"><button type="button" class="button secondary" data-close-inventory>${t("Batal", "Cancel")}</button><button class="button primary" type="submit">${kind==='settings'?t("Simpan rencana", "Save plan"):kind==='recipe'?t("Simpan resep", "Save recipe"):t("Konfirmasi dan simpan", "Confirm & save")}</button></div></form>`;
   $('#inventory-dialog').showModal();updateInventoryPreview();
 }
 function updateInventoryPreview(){
@@ -1138,12 +1237,12 @@ function updateInventoryPreview(){
     form.elements.portions.required=!!values.get('recipe_id');
     const recipe=inventoryState.recipesSnapshot.find(row=>row.id===values.get('recipe_id'));
     const portions=Number(values.get('portions'));
-    target.innerHTML=recipe?`<strong>Estimated ingredient use</strong>${recipe.items.map(line=>{const item=inventoryState.snapshot.find(row=>row.ingredient_id===line.ingredient_id);return `<p>${e(item?.name||line.ingredient_id)}: ${number(Number(line.quantity)*portions)} ${e(item?.unit||'')}</p>`;}).join('')}`:'Sales record only. Stock will stay unchanged.';return;
+    target.innerHTML=recipe?`<strong>${t("Estimasi pemakaian bahan", "Estimated ingredient use")}</strong>${recipe.items.map(line=>{const item=inventoryState.snapshot.find(row=>row.ingredient_id===line.ingredient_id);return `<p>${e(item?.name||line.ingredient_id)}: ${number(Number(line.quantity)*portions)} ${e(item?.unit||'')}</p>`;}).join('')}`:t("Hanya penjualan yang dicatat. Stok tetap.", "Sales record only. Stock will stay unchanged.");return;
   }
   const item=inventoryState.snapshot.find(row=>row.ingredient_id===values.get('ingredient_id'));if(!item)return;
   const quantity=Number(values.get('quantity')), pack=Number(values.get('pack_size')), delta=quantity*pack;
   const after=kind==='count'?delta:Number(item.quantity)-delta;
-  target.innerHTML=`<strong>${e(item.name)} · preview</strong><p>${number(quantity)} × ${number(pack)} = ${number(delta)} ${e(item.unit)} ${kind==='count'?'remaining':'used'}</p><p>Recorded: ${number(item.quantity)} → ${number(after)} ${e(item.unit)}</p>${after<0?'<p class="notice error">This exceeds recorded stock. Check the quantity or reconcile your physical count first.</p>':''}<small>Preview only. The server checks and calculates the saved balance.</small>`;
+  target.innerHTML=`<strong>${e(item.name)} · ${t("pratinjau", "preview")}</strong><p>${number(quantity)} × ${number(pack)} = ${number(delta)} ${e(item.unit)} ${kind==='count'?t("tersisa", "remaining"):t("terpakai", "used")}</p><p>${t("Tercatat:", "Recorded:")} ${number(item.quantity)} → ${number(after)} ${e(item.unit)}</p>${after<0?`<p class="notice error">${t("Jumlah melebihi stok tercatat. Periksa jumlah atau lakukan stok opname terlebih dahulu.", "This exceeds recorded stock. Check the quantity or reconcile your physical count first.")}</p>`:''}<small>${t("Ini pratinjau. Server memeriksa dan menghitung saldo saat disimpan.", "Preview only. The server checks and calculates the saved balance.")}</small>`;
 }
 async function saveInventoryForm(event){
   event.preventDefault();if(inventoryState.busy)return;
@@ -1152,7 +1251,7 @@ async function saveInventoryForm(event){
     const daily_usage={};form.querySelectorAll('[data-daily-ingredient]').forEach(input=>{if(input.value!=='')daily_usage[input.dataset.dailyIngredient]=input.value;});
     body={lead_days:Number(values.get('lead_days')),safety_days:Number(values.get('safety_days')),daily_usage};
     if(values.get('history_start')||values.get('history_end')){
-      if(!values.get('history_start')||!values.get('history_end')||values.get('history_confirmed')!=='on'){showError('inventory-form-error','Choose both period dates and confirm that all consumption is recorded.');return;}
+      if(!values.get('history_start')||!values.get('history_end')||values.get('history_confirmed')!=='on'){showError('inventory-form-error',t("Pilih tanggal awal dan akhir, lalu pastikan semua pemakaian sudah tercatat.", "Choose both period dates and confirm that all consumption is recorded."));return;}
       body.history_start=values.get('history_start');body.history_end=values.get('history_end');body.history_complete=true;
     }
     path='/v1/inventory/settings';
@@ -1171,10 +1270,10 @@ async function saveInventoryForm(event){
       if(kind==='count')body.items[0].expected_quantity=item.quantity;
     }
   }
-  inventoryState.busy=true;showError('inventory-form-error','');const button=form.querySelector('[type="submit"]');button.disabled=true;button.textContent='Saving…';
-  try{await api(path,{method:'POST',body,key:stableMutationKey(`inventory:${inventoryState.formId}`,body)});$('#inventory-dialog').close();await refresh();await loadInventoryWorkspace();toast('Saved. Stock and activity are up to date.');}
+  inventoryState.busy=true;showError('inventory-form-error','');const button=form.querySelector('[type="submit"]');button.disabled=true;button.textContent=t("Menyimpan…", "Saving…");
+  try{await api(path,{method:'POST',body,key:stableMutationKey(`inventory:${inventoryState.formId}`,body)});$('#inventory-dialog').close();await refresh();await loadInventoryWorkspace();toast(t("Tersimpan. Stok dan riwayat aktivitas sudah diperbarui.", "Saved. Stock and activity are up to date."));}
   catch(error){showError('inventory-form-error',error.message);}
-  finally{inventoryState.busy=false;button.disabled=false;button.textContent=kind==='settings'?'Save plan':kind==='recipe'?'Save recipe':'Confirm & save';}
+  finally{inventoryState.busy=false;button.disabled=false;button.textContent=kind==='settings'?t("Simpan rencana", "Save plan"):kind==='recipe'?t("Simpan resep", "Save recipe"):t("Konfirmasi dan simpan", "Confirm & save");}
 }
 document.addEventListener('click',event=>{
   const button=event.target.closest('button');if(!button)return;
@@ -1211,7 +1310,21 @@ async function loadSupplierOverview(){
 }
 function supplierRowsHtml(){
   const suppliers=supplierState.data?.suppliers||[];
-  return suppliers.map(s=>`<div class="admin-row"><div><strong>${e(s.name)}</strong><small>${s.contact_phone?` · ${e(s.contact_platform||'wa')} ${e(s.contact_phone)}`:` · ${t('tanpa kontak','no contact')}`}${s.purchase_count?` · ${s.purchase_count}× ${t('beli','purchases')}`:''}${s.unpaid_count?` · ${t('utang','unpaid')} ${s.unpaid_count} ${t('nota','notes')}`:''}</small></div></div>`).join('') || `<div class="empty"><strong>${t('Belum ada supplier terdaftar.','No suppliers registered.')}</strong>${t('Tambahkan lewat chat: tambah supplier <nama> wa <nomor>.','Add through chat: tambah supplier <name> wa <number>.')}</div>`;
+  return suppliers.map(s=>`<div class="admin-row"><div><strong>${e(s.name)}</strong><small>${s.contact_phone?` · ${e(s.contact_platform||'wa')} ${e(s.contact_phone)}`:` · ${t('tanpa kontak','no contact')}`}${s.purchase_count?` · ${s.purchase_count}× ${t('beli','purchases')}`:''}${s.unpaid_count?` · ${t('utang','unpaid')} ${s.unpaid_count} ${t('nota','notes')}`:''}</small></div></div>`).join('') || `<div class="empty"><strong>${t('Belum ada supplier terdaftar.','No suppliers registered.')}</strong>${t('Tambahkan lewat formulir di bawah, atau lewat chat: tambah supplier <nama> wa <nomor>.','Add using the form below, or through chat: tambah supplier <name> wa <number>.')}</div>`;
+}
+function supplierFormHtml(){
+  // Same POST /v1/suppliers the chat command uses: name required, contact
+  // optional; the server rejects owner-linked phones and duplicate names.
+  return `<form id="supplier-form" class="whatsapp-composer"><label class="sr-only" for="supplier-name">${t('Nama supplier','Supplier name')}</label><input id="supplier-name" placeholder="${t('Nama supplier','Supplier name')}" maxlength="100" required><label class="sr-only" for="supplier-phone">${t('Nomor kontak (opsional)','Contact number (optional)')}</label><input id="supplier-phone" placeholder="${t('Nomor kontak, mis. 628123456789 (opsional)','Contact number, e.g. 628123456789 (optional)')}" maxlength="15" inputmode="numeric"><label class="sr-only" for="supplier-platform">${t('Platform','Platform')}</label><select id="supplier-platform" aria-label="${t('Platform','Platform')}"><option value="whatsapp">WhatsApp</option><option value="telegram">Telegram</option></select><label class="sr-only" for="supplier-notes">${t('Catatan (opsional)','Notes (optional)')}</label><input id="supplier-notes" placeholder="${t('Catatan (opsional)','Notes (optional)')}" maxlength="300"><button class="button primary" type="submit" ${supplierState.addBusy?'disabled':''}>${t('Tambah supplier','Add supplier')}</button></form><div id="supplier-error" class="notice error" role="alert" hidden></div>`;
+}
+async function addSupplier(name, phone, platform, notes){
+  if(supplierState.addBusy)return;supplierState.addBusy=true;showError('supplier-error','');
+  try{
+    await api('/v1/suppliers',{method:'POST',body:{name,contact_phone:phone||null,contact_platform:phone?platform:null,notes:notes||null},key:newId()});
+    supplierState.loaded=false;await loadSupplierOverview();toast(t('Supplier ditambahkan.','Supplier added.'));
+  }
+  catch(error){showError('supplier-error',error.message);}
+  finally{supplierState.addBusy=false;const button=document.querySelector('#supplier-form button[type="submit"]');if(button)button.disabled=false;}
 }
 function bestPriceRowsHtml(){
   const quotes=supplierState.data?.quotes||[];
@@ -1231,7 +1344,7 @@ function latestQuoteRowsHtml(){
 function suppliersPage(){
   if(supplierState.loading && !supplierState.loaded)return `<section class="panel"><div class="empty">${t('Memuat data supplier…','Loading supplier data…')}</div></section>`;
   if(supplierState.error)return `<section class="panel"><div class="notice error" role="alert">${e(supplierState.error)}</div><button class="button" data-action="reload-suppliers">${t('Coba lagi','Try again')}</button></section>`;
-  return `<section class="panel">${panelHeading(t('Supplier terdaftar','Registered suppliers'),t('Dibuat otomatis dari pembelian atau lewat chat.','Created automatically from purchases or through chat.'))}${supplierRowsHtml()}</section><section class="panel">${panelHeading(t('Harga terbaik per bahan','Best price per ingredient'),t('Dari kutipan supplier terbaru. Bandingkan sebelum membeli.','From the latest supplier quotes. Compare before you buy.'))}${bestPriceRowsHtml()}</section><section class="panel">${panelHeading(t('Kutipan harga terbaru','Latest price quotes'),t('15 kutipan terakhir dari semua supplier.','15 latest quotes across suppliers.'))}${latestQuoteRowsHtml()}<div class="panel-note">${t('Minta harga baru lewat chat: tanya harga <bahan> ke supplier.','Request fresh prices through chat: tanya harga <ingredient> ke supplier.')}</div></section>`;
+  return `<section class="panel">${panelHeading(t('Supplier terdaftar','Registered suppliers'),t('Dibuat otomatis dari pembelian, lewat chat, atau formulir ini.','Created automatically from purchases, through chat, or with this form.'))}${supplierRowsHtml()}${supplierFormHtml()}</section><section class="panel">${panelHeading(t('Harga terbaik per bahan','Best price per ingredient'),t('Dari kutipan supplier terbaru. Bandingkan sebelum membeli.','From the latest supplier quotes. Compare before you buy.'))}${bestPriceRowsHtml()}</section><section class="panel">${panelHeading(t('Kutipan harga terbaru','Latest price quotes'),t('15 kutipan terakhir dari semua supplier.','15 latest quotes across suppliers.'))}${latestQuoteRowsHtml()}<div class="panel-note">${t('Minta harga baru lewat chat: tanya harga <bahan> ke supplier.','Request fresh prices through chat: tanya harga <ingredient> ke supplier.')}</div></section>`;
 }
 async function loadSalesInsights(days){
   const target=Number(days)||insightsState.days;

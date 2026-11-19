@@ -337,14 +337,14 @@ test('admin row data attributes drive the detail navigation',()=>{
   assert.match(h.element('#content').innerHTML,/Connected WhatsApp numbers|Nomor WhatsApp terhubung/);
 });
 
-test('review warnings are deduplicated and capped at four visible details',()=>{
+test('review keeps every distinct warning visible',()=>{
   const h=harness();
   h.run(`state.data={ingredients:[]};state.draft={version:1,status:'recorded',items:[],supplier:null,source_text:'demo',warnings:['First warning','First warning','Second warning','Third warning','Fourth warning','Fifth warning']};renderReview()`);
   const html=h.element('#review-content').innerHTML;
   assert.equal((html.match(/First warning/g)||[]).length,1);
   assert.ok(html.includes('Fourth warning'));
-  assert.ok(!html.includes('Fifth warning'));
-  assert.ok(html.includes('Review the fields above for the remaining details.'));
+  assert.ok(html.includes('Fifth warning'));
+  assert.ok(!html.includes('Review the fields above for the remaining details.'));
 });
 
 test('ingredient combo resolves catalog matches and keeps typed new names',()=>{
@@ -377,28 +377,86 @@ test('review editor prefills mapped names and leaves new rows blank',()=>{
   assert.ok(!html.includes('value="Unmatched item"'));
 });
 
-test('daily spend chart scales bars to the max and labels dates', () => {
+test('daily spend bars expose localized dates and amounts, with visible values only for nonzero days', () => {
   const {run} = harness();
-  const html = run(`dailySpendChart([{date:'2026-11-01', total_idr: 50000},{date:'2026-11-02', total_idr: 100000}])`);
+  const chart = `dailySpendChart([
+    {date:'2026-11-01', total_idr: 50000},
+    {date:'2026-11-02', total_idr: 100000},
+    {date:'2026-11-03', total_idr: 0}
+  ])`;
+  const html = run(chart);
   assert.match(html, /height:50%/);
   assert.match(html, /height:100%/);
-  assert.match(html, /title="2026-11-02 · Rp100\.000"/);
-  assert.match(html, /2026-11-01/);
+  assert.match(html, /height:0%/);
+  assert.match(html, /aria-label="2 November 2026 · Rp100\.000"/);
+  assert.match(html, /aria-label="3 November 2026 · Rp0"/);
+  assert.equal((html.match(/class="chart-value(?: chart-value-peak)?"/g) || []).length, 2);
+  assert.match(html, /class="chart-date"[^>]*>01<\/small>/);
+  run("LANG='id'");
+  assert.match(run(`dailySpendChart([{date:'2026-08-02',total_idr:1}])`), /aria-label="2 Agustus 2026 · Rp1"/);
 });
 
-test('ingredient spend chart lists names with amounts', () => {
+test('small charts show only the first peak value and keep labels horizontal', () => {
   const {run} = harness();
-  const html = run(`ingredientSpendChart([{name:'Cabai merah', total_idr: 100000},{name:'Bawang merah', total_idr: 50000}])`);
-  assert.match(html, /Cabai merah/);
-  assert.match(html, /Rp100\.000/);
+  const html = run(`dailySpendChart([
+    {date:'2026-11-01',total_idr:50000},
+    {date:'2026-11-02',total_idr:100000},
+    {date:'2026-11-03',total_idr:100000}
+  ])`);
+  assert.equal((html.match(/chart-value-peak/g) || []).length, 1);
+  assert.match(html, /aria-label="2 November 2026 · Rp100\.000"[^>]*><\/div>\s*<span class="chart-value chart-value-peak"/);
+  assert.doesNotMatch(run(`dailySpendChart([{date:'2026-11-01',total_idr:0}])`), /chart-value/);
+  const css = fs.readFileSync('frontend/styles.css','utf8');
+  const mobile = css.split('@media (max-width:480px) {')[1].split('.hbars')[0];
+  assert.match(mobile, /\.chart-value\s*\{\s*display:none/);
+  assert.match(mobile, /\.chart-value-peak[^{}]*\{[^{}]*display:block/);
+  for (const rule of css.match(/[^{}]*\.chart-value[^{}]*\{[^{}]*\}/g)) {
+    assert.doesNotMatch(rule, /writing-mode|rotate/);
+  }
+});
+
+test('ingredient spend shows escaped names, amounts, and shares of the displayed total', () => {
+  const {run} = harness();
+  const chart = `ingredientSpendChart([{name:'<b>Cabai merah</b>', total_idr:100000},{name:'Bawang merah', total_idr:50000}])`;
+  const html = run(chart);
+  assert.match(html, /&lt;b&gt;Cabai merah&lt;\/b&gt;/);
+  assert.match(html, /Rp100\.000 <small>66\.7%/);
+  assert.match(html, /Rp50\.000 <small>33\.3%/);
   assert.match(html, /width:100%/);
   assert.match(html, /width:50%/);
+  run("LANG='id'");
+  assert.match(run(chart), /66,7%/);
+  assert.match(run(`ingredientSpendChart([{name:'Cabai',total_idr:0}])`), /<small>0%/);
 });
 
-test('empty chart data renders a friendly empty state', () => {
+test('both charts localize their empty state', () => {
   const {run} = harness();
-  assert.match(run(`dailySpendChart([])`), /Belum ada data grafik/);
-  assert.match(run(`ingredientSpendChart(null)`), /Belum ada data grafik/);
+  for (const chart of ['dailySpendChart([])', 'ingredientSpendChart(null)']) {
+    run("LANG='id'");
+    assert.match(run(chart), /Belum ada data grafik/);
+    run("LANG='en'");
+    assert.match(run(chart), /No chart data yet/);
+  }
+});
+
+test('activity localizes audit events and escapes original messages for unknown events', () => {
+  const {run} = harness();
+  const feed = `activityRows([
+    {event:'purchase_recorded',message:'Purchase recorded for Rp 150,000; received stock added. Payment status unknown.'},
+    {event:'draft_edited',message:'Draft reviewed and edited.'},
+    {event:'whatsapp_message_processed',message:'WhatsApp message processed: media_unsupported.'},
+    {event:'future_event',message:'<img src=x>'}
+  ])`;
+  run("LANG='id'");
+  const id = run(feed);
+  assert.match(id, /Pembelian Rp150\.000 dicatat/);
+  assert.match(id, /Draf ditinjau dan diedit/);
+  assert.match(id, /Foto\/audio belum bisa diproses/);
+  assert.doesNotMatch(id, /Purchase recorded|Draft reviewed|<img/);
+  assert.match(id, /&lt;img src=x&gt;/);
+  run("LANG='en'");
+  assert.match(run(feed), /Purchase of Rp150\.000 recorded/);
+  assert.match(run(feed), /Draft reviewed and edited/);
 });
 
 test('api calls send the ngrok skip header and report non-JSON gateway pages clearly', async () => {
@@ -520,4 +578,108 @@ test('backend warnings localize to Indonesian on the ID interface',()=>{
   assert.equal(h.run(`localizeWarning('Unit is missing; choose a supported unit or pack.')`),'Satuan tidak ada; pilih satuan atau kemasan yang didukung.');
   // Unknown free-form text passes through rather than being mangled.
   assert.equal(h.run(`localizeWarning('Some vendor note: something unmapped.')`),'Some vendor note: something unmapped.');
+});
+
+test('approved tokens ship before styles and the translated dashboard scripts', () => {
+  const tokens = fs.readFileSync('frontend/tokens.css');
+  assert.equal(crypto.createHash('sha256').update(tokens).digest('hex'), '87b57d13a1cfb96aecda44d57164953d2402b07d7b235deaf856bd90e7a92e25');
+  const html = fs.readFileSync('frontend/index.html', 'utf8');
+  assert.match(html, /\/assets\/tokens\.css[^]*\/assets\/styles\.css[^]*\/assets\/i18n\.js[^]*\/assets\/app\.js/);
+  // The native dashboard plugin lives at deploy/atoms/frontend/plugins/ in the
+  // dev repository and at app/frontend/plugins/ in the Atoms deploy checkout;
+  // resolve whichever layout this checkout is, so the packaged suite passes.
+  const pluginPath = ['deploy/atoms/frontend/plugins/restopilot-dashboard.ts', '../../frontend/plugins/restopilot-dashboard.ts'].find(p => fs.existsSync(p));
+  assert.ok(pluginPath, 'native restopilot-dashboard plugin not found in either known layout');
+  const plugin = fs.readFileSync(pluginPath, 'utf8');
+  assert.ok(plugin.includes("'/assets/tokens.css': { file: path.join(frontendDir, 'tokens.css')"));
+  assert.match(plugin, /generateBundle\(\)[^]*Object.entries\(allAssets\(\)\)[^]*this.emitFile/);
+});
+
+test('base typography consumes approved tokens and preserves the legacy canvas', () => {
+  const css = fs.readFileSync('frontend/styles.css', 'utf8');
+  assert.ok(css.includes('font-family:var(--font-display)'));
+  assert.ok(css.includes('--legacy-paper:#f6f7f2'));
+  assert.ok(css.includes('--green-dark:var(--ink)'));
+});
+
+test('dialogs and primary actions share the approved dimensions', () => {
+  const css = fs.readFileSync('frontend/styles.css', 'utf8');
+  assert.match(css, /dialog \{ border-radius:var\(--modal-radius\); padding:var\(--modal-inset\)/);
+  assert.match(css, /\.button\.primary, \.login-submit \{ min-height:var\(--button-min-height\)/);
+});
+
+test('approval badge belongs to its icon and the four owner destinations remain available', () => {
+  const html = fs.readFileSync('frontend/index.html', 'utf8');
+  assert.match(html, /id="nav-approvals"[^]*?<\/svg><span id="nav-count"[^]*?<\/span><\/span>/);
+  for (const page of ['overview', 'approvals', 'inventory', 'more']) assert.ok(html.includes('data-page="'+page+'"'));
+});
+
+test('overview keeps scoped stock estimates and flexible two-column phone metrics', () => {
+  const h = harness();
+  h.run("state.data={metrics:{low_stock_count:9},restaurant:{name:'Test'}}");
+  assert.match(h.run('overview()'), /Low stock[^]*?>9<[^]*?Based on estimated inventory/);
+  const css = fs.readFileSync('frontend/styles.css','utf8');
+  assert.match(css, /\.metrics \{ grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+});
+
+test('overview puts actionable drafts and low stock ahead of trends, and leads with trends when clear', () => {
+  const h=harness();
+  h.run(`state.data={metrics:{low_stock_count:1},drafts:[
+    {id:'draft',status:'pending_approval',items:[{raw_name:'<Cabai>',quantity:3,unit:'kg'}],total_idr:150000}
+  ],inventory:[{name:'<Beras>',quantity:8,unit:'kg',low_stock:true},{name:'Telur',quantity:40,unit:'pcs',low_stock:false}]}`);
+  h.run("window.setLang('id')");
+  const html=h.run('overview()');
+  const [review, stock, charts]=['Perlu ditinjau','Stok menipis','class="charts-grid"'].map(text => html.indexOf(text));
+  assert.ok(review>=0 && review<stock && stock<charts);
+  assert.match(html.slice(review,stock), /&lt;Cabai&gt;[^]*Rp150\.000/);
+  assert.match(html.slice(stock,charts), /&lt;Beras&gt; tersisa 8 kg[^]*href="#inventory">Cek stok/);
+  assert.doesNotMatch(html.slice(stock,charts), /Telur/);
+  h.run("window.setLang('en'); state.data.drafts=[]");
+  const stockOnly=h.run('overview()');
+  assert.match(stockOnly, /Running low[^]*Check stock[^]*14-day spending/);
+  assert.doesNotMatch(stockOnly, /Needs review/);
+  h.run("state.data.inventory=[]");
+  const calm=h.run('overview()');
+  assert.match(calm, /^<div class="charts-grid"/);
+  assert.doesNotMatch(calm, /overview-priorities/);
+});
+
+test('every draft warning is visible and escaped before the decision buttons', () => {
+  const h = harness();
+  const html = h.run("draftCard({id:'d',items:[],warnings:['a','b','c','d','<flag>'],status:'pending_approval'})");
+  assert.ok(html.indexOf('&lt;flag&gt;') >= 0 && html.indexOf('&lt;flag&gt;') < html.indexOf('data-approve'));
+  h.run("window.setLang('id')");
+  assert.match(h.run('recipeLine()'), /Jumlah per porsi/);
+});
+test('landing preserves its bilingual copy and groups the entry action before proof', () => {
+  const html = fs.readFileSync('landing/index.html','utf8');
+  assert.match(html, /data-i18n="hero.title"[^]*?data-i18n-html="hero.lede"[^]*?class="hero-actions"[^]*?class="hero-channels"[^]*?class="trust-strip"/);
+  const hero = html.slice(html.indexOf('<section class="hero">'), html.indexOf('<!-- ================= PROBLEM'));
+  assert.match(hero, /hero-actions[^]*demo\.message[^]*demo\.draft[^]*demo\.recorded[^]*demo\.reassurance/);
+  assert.equal((hero.match(/class="chat-message /g) || []).length, 3);
+  assert.match(hero, /Contoh: Bukti harga/);
+  assert.match(html, /Sample: Price evidence/);
+  assert.match(html, /Contoh: Peringatan stok/);
+  assert.match(html, /Sample: Proactive alert/);
+  assert.ok(html.includes('Asisten AI'));
+  assert.ok(html.indexOf('/assets/tokens.css') < html.indexOf('/landing-assets/styles.css'));
+});
+
+test('supplier page offers the add form and posts to /v1/suppliers', async () => {
+  const calls=[];
+  const h=harness({fetchImpl:(path,options={})=>{
+    calls.push({path,options});
+    return Promise.resolve({ok:true,json:()=>Promise.resolve({data:{suppliers:[],quotes:[]}})});
+  }});
+  h.run(`state.user={role:'owner',restaurant_id:'r1'};state.page='';supplierState.data={suppliers:[],quotes:[]}`);
+  const page=h.run('suppliersPage()');
+  assert.ok(page.includes('id="supplier-form"'));
+  assert.ok(page.includes('Add supplier'));
+  assert.ok(page.includes('WhatsApp') && page.includes('Telegram'));
+  assert.ok(page.includes('Add using the form below'));
+  await h.run(`addSupplier('Toko Jaya','628111000222','whatsapp','kirim pagi')`);
+  const post=calls.find(call=>call.options.method==='POST');
+  assert.ok(post && post.path==='/v1/suppliers');
+  assert.deepEqual(JSON.parse(post.options.body),{name:'Toko Jaya',contact_phone:'628111000222',contact_platform:'whatsapp',notes:'kirim pagi'});
+  assert.ok(post.options.headers['Idempotency-Key']);
 });

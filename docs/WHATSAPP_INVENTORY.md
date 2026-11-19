@@ -2,6 +2,57 @@
 
 ## Current release
 
+Published on 2026-11-19 as **Atoms v49 "Token Stylesheet Packaging Fixed"** on the
+existing https://restopilot-dashboard.pub.atoms.world/ domain, from source
+`b0c76d6ab9258af103d22bd794222805fe7784e8` (main). The release carries the
+stock & supplier assistant integration pass: payment follow-ups auto-create the
+tenant-scoped suppliers entity and link `purchases.supplier_id` on both stores,
+the payment prompt lists numbered suppliers (`lunas dari toko N`), the
+proactive alert keeps the cheapest-supplier hint under model phrasing,
+`last_purchase_unit_prices` reads the decimal-string prices that `_normalize`
+stores, forecast answers name the cheapest supplier, purchase messages capture
+a trailing named-place supplier ("... 200ribu toko abadi") and a strict
+"dari <name>" pattern stays authoritative, supplier chat formatting is
+consistent, `supplier_for_phone` resolves shared cross-tenant phones
+deterministically, the dashboard supplier page gained an add-supplier form,
+and the UI-repair chain (#100/#91/#101/#102) design tokens landed with an
+equivalent native plugin fix (`/assets/tokens.css` ASSETS entry, one added
+line; native md5 `e29ed529…` → `caea7a5c…`).
+
+No migration was required; none was applied or replayed (0001–0010 unchanged).
+
+Sync executed inside Atoms from the pinned public codeload archive
+(zip sha256 `023dab1cc24d0b759326467dae8048bc08118729a94c7f991546810c451b29d8`);
+19 tracked files copied byte-identically into
+`app/deploy/restopilot-integration/`, the native backend sync script re-vendored
+all 36 service modules, and `SOURCE_COMMIT`/`restopilot-release.json` were
+updated. Launcher, router, Vite plugin paths, `.runtime-ports.json` and API
+shim were preserved unchanged.
+
+Checks: Atoms backend suite **839 passed / 1 failed / 64 skipped** — the single
+failure (`test_menu_insights::test_revenue_wordings_reach_the_engine`) is
+timezone-dependent (passes with `TZ=Asia/Jakarta`, fails on a UTC runner) and
+environment-only; frontend **50 passed / 0 failed**; native lint/build passed
+with `tokens.css?v=20261119b` loading before `styles.css` and `app.js` in
+`app.html`. Public verification confirmed: `/` serves the landing with the
+"Asisten AI" copy, `/app.html` 200 with that asset order,
+`/landing-assets/styles.css` 200, `/assets/tokens.css` 200 with sha256
+`87b57d13a1cfb96aecda44d57164953d2402b07d7b235deaf856bd90e7a92e25` (byte-equal
+to the reviewed source), live `app.js` contains the new supplier form string,
+signed-out `/api/v1/auth/me` returns 401, default `admin/admin123` is rejected,
+`/api/v1/restopilot/health/live` and `/health/ready` return 200 with
+`storage: supabase`, and owner login + inventory readback on the live domain
+returned 200 (2 recipes, 3 events, 18 forecasts, 3 settings). Nothing was
+written to business tables and no outbound WhatsApp message was sent.
+
+Material limitation: the Atoms platform exposes no published-version readout,
+so "v49 is live" rests on byte-matched live assets plus the passing public
+checks rather than a platform label. The v48 save (b0c76d6 without the plugin
+fix) was never published; publishing happened through the Update flow after the
+v49 save.
+
+## Previous release — Atoms V13 (2026-11-05)
+
 Published on 2026-11-05 as **Atoms V13**, containing Version 11's features with
 the translation and restaurant-isolation corrections, on the existing
 https://restopilot-dashboard.pub.atoms.world/ domain. Application import:

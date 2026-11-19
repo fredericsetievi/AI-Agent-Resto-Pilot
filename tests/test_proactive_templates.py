@@ -135,3 +135,49 @@ def test_send_template_requires_a_configured_name():
         import asyncio
         asyncio.run(send_template("token", "222222", "v23.0", "628123456789", "  ", "id", ["facts"]))
     assert raised.value.status == 503
+
+
+def test_supplier_hint_survives_model_phrasing(tmp_path):
+    """The cheapest-source hint is ledger facts, not phrasing: it must stay
+    attached even when the model rewrites the alert body (the refill plan
+    already did; the hint used to vanish on a successful rewrite)."""
+    import json
+
+    from test_stock_answer import FakeStockClient, completion
+
+    class EchoFactsClient(FakeStockClient):
+        """Builds its reply from the facts in the request so the strict
+        number validation always passes, whatever the seed contains."""
+        async def post(self, url, *, headers, json):
+            self.calls.append({"url": url, "headers": headers, "json": json})
+            content = json["messages"][0]["content"]
+            facts_json = content.split("Low-stock facts (JSON):", 1)[1].split("Owner's rules", 1)[0].strip()
+            facts = json_module.loads(facts_json)
+            return completion("Cek stok: " + "; ".join(
+                f"{f['name']} tinggal {f['quantity']} {f['unit']} (ambang {f['threshold']} {f['unit']})"
+                for f in facts) + ".")
+
+    json_module = json
+    fake_llm = EchoFactsClient()
+    fake = FakeGraphClient(content_json=None)
+    client = owner_client(tmp_path, **META, meta_http_client=fake,
+                          whatsapp_alert_template="restopilot_low_stock",
+                          whatsapp_alert_template_lang="id",
+                          vision_api_key="synthetic-stepfun-key",
+                          stock_llm_enabled=True,
+                          stock_llm_http_client=fake_llm)
+    store = client.app.state.store
+    # One recorded purchase keeps cabai low (3 + 1 = 4 kg < threshold 5) and
+    # gives the hint a purchase-price baseline from 'Pasar Pagi'.
+    store.whatsapp_ingest(uuid4().hex, {"sender": SENDER, "text": "beli cabai 1 kg 50rb dari pasar pagi"})
+    store.whatsapp_ingest(uuid4().hex, {"sender": SENDER, "text": "ya"})
+    store.whatsapp_ingest(uuid4().hex, {"sender": SENDER, "text": "lewati"})
+    result = client.post("/v1/notifications/check").json()["data"]
+    body = result["body"]
+    assert body.startswith("Cek stok:"), body      # the model phrasing was used
+    assert "Cabai merah" in body and "4 kg" in body, body
+    # Supplier hint kept: cheapest known source comes from the purchase ledger.
+    assert "termurah" in body and "pasar pagi" in body, body
+    # Refill plan kept, and the estimate now reads the string-stored unit price.
+    assert "beli ±1 kg (~Rp50.000)" in body, body
+    assert len(fake_llm.calls) == 1

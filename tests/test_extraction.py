@@ -220,6 +220,29 @@ def test_trailing_dari_clause_becomes_supplier():
     # No supplier clause: the result stays exactly as before.
     assert "supplier" not in extract_purchase("beli cabai 3 kg 150rb")
 
+
+def test_trailing_named_place_clause_becomes_supplier():
+    """'beli cabai 5kg 200ribu toko abadi' names the seller without 'dari'.
+
+    Strict by design: a supplier noun must open the trailing clause, only
+    letters may follow, and the clause must close the line.
+    """
+    result = extract_purchase("beli cabai 5 kg 200ribu toko abadi")
+    assert result["supplier"] == "toko abadi"
+    assert result["warnings"] == []
+    assert result["items"][0]["quantity"] == "5"
+
+    assert extract_purchase("beli telur 2 kg 60rb bu siti")["supplier"] == "bu siti"
+    assert extract_purchase("beli cabai 5 kg 200ribu Toko Abadi.")["supplier"] == "Toko Abadi"
+    # 'dari' keeps priority when both shapes are present.
+    assert extract_purchase("beli cabai 5 kg 200ribu toko abadi dari pasar pagi")["supplier"] == "pasar pagi"
+    # A bare noun without a name word is never a supplier.
+    assert "supplier" not in extract_purchase("beli gula 1 kg 15rb pasar")
+    # A brand-style item tail without a supplier noun is never a supplier.
+    assert "supplier" not in extract_purchase("beli kopi 1 saset 5rb kopi kapal api")
+    # Mid-line clauses (no comma) stay untouched; the tail ends with a price.
+    assert "supplier" not in extract_purchase("cabai 5kg 200ribu toko abadi telur 2kg 60rb")
+
     # The clause is stripped per line; the first named supplier wins.
     multi = extract_purchase("beli cabai 3 kg 150rb dari Bu Sari\nbeli telur 1 kg 30rb")
     assert [item["ingredient_id"] for item in multi["items"]] == ["cabai", "telur"]

@@ -86,7 +86,7 @@ class OperationsMixin:
                 else:
                     line += " (tanpa pengurangan stok)"
                 if event.get("revenue_idr") is not None:
-                    line += f"; pendapatan Rp{event['revenue_idr']:,}"
+                    line += "; pendapatan " + f"Rp{event['revenue_idr']:,}".replace(",", ".")
                 lines.append(line)
             else:
                 lines.append(f"• {event['kind']}: {name}")
@@ -99,7 +99,7 @@ class OperationsMixin:
                     lines.append(f"  {sold} × {per} = {item.get('planned_quantity',item['quantity'])} {unit} {item['ingredient_id']}")
                 lines.append(f"  {item['ingredient_id']}: {item['before']} → {item['after']} {unit} (perubahan {item['delta']})")
         if candidate.get("revenue_idr") is not None and len(candidate.get("lines", [])) > 1:
-            lines.append(f"Total pendapatan laporan Rp{candidate['revenue_idr']:,}; dicatat sekali.")
+            lines.append("Total pendapatan laporan " + f"Rp{candidate['revenue_idr']:,}".replace(",", ".") + "; dicatat sekali.")
         lines.append("Cakupan: " + (candidate.get("coverage") or "belum diberi nama"))
         for package in op.get('packages',[]):
             lines.append(f"Ukuran kemasan {package['ingredient_id']}: 1 {package['package_name']} = {package['quantity']} {op.get('units',{}).get(package['ingredient_id'],'')} (versi {package['version']}; {'ditetapkan saat konfirmasi' if package.get('explicit') else 'tersimpan'}).")
@@ -319,8 +319,19 @@ class OperationsMixin:
                     return prior_purchase
         forecast_question = not candidate and bool(re.search(r'\breorder\b|\b(?:perlu|harus|kapan)\b.*\b(?:pesan|dipesan|beli)\b|\b(?:stok|bahan)\b.*\bberapa hari\b|\bcukup berapa\b',command))
         if forecast_question:
+            from .suppliers import supplier_alert_hint
             workspace = self._inventory_workspace_conn(conn, tenant)
             text = 'Perkiraan stok (berdasarkan laju harian yang dikonfirmasi):\n' + '\n'.join(f"• {f['ingredient_id']}: " + (f"{f['days_left']} hari; pesan dalam {f['reorder_in_days']} hari ({f['source']})." if f.get('days_left') else 'riwayat/laju harian belum cukup.') for f in workspace['forecasts'][:30])
+            # Cross into the supplier ledger: ingredients to reorder now come
+            # with the cheapest known source, the same hint alerts carry.
+            reorder = [f for f in workspace['forecasts'] if f.get('status') == 'reorder_now']
+            if reorder:
+                names = {i["id"]: i["name"] for i in self._catalog_for(tenant)["list"]}
+                hint = supplier_alert_hint(self, tenant, [
+                    {"ingredient_id": f["ingredient_id"], "name": names.get(f["ingredient_id"], f["ingredient_id"])}
+                    for f in reorder], conn=conn)
+                if hint:
+                    text += "\n" + hint
             return {'reply':text,'result':{'action':'operation_forecast'}}
         from .whatsapp import is_stock_question
         if active and not candidate and is_stock_question(text) and (command.startswith(('berapa','apa','cek','stok','stock')) or command.endswith('?')):

@@ -115,6 +115,13 @@ _SOURCE_ONLY_MODIFIERS = re.compile(
 )
 _CURRENCY_MARKER = re.compile(r"(?i)\brp\s*[\d.,]+\s*$")
 _MULTI_CLAUSE = re.compile(r"(?i)\b(?:dan|lalu|kemudian|serta)\b")
+# A trailing named-place clause without 'dari' ("beli cabai 5 kg 200rb toko
+# abadi") also names the supplier. Strict on purpose: a supplier noun must
+# open the clause, only letters may follow, and the clause must close the
+# line — quantities, prices, and item names are never eaten.
+_SUPPLIER_PLACE_SUFFIX = re.compile(
+    r"(?i)\s+(?P<supplier>(?:toko|warung|pasar|supplier|pemasok|bu|pak|mbak|mas)\s+"
+    r"[a-z][a-z.\-']*(?:\s+[a-z][a-z.\-']*){0,3})[.!?,]*\s*$")
 # Trailing "dari <name>" names the supplier ("beli garam 1 kg 10rb dari Toko
 # Sebelah"). The name must start with a letter so trailing prices never match.
 _SUPPLIER_SUFFIX = re.compile(r"(?i)\s+dari\s+(?P<supplier>[a-z][^,;\r\n]{0,59})\s*$")
@@ -803,6 +810,15 @@ def extract_purchase(text: str) -> dict[str, Any]:
         if supplier_match:
             candidate = supplier_match.group("supplier").strip().rstrip(".,!:")
             line = line[: supplier_match.start()].rstrip()
+            if supplier is None and candidate:
+                supplier = candidate
+        # Same position, without 'dari': a strict trailing named-place clause
+        # ("... 200rb toko abadi", "... 50rb bu siti"). Checked after 'dari'
+        # and only when the clause closes the line, so item text is untouched.
+        place_match = _SUPPLIER_PLACE_SUFFIX.search(line)
+        if place_match:
+            candidate = place_match.group("supplier").strip().rstrip(".,!:")
+            line = line[: place_match.start()].rstrip()
             if supplier is None and candidate:
                 supplier = candidate
         if not line:

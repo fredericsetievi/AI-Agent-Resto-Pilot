@@ -374,3 +374,108 @@ def test_daftar_belanja_when_stock_is_healthy_answers_honestly(tmp_path):
     response = ingest(store, "daftar belanja pasar")
     assert action(response) == "shopping_empty"
     assert "di atas ambang" in reply(response)
+
+
+def test_payment_followup_creates_supplier_entity_and_links_id(tmp_path):
+    """A seller named in the lunas/utang follow-up becomes a real tenant
+    supplier entity linked via supplier_id — the ledger name alone is not
+    enough ('lunas dari Toko X' used to leave the suppliers table empty)."""
+    store, rid = fresh_store(tmp_path, "followup_entity.sqlite3")
+    first = ingest(store, "beli cabai 2 kg 100rb", restaurant=rid)
+    assert first["result"]["action"] == "draft_created", reply(first)
+    approved = ingest(store, "ya")
+    assert approved["result"]["action"] == "approved", reply(approved)
+    followup = ingest(store, "lunas dari Toko Sayur Segar Abadi")
+    assert "Penjual: Toko Sayur Segar Abadi (pemasok baru)" in reply(followup)
+    suppliers = store.suppliers_list(rid)
+    assert [s["name"] for s in suppliers] == ["Toko Sayur Segar Abadi"]
+    with store.transaction() as conn:
+        row = conn.execute("SELECT supplier, supplier_id, body FROM purchases WHERE id=?",
+                           (approved["result"]["purchase_id"],)).fetchone()
+    assert row[0] == "Toko Sayur Segar Abadi"
+    assert row[1] == suppliers[0]["id"]
+    assert json.loads(row[2])["payment_status"] == "paid"
+    assert suppliers[0]["purchase_count"] == 1
+
+
+def test_followup_numbered_reply_resolves_restaurant_list(tmp_path):
+    """'lunas dari toko 2' resolves against this restaurant's own list in the
+    exact order the approved reply shows."""
+    store, rid = fresh_store(tmp_path, "followup_number.sqlite3")
+    ingest(store, "tambah supplier Toko Amanah", restaurant=rid)
+    ingest(store, "tambah supplier Bu Siti", restaurant=rid)
+    first = ingest(store, "beli cabai 2 kg 100rb", restaurant=rid)
+    assert first["result"]["action"] == "draft_created", reply(first)
+    approved = ingest(store, "ya")
+    prompt = reply(approved)
+    assert "1. Bu Siti" in prompt and "2. Toko Amanah" in prompt
+    followup = ingest(store, "lunas dari toko 2")
+    assert "Penjual: Toko Amanah" in reply(followup)
+    target = next(s for s in store.suppliers_list(rid) if s["name"] == "Toko Amanah")
+    with store.transaction() as conn:
+        supplier_id = conn.execute("SELECT supplier_id FROM purchases WHERE id=?",
+                                   (approved["result"]["purchase_id"],)).fetchone()[0]
+    assert supplier_id == target["id"]
+
+
+def test_followup_unknown_number_keeps_offer_open(tmp_path):
+    """A number outside the list must not consume the follow-up offer."""
+    store, rid = fresh_store(tmp_path, "followup_badnum.sqlite3")
+    ingest(store, "tambah supplier Toko Amanah", restaurant=rid)
+    ingest(store, "beli cabai 2 kg 100rb", restaurant=rid)
+    ingest(store, "ya")
+    bad = ingest(store, "lunas dari toko 5")
+    assert action(bad) == "supplier_index_unknown", reply(bad)
+    assert "tidak ada di daftar" in reply(bad) and "1. Toko Amanah" in reply(bad)
+    good = ingest(store, "lunas dari toko 1")
+    assert "catatan diperbarui" in reply(good)
+    assert "Toko Amanah" in reply(good)
+
+
+def test_supplier_lists_are_tenant_scoped(tmp_path):
+    """Resto A never sees resto B's suppliers: each list, quote and count is
+    scoped to its own restaurant."""
+    store = Store(tmp_path / "scoped.sqlite3")
+    created_a = store.create_restaurant(uuid4().hex, {
+        "name": "Resto A", "owner_username": "ownera" + uuid4().hex[:6],
+        "owner_password": "rahasia-123", "whatsapp_number": SENDER,
+    })
+    created_b = store.create_restaurant(uuid4().hex, {
+        "name": "Resto B", "owner_username": "ownerb" + uuid4().hex[:6],
+        "owner_password": "rahasia-123", "whatsapp_number": "628888000222",
+    })
+    rid_a, rid_b = created_a["id"], created_b["id"]
+    ingest(store, "tambah supplier Toko Khusus A", restaurant=rid_a)
+    ingest(store, "beli cabai 2 kg 100rb dari pasar a", restaurant=rid_a)
+    ingest(store, "ya", restaurant=rid_a)
+    ingest(store, "lewati", restaurant=rid_a)
+    assert [s["name"] for s in store.suppliers_list(rid_a)] == ["Toko Khusus A", "pasar a"]
+    assert store.suppliers_list(rid_b) == []
+    # B records its own purchase; with the follow-up offer open, a numbered
+    # reply must resolve against B's empty list — never A's suppliers.
+    ingest(store, "beli telur 1 kg 20rb", sender="628888000222", restaurant=rid_b)
+    ingest(store, "ya", sender="628888000222", restaurant=rid_b)
+    followup_b = ingest(store, "lunas dari toko 1", sender="628888000222", restaurant=rid_b)
+    assert action(followup_b) == "supplier_index_unknown", reply(followup_b)
+    assert "Belum ada supplier terdaftar" in reply(followup_b)
+    assert "Toko Khusus A" not in reply(followup_b)
+
+
+def test_supplier_phone_shared_across_restaurants_routes_deterministically(tmp_path):
+    """One market supplier phone may serve two restaurants; reply routing
+    resolves to the first registration every time, never an arbitrary row."""
+    store = Store(tmp_path / "shared_phone.sqlite3")
+    created_a = store.create_restaurant(uuid4().hex, {
+        "name": "Resto Satu", "owner_username": "one" + uuid4().hex[:6],
+        "owner_password": "rahasia-123", "whatsapp_number": SENDER,
+    })
+    created_b = store.create_restaurant(uuid4().hex, {
+        "name": "Resto Dua", "owner_username": "two" + uuid4().hex[:6],
+        "owner_password": "rahasia-123", "whatsapp_number": "628888000333",
+    })
+    phone = "628111000999"
+    store.supplier_add(uuid4().hex, {"name": "Pak Budi", "contact_phone": phone}, created_a["id"])
+    store.supplier_add(uuid4().hex, {"name": "Pak Budi Cabang 2", "contact_phone": phone}, created_b["id"])
+    routed = store.supplier_for_phone(phone)
+    assert routed["restaurant_id"] == created_a["id"] and routed["name"] == "Pak Budi"
+    assert store.supplier_for_phone(phone) == routed  # stable across calls
