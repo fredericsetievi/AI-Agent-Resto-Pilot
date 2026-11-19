@@ -393,10 +393,77 @@ function relativeDay(value) {
   return new Intl.DateTimeFormat(LANG==='en'?'en-GB':'id-ID',{day:'numeric',month:'short'}).format(parsed);
 }
 // LLM non-kitchen warnings travel with the purchase data. They must stay
+// Backend validation warnings arrive as English strings (service/extraction.py,
+// service/db.py, service/vision.py, service/text_llm.py). Translate the known
+// bodies to Indonesian for the ID interface; unknown text passes through
+// untranslated rather than being mangled. "Line N:"/"Item N:" prefixes are
+// translated too; free-form labels ("{item}:") keep their label verbatim.
+const WARNING_BODIES=[
+  [/^line total is missing or unsupported\.$/i,'total baris tidak ada atau tidak didukung.'],
+  [/^line total is missing\.$/i,'total baris tidak ada.'],
+  [/^line total is missing or unclear; type it in\.$/i,'total baris tidak ada atau tidak jelas; ketikkan secara manual.'],
+  [/^line total is missing or unreadable; type it in\.$/i,'total baris tidak ada atau tidak terbaca; ketikkan secara manual.'],
+  [/^line total must be a positive whole IDR amount no greater than 1000000000000\.$/i,'total baris harus angka rupiah bulat positif tidak lebih dari 1.000.000.000.000.'],
+  [/^enter a valid positive whole-rupiah line total\.$/i,'masukkan total baris rupiah bulat yang valid.'],
+  [/^enter a valid positive quantity\.$/i,'masukkan jumlah yang valid dan positif.'],
+  [/^quantity is missing or unsupported\.$/i,'jumlah tidak ada atau tidak didukung.'],
+  [/^quantity is missing or unclear; type it in\.$/i,'jumlah tidak ada atau tidak jelas; ketikkan secara manual.'],
+  [/^quantity is missing or unreadable; type it in\.$/i,'jumlah tidak ada atau tidak terbaca; ketikkan secara manual.'],
+  [/^quantity is missing\.$/i,'jumlah tidak ada.'],
+  [/^quantity is invalid or outside the supported bounds\.$/i,'jumlah tidak valid atau di luar batas yang didukung.'],
+  [/^quantity is unusually large \(1,000 or more\); double-check it\.$/i,'jumlah terlihat sangat besar (1.000 atau lebih); periksa kembali.'],
+  [/^quantity range ([\d.,]+)-([\d.,]+)( \S+)? was estimated; the lower bound is used — confirm the real amount\.$/i,'rentang jumlah $1-$2$3 diperkirakan; batas bawah yang dipakai — pastikan jumlah sebenarnya.'],
+  [/^the price reads as per-piece; add a quantity so the total can be computed\.$/i,'harga terbaca per potong; tambahkan jumlah agar total bisa dihitung.'],
+  [/^per-piece price times quantity is not a whole rupiah amount\.$/i,'harga per potong dikali jumlah bukan kelipatan rupiah bulat.'],
+  [/^price must be positive and no greater than 1000000000000 IDR\.$/i,'harga harus positif dan tidak lebih dari Rp1.000.000.000.000.'],
+  [/^price must resolve to a whole IDR amount no greater than 1000000000000\.$/i,'harga harus menjadi angka rupiah bulat tidak lebih dari 1.000.000.000.000.'],
+  [/^price is too long; enter a whole IDR amount no greater than 1000000000000\.$/i,'harga terlalu panjang; masukkan angka rupiah bulat tidak lebih dari 1.000.000.000.000.'],
+  [/^invalid or out-of-range price; enter a positive amount\.$/i,'harga tidak valid atau di luar rentang; masukkan angka positif.'],
+  [/^unit is missing; choose a supported unit or pack\.$/i,'satuan tidak ada; pilih satuan atau kemasan yang didukung.'],
+  [/^unit is missing\.$/i,'satuan tidak ada.'],
+  [/^unit is missing or unsupported\.$/i,'satuan tidak ada atau tidak didukung.'],
+  [/^unit '([^']+)' does not match the catalog dimension for '([^']+)'\.$/i,"satuan '$1' tidak cocok dengan dimensi katalog untuk '$2'."],
+  [/^unit '([^']+)' is not supported for automatic normalization; choose a catalog pack conversion\.$/i,"satuan '$1' tidak didukung untuk normalisasi otomatis; pilih konversi kemasan katalog."],
+  [/^use a unit convertible to (\S+) for this ingredient\.$/i,'gunakan satuan yang bisa dikonversi ke $1 untuk bahan ini.'],
+  [/^no item name was found\.$/i,'nama bahan tidak ditemukan.'],
+  [/^no item name was understood\.$/i,'nama bahan tidak berhasil dipahami.'],
+  [/^no item name was read from the photo\.$/i,'nama bahan tidak terbaca dari foto.'],
+  [/^ingredient is not mapped to the demo catalog; select a catalog item manually\.$/i,'bahan tidak terpetakan ke katalog demo; pilih item katalog secara manual.'],
+  [/^select a known ingredient\.$/i,'pilih bahan yang dikenal.'],
+  [/^add at least one purchase item\.$/i,'tambahkan minimal satu item pembelian.'],
+  [/^item name is unusually long; verify this row\.$/i,'nama bahan terlihat sangat panjang; periksa baris ini.'],
+  [/^rp([\d.,]+) has no item line to attach to; write the item line first\.$/i,'Rp$1 tidak punya baris item untuk dilekatkan; tulis baris itemnya dahulu.'],
+  [/^input exceeds the 20-item limit; split the invoice into separate inputs before continuing\.$/i,'masukan melebihi batas 20 item; pisahkan nota ke beberapa masukan sebelum lanjut.'],
+  [/^the message mentions more than (\d+) items; only the first (\d+) were read\.$/i,'pesan menyebut lebih dari $1 item; hanya $2 pertama yang dibaca.'],
+  [/^this item could not be read; add it manually\.$/i,'item ini tidak terbaca; tambahkan secara manual.'],
+  [/^the photo line could not be read; add it manually\.$/i,'baris foto tidak terbaca; tambahkan secara manual.'],
+  [/^the photo was partly unreadable; verify this line\.$/i,'foto sebagian tidak terbaca; periksa baris ini.'],
+  [/^unknown ingredient '([^']+)'; select a catalog item manually\.$/i,"bahan tidak dikenal '$1'; pilih item katalog secara manual."],
+];
+function localizeWarning(text){
+  const raw=String(text||'');
+  if(LANG!=='id')return raw;
+  let prefix=null,body=raw;
+  const lineMatch=raw.match(/^Line\s+(\d+):\s*([\s\S]*)$/);
+  if(lineMatch){prefix=`Baris ${lineMatch[1]}`;body=lineMatch[2];}
+  else{
+    const itemMatch=raw.match(/^((?:Item\s+\d+|[^:]{1,80}):\s*)([\s\S]*)$/);
+    if(itemMatch){prefix=itemMatch[1].trim().replace(/:$/,'');body=itemMatch[2];}
+  }
+  for(const [pattern,replacement] of WARNING_BODIES){
+    if(pattern.test(body)){
+      const out=body.replace(pattern,replacement);
+      const sentence=out.charAt(0).toUpperCase()+out.slice(1);
+      const composed=prefix?`${prefix}: ${sentence}`:sentence;
+      return composed;
+    }
+  }
+  return raw;
+}
 // visible (icon + text, never color-only) wherever purchases render: an
 // always-visible line on mobile rows, inline under the purchase cell in the
 // desktop table. Never truncated, never hidden inside the details dialog.
-function purchaseWarnings(purchase){return [...new Set((purchase.warnings||[]).map(String))];}
+function purchaseWarnings(purchase){return [...new Set((purchase.warnings||[]).map(w=>localizeWarning(String(w))))];}
 function purchaseWarningHtml(purchase){return purchaseWarnings(purchase).map(text=>`<div class="purchase-warning"><span aria-hidden="true">⚠</span><span>${e(text)}</span></div>`).join('');}
 // Mobile line 1: first two ingredients with quantities, then "+N" for the rest.
 function purchaseItemSummary(items){
@@ -831,7 +898,7 @@ function renderReview() {
   const draft=state.draft, editable=['pending_approval','needs_clarification'].includes(draft.status);
   const ingredients=state.data?.ingredients || [];
   const editors=draft.items.map((item,index) => `<div class="item-editor" data-item="${index}"><div><label for="item-${index}">${t('lbl_ingredient')}</label><input id="item-${index}" name="ingredient_query" list="ingredient-options" value="${e(editorNameFor(item))}" placeholder="${t('ph_ingredient')}" maxlength="200" autocomplete="off" ${editable?'':'disabled'}></div><div><label for="quantity-${index}">${t('lbl_quantity')}</label><input id="quantity-${index}" name="quantity" inputmode="decimal" value="${e(item.quantity)}" placeholder="${t('ph_quantity')}" ${editable?'':'disabled'}></div><div><label for="unit-${index}">${t('lbl_unit')}</label><input id="unit-${index}" name="unit" value="${e(item.unit)}" placeholder="kg, g, l, ml" ${editable?'':'disabled'}></div><div><label for="total-${index}">${t('lbl_line_total')}</label><input id="total-${index}" name="line_total_idr" inputmode="numeric" value="${e(item.line_total_idr)}" placeholder="${t('ph_line_total')}" ${editable?'':'disabled'}></div></div><div class="item-evidence">${item.matched_from ? `<br>${t('typed_name_prefix')}'${e(item.matched_from)}' — ${t('confirm_ingredient')}` : ''}${item.unit_price_idr ? `${rupiah(item.unit_price_idr)} / ${e(item.canonical_unit)} · ${t('w_normalized')} ${number(item.canonical_quantity)} ${e(item.canonical_unit)}` : t('review_calc_hint')}${item.comparison?.baseline_purchase_id ? `<br>${t('w_previous')}${rupiah(item.comparison.baseline_unit_price_idr)} / ${e(item.canonical_unit)} · ${e(item.comparison.baseline_supplier || t('supplier_unspecified'))} · ${e(date(item.comparison.baseline_created_at))}<br>${t('w_evidence')}<span class="inline-id">${e(item.comparison.baseline_purchase_id)}</span>` : `<br>${t('no_baseline')}`}${editable?`<br><button type="button" class="text-button danger" data-remove-item="${index}">${t('btn_remove_item')}</button>`:''}</div>${item.comparison?.status==='price_increase'?`<div class="price-alert">↗ ${number(Number(item.comparison.change_percent).toFixed(1))}% ${t('above_previous')}</div>`:''}`).join('');
-  const distinctWarnings=[...new Set((draft.warnings||[]).map(String))];
+  const distinctWarnings=[...new Set((draft.warnings||[]).map(w=>localizeWarning(String(w))))];
   const warningMarkup=distinctWarnings.length?`<div class="notice">${distinctWarnings.map(e).join('<br>')}<br>${t('review_validate')}</div>`:'';
   $('#review-content').innerHTML=`<div class="dialog-heading"><div><p class="eyebrow">${t('review_eyebrow')} · ${t('w_version')} ${e(draft.version)}</p><h2 id="review-title">${e(itemSummary(draft.items))}</h2></div><button class="icon-button" data-close="review-dialog" aria-label="${t('close_review_aria')}">×</button></div>${badge(draft.status)}<p class="source-caption">${t('source_caption')}</p><div class="source-quote">${e(draft.source_text)}</div><form id="review-form"><datalist id="ingredient-options">${ingredients.map(ingredient => `<option value="${e(ingredient.name)}">`).join('')}</datalist><label for="review-supplier">${t('lbl_supplier')}</label><input id="review-supplier" name="supplier" value="${e(draft.supplier)}" placeholder="${t('supplier_blank')}" maxlength="100" ${editable?'':'disabled'}>${editors}<div class="review-total"><span>${t('review_total_label')}</span><strong class="money">${rupiah(draft.total_idr)}</strong></div>${warningMarkup}<div id="review-error" class="notice error" role="alert" hidden></div>${editable?`<p id="unsaved" class="notice" hidden>${t('unsaved_notice')}</p><label class="receipt-check"><input type="checkbox" id="goods-received"> <span>${t('receipt_confirm')}</span></label><div class="dialog-footer review-actions"><button class="button danger" type="button" id="reject-draft">${t('btn_reject')}</button><button class="button secondary" type="submit" id="save-draft">${t('btn_save_corrections')}</button><span class="spacer"></span><button class="button primary" type="button" id="approve-draft" disabled>${t('btn_approve_record')}</button></div>`:`<p class="muted">${t('readonly_decision')}</p>`}</form><p class="inline-id">${t('w_draft')} ${e(draft.id)}</p>`;
   if(editable) {
