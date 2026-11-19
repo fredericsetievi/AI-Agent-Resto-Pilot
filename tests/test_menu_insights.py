@@ -268,3 +268,25 @@ def test_sales_insights_returns_structured_ranking(tmp_path):
     assert data["total_portions"] == 14.0 and data["total_revenue"] == 210000
     assert data["previous_total_portions"] == 8.0
     assert data["delta_percent"] is not None
+
+
+def test_sales_recorded_through_the_api_reach_insights(tmp_path):
+    """Regression: the events API stores the body without the confirmed flag,
+    which made _menu_sale_events filter every dashboard-recorded sale out of
+    the insights — the ledger showed nothing although sales existed."""
+    app = create_app(tmp_path / "menu-api.sqlite3")
+    store = app.state.store
+    recipe = store.save_inventory_recipe(uuid4().hex, {"name": "Nasi Bakar Ayam Kemanggi", "items": [
+        {"ingredient_id": "beras", "quantity": "0.15"}, {"ingredient_id": "cabai", "quantity": "0.015"}]}, TENANT)
+    from fastapi.testclient import TestClient
+    client = TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False)
+    login_owner(client)
+    posted = client.post("/v1/inventory/events", headers={"Idempotency-Key": uuid4().hex}, json={"kind": "sale", "note": "Penjualan demo", "recipe_id": recipe["id"], "expected_recipe_version": 1, "portions": "12", "revenue_idr": 216000, "confirmed": True})
+    assert posted.status_code == 201, posted.text
+    with store.transaction() as conn:
+        body = store._inventory_query(conn, "SELECT body FROM inventory_events WHERE restaurant_id=?", (TENANT,)).fetchone()[0]
+        assert json.loads(body if isinstance(body, str) else json.dumps(body)).get("confirmed") is True
+    insights = store.sales_insights(TENANT, 7)
+    names = [m["name"] for m in insights["menus"]]
+    assert "Nasi Bakar Ayam Kemanggi" in names, insights
+    assert insights["total_portions"] == 12 and insights["total_revenue"] == 216000

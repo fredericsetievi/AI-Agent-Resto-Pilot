@@ -261,12 +261,14 @@ class MenuInsightsMixin:
         total_portions = Decimal(0)
         revenue_known = False
         for event in events:
-            if menu_name and _normalized(event.get("name") or "") != _normalized(menu_name):
+            # Recipe-recorded sales carry the menu on the nested recipe body;
+            # the top-level name is only set by chat-recorded sales.
+            name = event.get("name") or (event.get("recipe") or {}).get("name") or "(tanpa nama)"
+            if menu_name and _normalized(name) != _normalized(menu_name):
                 continue
             day = _event_date(event)
             if not _in_window(day, start, end):
                 continue
-            name = event.get("name") or "(tanpa nama)"
             entry = stats.setdefault(name, {"portions": Decimal(0), "revenue": Decimal(0), "revenue_known": False, "events": 0})
             entry["events"] += 1
             portions = event.get("portions")

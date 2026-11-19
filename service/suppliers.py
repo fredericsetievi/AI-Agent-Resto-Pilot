@@ -373,7 +373,12 @@ class SupplierMixin:
                                     (restaurant_id, supplier_id)).fetchone()
         if not row:
             raise DomainError("not_found", "Supplier tidak ditemukan.", 404)
-        return {"id": row[0], "name": row[1], "contact_phone": row[2], "contact_platform": row[3], "notes": row[4], "created_at": row[5]}
+        created_at = row[5]
+        # Postgres returns timestamptz as datetime; the idempotent wrapper
+        # JSON-encodes this result, so it must be a plain ISO string.
+        if isinstance(created_at, datetime):
+            created_at = created_at.isoformat()
+        return {"id": row[0], "name": row[1], "contact_phone": row[2], "contact_platform": row[3], "notes": row[4], "created_at": created_at}
 
     def suppliers_list(self, restaurant_id, conn=None):
         tc = self._tenant_col()

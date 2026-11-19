@@ -157,6 +157,9 @@ class InventoryMixin:
             if not isinstance(history_only, bool) or (history_only and kind == "count"):
                 invalid("History-only recording applies to consumption or sales, never a physical count.")
             event = {"kind": kind, "note": note, "business_date": self._inventory_business_date(payload.get("business_date")), "items": []}
+            # Persist the owner's confirmation so later readers (menu insights)
+            # can tell reviewed sales from preview-only bodies.
+            event["confirmed"] = payload.get("confirmed") is True
             if history_only:
                 event["history_only"] = True
             for field in ("operation_id", "source_id", "report_id", "source_digest", "coverage"):
