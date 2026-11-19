@@ -507,3 +507,17 @@ test('supplier and insights pages render owner analytics',()=>{
   assert.ok(insightsHtml.includes('Rp210.000'));
   assert.ok(insightsHtml.includes('+75%'));
 });
+
+test('backend warnings localize to Indonesian on the ID interface',()=>{
+  const h=harness();
+  // English interface passes backend text through unchanged.
+  assert.equal(h.run(`localizeWarning('Line 1: line total is missing or unsupported.')`),'Line 1: line total is missing or unsupported.');
+  assert.equal(h.run(`localizeWarning('Item 2: Enter a valid positive whole-rupiah line total.')`),'Item 2: Enter a valid positive whole-rupiah line total.');
+  h.run("window.setLang('id')");
+  assert.equal(h.run(`localizeWarning('Line 1: line total is missing or unsupported.')`),'Baris 1: total baris tidak ada atau tidak didukung.');
+  assert.equal(h.run(`localizeWarning('Item 2: Enter a valid positive whole-rupiah line total.')`),'Item 2: Masukkan total baris rupiah bulat yang valid.');
+  assert.equal(h.run(`localizeWarning('Quantity is missing.')`),'Jumlah tidak ada.');
+  assert.equal(h.run(`localizeWarning('Unit is missing; choose a supported unit or pack.')`),'Satuan tidak ada; pilih satuan atau kemasan yang didukung.');
+  // Unknown free-form text passes through rather than being mangled.
+  assert.equal(h.run(`localizeWarning('Some vendor note: something unmapped.')`),'Some vendor note: something unmapped.');
+});
