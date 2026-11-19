@@ -514,7 +514,7 @@ test('backend warnings localize to Indonesian on the ID interface',()=>{
   assert.equal(h.run(`localizeWarning('Line 1: line total is missing or unsupported.')`),'Line 1: line total is missing or unsupported.');
   assert.equal(h.run(`localizeWarning('Item 2: Enter a valid positive whole-rupiah line total.')`),'Item 2: Enter a valid positive whole-rupiah line total.');
   h.run("window.setLang('id')");
-  assert.equal(h.run(`localizeWarning('Line 1: line total is missing or unsupported.')`),'Baris 1: total baris tidak ada atau tidak didukung.');
+  assert.equal(h.run(`localizeWarning('Line 1: line total is missing or unsupported.')`),'Baris 1: Total baris tidak ada atau tidak didukung.');
   assert.equal(h.run(`localizeWarning('Item 2: Enter a valid positive whole-rupiah line total.')`),'Item 2: Masukkan total baris rupiah bulat yang valid.');
   assert.equal(h.run(`localizeWarning('Quantity is missing.')`),'Jumlah tidak ada.');
   assert.equal(h.run(`localizeWarning('Unit is missing; choose a supported unit or pack.')`),'Satuan tidak ada; pilih satuan atau kemasan yang didukung.');
